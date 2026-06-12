@@ -374,6 +374,29 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
+const config: Record<string, number> = {
+  rateLimitPerWindow: 60,
+  rateLimitWindowMs: 60_000,
+  bulkMaxItems: 100,
+  eventLogCap: 10_000,
+};
+app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
+app.patch("/api/v1/config", (req: Request, res: Response) => {
+  const requestId = (req as Request & { id?: string }).id;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
+  for (const k of allowed) {
+    if (k in (req.body ?? {})) {
+      const v = req.body[k];
+      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+        res.status(400).json({ error: "invalid_request", message: `${k} must be positive integer`, requestId });
+        return;
+      }
+      config[k] = v;
+    }
+  }
+  res.json({ config });
+});
+
 app.get("/api/v1/metrics", (_req: Request, res: Response) => {
   const lines = [
     "# HELP stableroute_pairs_total Number of registered pairs.",

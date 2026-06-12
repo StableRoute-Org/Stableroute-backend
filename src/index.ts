@@ -114,6 +114,47 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   paused = false;
   res.json({ paused });
 });
+// Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity.
+type PairMeta = {
+  feeBps: number;
+  minAmount: string;
+  maxAmount: string;
+  liquidity: string;
+};
+const pairMeta = new Map<string, PairMeta>();
+const defaultMeta = (): PairMeta => ({
+  feeBps: 0,
+  minAmount: "0",
+  maxAmount: "0",
+  liquidity: "0",
+});
+
+app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    res.status(404).json({
+      error: "not_found",
+      message: "pair not registered",
+      requestId: (req as Request & { id?: string }).id,
+    });
+    return;
+  }
+  const { feeBps } = req.body ?? {};
+  if (typeof feeBps !== "number" || !Number.isInteger(feeBps) || feeBps < 0 || feeBps > 1000) {
+    res.status(400).json({
+      error: "invalid_request",
+      message: "feeBps must be an integer in [0,1000]",
+      requestId: (req as Request & { id?: string }).id,
+    });
+    return;
+  }
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  meta.feeBps = feeBps;
+  pairMeta.set(k, meta);
+  res.json({ source, destination, ...meta });
+});
+
 /** Unregister a pair. */
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;

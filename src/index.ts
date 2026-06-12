@@ -114,6 +114,22 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   paused = false;
   res.json({ paused });
 });
+/** Unregister a pair. */
+app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    res.status(404).json({
+      error: "not_found",
+      message: `pair ${source}->${destination} is not registered`,
+      requestId: (req as Request & { id?: string }).id,
+    });
+    return;
+  }
+  pairRegistry.delete(k);
+  res.status(204).send();
+});
+
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;

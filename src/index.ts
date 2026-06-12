@@ -91,6 +91,20 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", service: "stableroute-backend" });
 });
 
+app.get("/api/v1/health/deep", (_req: Request, res: Response) => {
+  const m = process.memoryUsage();
+  res.json({
+    status: paused ? "paused" : "ok",
+    uptimeSeconds: Math.round(process.uptime()),
+    memory: {
+      rssMb: Math.round(m.rss / 1024 / 1024),
+      heapUsedMb: Math.round(m.heapUsed / 1024 / 1024),
+    },
+    pid: process.pid,
+    node: process.version,
+  });
+});
+
 let paused = false;
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
   paused = true;

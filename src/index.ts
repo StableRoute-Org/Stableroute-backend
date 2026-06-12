@@ -104,6 +104,13 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
+app.get("/api/v1/stats", (_req: Request, res: Response) => {
+  res.json({
+    totalPairs: pairRegistry.size,
+    paused,
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pair registry
 // ─────────────────────────────────────────────────────────────────────────────

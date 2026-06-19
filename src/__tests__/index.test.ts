@@ -570,6 +570,57 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.items.length).toBeLessThanOrEqual(3);
     });
+
+    it("records pair.refreshed and pair.unregistered events", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "EVREF", destination: "LOG" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "EVREF", destination: "LOG" });
+      await request(app).delete("/api/v1/pairs/EVREF/LOG");
+
+      const res = await request(app).get("/api/v1/events?limit=100");
+      expect(res.status).toBe(200);
+      expect(
+        res.body.items.some(
+          (e: { type: string; payload: { source: string; destination: string } }) =>
+            e.type === "pair.refreshed" &&
+            e.payload.source === "EVREF" &&
+            e.payload.destination === "LOG"
+        )
+      ).toBe(true);
+      expect(
+        res.body.items.some(
+          (e: { type: string; payload: { source: string; destination: string } }) =>
+            e.type === "pair.unregistered" &&
+            e.payload.source === "EVREF" &&
+            e.payload.destination === "LOG"
+        )
+      ).toBe(true);
+    });
+
+    it("clamps limit below one to the most recent single event", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "LIM0", destination: "ONE" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "LIM0", destination: "TWO" });
+
+      const res = await request(app).get("/api/v1/events?limit=0");
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(1);
+    });
+
+    it("accepts over-cap limits without exceeding available events", async () => {
+      const all = await request(app).get("/api/v1/events");
+      const overCap = await request(app).get("/api/v1/events?limit=999999");
+
+      expect(overCap.status).toBe(200);
+      expect(overCap.body.items.length).toBeGreaterThanOrEqual(all.body.items.length);
+      expect(overCap.body.items.length).toBeLessThanOrEqual(10_000);
+    });
   });
 
   describe("api-keys edge cases", () => {

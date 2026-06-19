@@ -33,6 +33,25 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+Copy `.env.example` to `.env` for local overrides. `.env` and `.env.*` files
+are ignored by git, while `.env.example` is intentionally tracked as the safe
+reference file.
+
+| Variable | Default | Used today | Effect |
+|----------|---------|------------|--------|
+| `PORT` | `3001` | Yes | Port used by `src/server.ts` when starting the HTTP server. |
+| `NODE_ENV` | `development` | Yes | `test` disables rate limiting and request logging in `src/index.ts`; other values keep runtime middleware enabled. |
+| `ADMIN_TOKEN` | empty | Reserved | Planned shared secret for admin routes such as pause and unpause. Keep unset locally until the guard lands. |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:3001` | Reserved | Planned comma-separated allowlist for browser origins once CORS is locked down. |
+| `TRUST_PROXY` | `false` | Reserved | Planned toggle for deployments behind a trusted proxy so client IP handling can be explicit. |
+| `LOG_LEVEL` | `info` | Reserved | Planned structured logging verbosity control. |
+
+Only `PORT` and `NODE_ENV` are read by the current code. The reserved variables
+are documented now so deployment templates do not need to change when those
+guards are added.
+
 ## Scripts
 
 | Script | Description |

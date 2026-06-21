@@ -75,6 +75,27 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Quote bounds
+
+Registered pairs can carry optional amount bounds through the pair metadata
+endpoints:
+
+- `PATCH /api/v1/pairs/:source/:destination/min` sets `minAmount`.
+- `PATCH /api/v1/pairs/:source/:destination/max` sets `maxAmount`.
+- `PATCH /api/v1/pairs/:source/:destination/liquidity` sets `liquidity`.
+
+`GET /api/v1/quote` enforces those slots for registered pairs before returning a
+route. A bound value of `"0"` means unset, so pairs without configured limits
+continue to quote normally. Amounts below `minAmount` or above `maxAmount`
+return `400 invalid_request`; amounts above `liquidity` return
+`422 insufficient_liquidity`. All comparisons are performed with `BigInt` to
+avoid precision loss for base-unit amounts.
+
+`POST /api/v1/quote/bulk` keeps batch semantics: invalid or out-of-bounds items
+are returned as per-item failures, for example
+`{ "index": 0, "ok": false, "error": "out_of_bounds" }`, without rejecting the
+whole batch.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

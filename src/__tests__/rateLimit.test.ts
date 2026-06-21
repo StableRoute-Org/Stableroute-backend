@@ -1,5 +1,7 @@
 import request from "supertest";
-import app from "../index";
+
+process.env.STABLEROUTE_ENABLE_RATE_LIMIT_IN_TEST = "1";
+const app = require("../index").default as typeof import("../index").default;
 
 // Each test advances the clock by 120 s relative to the previous test's
 // base so that bucket entries from prior tests are always outside the

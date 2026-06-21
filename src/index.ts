@@ -56,7 +56,12 @@ const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const rateBuckets = new Map<string, number[]>();
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === "test") return next();
+  if (
+    process.env.NODE_ENV === "test" &&
+    process.env.STABLEROUTE_ENABLE_RATE_LIMIT_IN_TEST !== "1"
+  ) {
+    return next();
+  }
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
   const bucket = (rateBuckets.get(ip) ?? []).filter(
@@ -562,6 +567,57 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+type BoundFailure = {
+  status: number;
+  error: "invalid_request" | "insufficient_liquidity";
+  reason: "below_min" | "above_max" | "insufficient_liquidity";
+  message: string;
+};
+
+/**
+ * Check configured pair bounds without leaving BigInt space.
+ * A stored bound of "0" means unset and must not reject the quote.
+ */
+const checkBounds = (meta: PairMeta, amount: bigint): BoundFailure | null => {
+  const min = BigInt(meta.minAmount);
+  if (min !== 0n && amount < min) {
+    return {
+      status: 400,
+      error: "invalid_request",
+      reason: "below_min",
+      message: `amount is below the pair minimum of ${meta.minAmount}`,
+    };
+  }
+
+  const max = BigInt(meta.maxAmount);
+  if (max !== 0n && amount > max) {
+    return {
+      status: 400,
+      error: "invalid_request",
+      reason: "above_max",
+      message: `amount is above the pair maximum of ${meta.maxAmount}`,
+    };
+  }
+
+  const liquidity = BigInt(meta.liquidity);
+  if (liquidity !== 0n && amount > liquidity) {
+    return {
+      status: 422,
+      error: "insufficient_liquidity",
+      reason: "insufficient_liquidity",
+      message: `amount exceeds available liquidity of ${meta.liquidity}`,
+    };
+  }
+
+  return null;
+};
+
+const checkPairBounds = (source: string, destination: string, amount: bigint): BoundFailure | null => {
+  const key = pairKey(source, destination);
+  if (!pairRegistry.has(key)) return null;
+  return checkBounds(pairMeta.get(key) ?? defaultMeta(), amount);
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -570,8 +626,13 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   }
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
     const { source_asset, dest_asset, amount } = it ?? {};
-    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
+    const parsedAmount = parseAmount(amount);
+    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parsedAmount === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
+    }
+    const boundFailure = checkPairBounds(source_asset, dest_asset, parsedAmount);
+    if (boundFailure) {
+      return { index: i, ok: false, error: "out_of_bounds", reason: boundFailure.reason };
     }
     return {
       index: i,
@@ -618,6 +679,12 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       "invalid_request",
       "amount must be a positive integer string with no leading zero"
     );
+  }
+  const boundFailure = checkPairBounds(source_asset, dest_asset, parsedAmount);
+  if (boundFailure) {
+    return sendError(res, req, boundFailure.status, boundFailure.error, boundFailure.message, {
+      reason: boundFailure.reason,
+    });
   }
 
   res.json({

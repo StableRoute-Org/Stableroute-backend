@@ -672,4 +672,148 @@ describe("StableRoute Backend", () => {
       expect(res.body.amount).toBe(huge);
     });
   });
+
+  describe("quote amount bounds", () => {
+    it("rejects a registered pair quote below minAmount and accepts the boundary", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "QBMIN", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/QBMIN/USD/min")
+        .send({ minAmount: "100" });
+
+      const below = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "quote-below-min")
+        .query({ source_asset: "QBMIN", dest_asset: "USD", amount: "99" });
+      expect(below.status).toBe(400);
+      expect(below.body).toMatchObject({
+        error: "invalid_request",
+        reason: "below_min",
+        requestId: "quote-below-min",
+      });
+
+      const atMin = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "QBMIN", dest_asset: "USD", amount: "100" });
+      expect(atMin.status).toBe(200);
+      expect(atMin.body.amount).toBe("100");
+    });
+
+    it("rejects a registered pair quote above maxAmount and accepts the boundary", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "QBMAX", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/QBMAX/USD/max")
+        .send({ maxAmount: "500" });
+
+      const above = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "quote-above-max")
+        .query({ source_asset: "QBMAX", dest_asset: "USD", amount: "501" });
+      expect(above.status).toBe(400);
+      expect(above.body).toMatchObject({
+        error: "invalid_request",
+        reason: "above_max",
+        requestId: "quote-above-max",
+      });
+
+      const atMax = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "QBMAX", dest_asset: "USD", amount: "500" });
+      expect(atMax.status).toBe(200);
+      expect(atMax.body.amount).toBe("500");
+    });
+
+    it("rejects a registered pair quote above liquidity with insufficient_liquidity", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "QLIQ", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/QLIQ/USD/liquidity")
+        .send({ liquidity: "1000" });
+
+      const over = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "quote-over-liq")
+        .query({ source_asset: "QLIQ", dest_asset: "USD", amount: "1001" });
+      expect(over.status).toBe(422);
+      expect(over.body).toMatchObject({
+        error: "insufficient_liquidity",
+        reason: "insufficient_liquidity",
+        requestId: "quote-over-liq",
+      });
+
+      const atLiquidity = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "QLIQ", dest_asset: "USD", amount: "1000" });
+      expect(atLiquidity.status).toBe(200);
+      expect(atLiquidity.body.amount).toBe("1000");
+    });
+
+    it("treats zero bounds as unset for registered pairs", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "QZERO", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/QZERO/USD/min")
+        .send({ minAmount: "0" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "QZERO", dest_asset: "USD", amount: "1" });
+      expect(res.status).toBe(200);
+      expect(res.body.amount).toBe("1");
+    });
+
+    it("returns per-item out_of_bounds failures in bulk quotes", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BMIN", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/BMIN/USD/min")
+        .send({ minAmount: "100" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BMAX", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/BMAX/USD/max")
+        .send({ maxAmount: "250" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BLIQ", destination: "USD" });
+      await request(app)
+        .patch("/api/v1/pairs/BLIQ/USD/liquidity")
+        .send({ liquidity: "300" });
+
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "BMIN", dest_asset: "USD", amount: "99" },
+            { source_asset: "BMAX", dest_asset: "USD", amount: "251" },
+            { source_asset: "BLIQ", dest_asset: "USD", amount: "301" },
+            { source_asset: "BLIQ", dest_asset: "USD", amount: "300" },
+            { source_asset: "USD", dest_asset: "USD", amount: "1" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results).toEqual([
+        { index: 0, ok: false, error: "out_of_bounds", reason: "below_min" },
+        { index: 1, ok: false, error: "out_of_bounds", reason: "above_max" },
+        { index: 2, ok: false, error: "out_of_bounds", reason: "insufficient_liquidity" },
+        {
+          index: 3,
+          ok: true,
+          source_asset: "BLIQ",
+          dest_asset: "USD",
+          amount: "300",
+          estimated_rate: "1.0",
+        },
+        { index: 4, ok: false, error: "invalid_item" },
+      ]);
+    });
+  });
 });

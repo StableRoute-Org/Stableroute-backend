@@ -562,6 +562,23 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Apply a basis-point fee using integer base-unit math.
+ */
+const applyFee = (amount: bigint, feeBps: number) => {
+  const feeAmount = (amount * BigInt(feeBps)) / 10_000n;
+  return {
+    fee_bps: feeBps,
+    fee_amount: feeAmount.toString(),
+    net_amount: (amount - feeAmount).toString(),
+  };
+};
+
+const quoteFeeFields = (source: string, destination: string, amount: bigint) => {
+  const feeBps = pairMeta.get(pairKey(source, destination))?.feeBps ?? 0;
+  return applyFee(amount, feeBps);
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -570,7 +587,8 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   }
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
     const { source_asset, dest_asset, amount } = it ?? {};
-    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
+    const parsedAmount = parseAmount(amount);
+    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parsedAmount === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
     return {
@@ -580,6 +598,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       dest_asset,
       amount: String(amount),
       estimated_rate: "1.0",
+      ...quoteFeeFields(source_asset, dest_asset, parsedAmount),
     };
   });
   res.json({ results });
@@ -626,6 +645,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     amount: parsedAmount.toString(),
     estimated_rate: "1.0",
     route: [source_asset, dest_asset],
+    ...quoteFeeFields(source_asset, dest_asset, parsedAmount),
   });
 });
 

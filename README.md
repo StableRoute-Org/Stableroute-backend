@@ -79,6 +79,10 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Quote fees
+
+`GET /api/v1/quote` and valid `POST /api/v1/quote/bulk` results include `fee_bps`, `fee_amount`, and `net_amount` alongside the existing `estimated_rate` and `route` fields. Fees are computed from per-pair metadata as `fee_amount = amount * fee_bps / 10000` using integer base-unit math; `net_amount = amount - fee_amount`. Unregistered pairs default to `fee_bps: 0`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

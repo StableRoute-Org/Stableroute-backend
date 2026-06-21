@@ -11,6 +11,19 @@ const expectCanonicalError = (
   expect(body.requestId).toBe(requestId);
 };
 
+const registerPair = async (source: string, destination: string) => {
+  await request(app)
+    .post("/api/v1/pairs")
+    .send({ source, destination });
+};
+
+const setFeeBps = async (source: string, destination: string, feeBps: number) => {
+  await registerPair(source, destination);
+  await request(app)
+    .patch(`/api/v1/pairs/${source}/${destination}/fee_bps`)
+    .send({ feeBps });
+};
+
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
@@ -487,6 +500,31 @@ describe("StableRoute Backend", () => {
       expect(res.body.results[1].ok).toBe(false);
       expect(res.body.results[2].ok).toBe(false);
     });
+
+    it("mirrors fee math for valid bulk quote items", async () => {
+      await setFeeBps("BULK", "FEE", 500);
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "BULK", dest_asset: "FEE", amount: "10000" },
+            { source_asset: "BULK", dest_asset: "NONE", amount: "10000" },
+          ],
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({
+        ok: true,
+        fee_bps: 500,
+        fee_amount: "500",
+        net_amount: "9500",
+      });
+      expect(res.body.results[1]).toMatchObject({
+        ok: true,
+        fee_bps: 0,
+        fee_amount: "0",
+        net_amount: "10000",
+      });
+    });
   });
 
   describe("webhook edge cases", () => {
@@ -670,6 +708,62 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+
+    it("defaults fee fields to zero for unregistered pairs", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "NOFEE", dest_asset: "PAIR", amount: "123" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        fee_bps: 0,
+        fee_amount: "0",
+        net_amount: "123",
+      });
+    });
+
+    it("applies max configured fee_bps to single quotes", async () => {
+      await setFeeBps("FEE", "NET", 1000);
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "FEE", dest_asset: "NET", amount: "10000" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        estimated_rate: "1.0",
+        route: ["FEE", "NET"],
+        fee_bps: 1000,
+        fee_amount: "1000",
+        net_amount: "9000",
+      });
+    });
+
+    it("uses BigInt math for 39-digit quote fees", async () => {
+      await setFeeBps("BIG", "FEE", 25);
+      const amount = "999999999999999999999999999999999999999";
+      const expectedFee = ((BigInt(amount) * 25n) / 10_000n).toString();
+      const expectedNet = (BigInt(amount) - BigInt(expectedFee)).toString();
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "BIG", dest_asset: "FEE", amount });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        fee_bps: 25,
+        fee_amount: expectedFee,
+        net_amount: expectedNet,
+      });
+    });
+
+    it("keeps sub-basis fee amounts rounded down", async () => {
+      await setFeeBps("ONE", "FEE", 1000);
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "ONE", dest_asset: "FEE", amount: "1" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        fee_bps: 1000,
+        fee_amount: "0",
+        net_amount: "1",
+      });
     });
   });
 });

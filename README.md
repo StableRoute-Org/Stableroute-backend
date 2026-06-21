@@ -72,12 +72,16 @@ When any required check fails, the endpoint returns **503** with
 `status: "paused"`. When all checks pass it returns **200** with
 `status: "ok"`.
 
-Checks are time-bounded (5s timeout via `AbortController`) so the probe
-never hangs.
+Checks are synchronous and fast so the probe never hangs. Add a timeout if
+future checks call async downstream dependencies.
 
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
+
+## API reference
+
+See [docs/api.md](docs/api.md) for every HTTP endpoint, request/response shapes, operational headers, and curl examples.
 
 ## Contributing
 

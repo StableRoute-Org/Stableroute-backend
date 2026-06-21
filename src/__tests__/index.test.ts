@@ -11,6 +11,19 @@ const expectCanonicalError = (
   expect(body.requestId).toBe(requestId);
 };
 
+const registerPair = async (source: string, destination: string) => {
+  await request(app)
+    .post("/api/v1/pairs")
+    .send({ source, destination });
+};
+
+const setFeeBps = async (source: string, destination: string, feeBps: number) => {
+  await registerPair(source, destination);
+  await request(app)
+    .patch(`/api/v1/pairs/${source}/${destination}/fee_bps`)
+    .send({ feeBps });
+};
+
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
@@ -19,6 +32,7 @@ describe("StableRoute Backend", () => {
   });
 
   it("GET /api/v1/quote with params returns quote", async () => {
+    await registerPair("USDC", "EURC");
     const res = await request(app)
       .get("/api/v1/quote")
       .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
@@ -167,8 +181,9 @@ describe("StableRoute Backend", () => {
     expect(get.body.config.rateLimitPerWindow).toBeGreaterThan(0);
     const patch = await request(app)
       .patch("/api/v1/config")
-      .send({ rateLimitPerWindow: 120 });
+      .send({ rateLimitPerWindow: 120, maxHops: 3 });
     expect(patch.body.config.rateLimitPerWindow).toBe(120);
+    expect(patch.body.config.maxHops).toBe(3);
   });
 
   it("rejects /config patches with negative integers", async () => {
@@ -534,18 +549,27 @@ describe("StableRoute Backend", () => {
     it("rejects all invalid config values", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
-        .send({ rateLimitPerWindow: -1, rateLimitWindowMs: 0, bulkMaxItems: -100 });
+        .send({ rateLimitPerWindow: -1, rateLimitWindowMs: 0, bulkMaxItems: -100, maxHops: 0 });
       expect(res.status).toBe(400);
+    });
+
+    it("rejects maxHops above the bounded search cap", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ maxHops: 11 });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/maxHops/);
     });
 
     it("patches multiple config fields at once", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
-        .send({ rateLimitPerWindow: 100, rateLimitWindowMs: 30000, bulkMaxItems: 50 });
+        .send({ rateLimitPerWindow: 100, rateLimitWindowMs: 30000, bulkMaxItems: 50, maxHops: 3 });
       expect(res.status).toBe(200);
       expect(res.body.config.rateLimitPerWindow).toBe(100);
       expect(res.body.config.rateLimitWindowMs).toBe(30000);
       expect(res.body.config.bulkMaxItems).toBe(50);
+      expect(res.body.config.maxHops).toBe(3);
     });
   });
 
@@ -663,13 +687,104 @@ describe("StableRoute Backend", () => {
     });
 
     it("accepts a very large positive amount via BigInt parsing", async () => {
+      await registerPair("BIGINTA", "BIGINTB");
       // 10^25 — far above Number.MAX_SAFE_INTEGER (~9.007 * 10^15)
       const huge = "10000000000000000000000000";
       const res = await request(app)
         .get("/api/v1/quote")
-        .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
+        .query({ source_asset: "BIGINTA", dest_asset: "BIGINTB", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("GET /api/v1/quote route discovery", () => {
+    it("prefers a direct registered pair over an indirect path", async () => {
+      await registerPair("DIRA", "DIRB");
+      await registerPair("DIRA", "DIRMID");
+      await registerPair("DIRMID", "DIRB");
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "DIRA", dest_asset: "DIRB", amount: "100" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.route).toEqual(["DIRA", "DIRB"]);
+    });
+
+    it("returns the shortest two-hop route when no direct pair exists", async () => {
+      await registerPair("HOPA", "HOPB");
+      await registerPair("HOPB", "HOPC");
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "HOPA", dest_asset: "HOPC", amount: "250" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.route).toEqual(["HOPA", "HOPB", "HOPC"]);
+    });
+
+    it("returns 404 no_route with requestId when no path exists", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "missing-route")
+        .query({ source_asset: "NOROUTEA", dest_asset: "NOROUTEB", amount: "100" });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({
+        error: "no_route",
+        requestId: "missing-route",
+      });
+    });
+
+    it("handles cycles without revisiting nodes forever", async () => {
+      await registerPair("CYCLEA", "CYCLEB");
+      await registerPair("CYCLEB", "CYCLEA");
+      await registerPair("CYCLEB", "CYCLEC");
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "CYCLEA", dest_asset: "CYCLEC", amount: "100" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.route).toEqual(["CYCLEA", "CYCLEB", "CYCLEC"]);
+    });
+
+    it("respects the configured maxHops cap", async () => {
+      await registerPair("MAXA", "MAXB");
+      await registerPair("MAXB", "MAXC");
+      await request(app)
+        .patch("/api/v1/config")
+        .send({ maxHops: 1 });
+
+      try {
+        const res = await request(app)
+          .get("/api/v1/quote")
+          .query({ source_asset: "MAXA", dest_asset: "MAXC", amount: "100" });
+        expect(res.status).toBe(404);
+        expect(res.body.error).toBe("no_route");
+      } finally {
+        await request(app)
+          .patch("/api/v1/config")
+          .send({ maxHops: 3 });
+      }
+    });
+
+    it("combines per-hop fee_bps using BigInt route math", async () => {
+      await setFeeBps("FEEA", "FEEB", 100);
+      await setFeeBps("FEEB", "FEEC", 50);
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "FEEA", dest_asset: "FEEC", amount: "10000" });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        route: ["FEEA", "FEEB", "FEEC"],
+        fee_bps: 150,
+        fee_amount: "149",
+        net_amount: "9851",
+      });
     });
   });
 });

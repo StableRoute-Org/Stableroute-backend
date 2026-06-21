@@ -79,6 +79,12 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Quote routing
+
+`GET /api/v1/quote` discovers routes from registered pairs instead of always returning a direct hop. The router builds an in-memory adjacency graph from `/api/v1/pairs` registrations and runs bounded breadth-first search to find the shortest path from `source_asset` to `dest_asset`. The search is limited by `config.maxHops`, which defaults to `3` and can be patched through `/api/v1/config` up to a hard cap of `10`.
+
+When no registered path exists, the quote endpoint returns `404` with `error: "no_route"` and the request id. Successful quote responses include the discovered `route` plus `fee_bps`, `fee_amount`, and `net_amount`. Per-hop `feeBps` values are applied in route order using integer `BigInt` base-unit math so large amounts do not lose precision.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

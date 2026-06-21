@@ -449,15 +449,20 @@ const config: Record<string, number> = {
   rateLimitWindowMs: 60_000,
   bulkMaxItems: 100,
   eventLogCap: 10_000,
+  maxHops: 3,
 };
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "maxHops"] as const;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
       const v = req.body[k];
       if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
         sendError(res, req, 400, "invalid_request", `${k} must be positive integer`);
+        return;
+      }
+      if (k === "maxHops" && v > 10) {
+        sendError(res, req, 400, "invalid_request", "maxHops must be at most 10");
         return;
       }
       config[k] = v;
@@ -497,6 +502,38 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 // adapter.
 const pairRegistry = new Set<string>();
 const pairKey = (source: string, dest: string) => `${source}::${dest}`;
+
+/**
+ * Find the shortest registered route up to maxHops edges using bounded BFS.
+ */
+const findRoute = (source: string, destination: string, maxHops: number): string[] | null => {
+  const adjacency = new Map<string, string[]>();
+  for (const k of pairRegistry) {
+    const [from, to] = k.split("::");
+    const neighbors = adjacency.get(from) ?? [];
+    neighbors.push(to);
+    adjacency.set(from, neighbors);
+  }
+
+  const queue: string[][] = [[source]];
+  const visited = new Set<string>([source]);
+  while (queue.length > 0) {
+    const path = queue.shift();
+    if (!path) break;
+    if (path.length - 1 >= maxHops) continue;
+
+    const current = path[path.length - 1];
+    for (const next of adjacency.get(current) ?? []) {
+      const candidate = [...path, next];
+      if (next === destination) return candidate;
+      if (visited.has(next)) continue;
+      visited.add(next);
+      queue.push(candidate);
+    }
+  }
+
+  return null;
+};
 
 /**
  * List every registered (source, destination) pair.
@@ -562,6 +599,29 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Apply per-hop fees in route order using integer base-unit math.
+ */
+const quoteFeeFields = (route: string[], amount: bigint) => {
+  let netAmount = amount;
+  let feeAmount = 0n;
+  let feeBps = 0;
+
+  for (let i = 0; i < route.length - 1; i += 1) {
+    const hopFeeBps = pairMeta.get(pairKey(route[i], route[i + 1]))?.feeBps ?? 0;
+    const hopFeeAmount = (netAmount * BigInt(hopFeeBps)) / 10_000n;
+    feeBps += hopFeeBps;
+    feeAmount += hopFeeAmount;
+    netAmount -= hopFeeAmount;
+  }
+
+  return {
+    fee_bps: feeBps,
+    fee_amount: feeAmount.toString(),
+    net_amount: netAmount.toString(),
+  };
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -620,12 +680,24 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
+  const route = findRoute(source_asset, dest_asset, config.maxHops);
+  if (!route) {
+    return sendError(
+      res,
+      req,
+      404,
+      "no_route",
+      `no route from ${source_asset} to ${dest_asset}`
+    );
+  }
+
   res.json({
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
     estimated_rate: "1.0",
-    route: [source_asset, dest_asset],
+    route,
+    ...quoteFeeFields(route, parsedAmount),
   });
 });
 

@@ -42,6 +42,7 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 | `npm run dev` | Run with ts-node-dev (watch) |
 | `npm test` | Run Jest tests |
 | `npm run lint` | Run ESLint |
+| `npm run openapi:validate` | Validate `openapi.yaml` |
 
 ## CI/CD
 
@@ -49,9 +50,16 @@ On every push/PR to `main`, GitHub Actions runs:
 
 - `npm ci`
 - `npm run build`
+- `npm run openapi:validate`
 - `npm test`
 
 Ensure these pass locally before pushing.
+
+## OpenAPI spec
+
+`openapi.yaml` is the source of truth for the API contract. The
+`GET /api/v1/openapi.json` endpoint serves that file as JSON, and CI validates
+it with `npm run openapi:validate`.
 
 ## Deep readiness probe
 

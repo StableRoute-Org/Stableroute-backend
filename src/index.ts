@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import YAML from "yaml";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+const openApiSpec = YAML.parse(readFileSync(resolve(__dirname, "..", "openapi.yaml"), "utf8"));
 
 app.use(cors());
 
@@ -112,36 +116,7 @@ app.get("/health", (_req: Request, res: Response) => {
 });
 
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
-  res.json({
-    openapi: "3.0.3",
-    info: { title: "StableRoute Backend", version: "1.0.0" },
-    paths: {
-      "/health": { get: { summary: "Shallow health" } },
-      "/api/v1/health/deep": { get: { summary: "Deep health" } },
-      "/api/v1/metrics": { get: { summary: "Prometheus metrics" } },
-      "/api/v1/stats": { get: { summary: "Aggregate snapshot" } },
-      "/api/v1/events": { get: { summary: "Audit log" } },
-      "/api/v1/pairs": { get: { summary: "List pairs" }, post: { summary: "Register pair" } },
-      "/api/v1/pairs/{source}/{destination}": {
-        get: { summary: "Read pair" },
-        delete: { summary: "Unregister pair" },
-      },
-      "/api/v1/pairs/{source}/{destination}/info": { get: { summary: "Pair aggregate" } },
-      "/api/v1/pairs/{source}/{destination}/fee_bps": { patch: { summary: "Set fee" } },
-      "/api/v1/pairs/{source}/{destination}/min": { patch: { summary: "Set min amount" } },
-      "/api/v1/pairs/{source}/{destination}/max": { patch: { summary: "Set max amount" } },
-      "/api/v1/pairs/{source}/{destination}/liquidity": { patch: { summary: "Set liquidity" } },
-      "/api/v1/quote": { get: { summary: "Get a route quote" } },
-      "/api/v1/quote/bulk": { post: { summary: "Bulk quote" } },
-      "/api/v1/api-keys": { get: {}, post: {} },
-      "/api/v1/api-keys/{prefix}": { delete: {} },
-      "/api/v1/webhooks": { get: {}, post: {} },
-      "/api/v1/webhooks/{id}": { delete: {} },
-      "/api/v1/admin/pause": { post: {} },
-      "/api/v1/admin/unpause": { post: {} },
-      "/api/v1/admin/status": { get: {} },
-    },
-  });
+  res.json(openApiSpec);
 });
 
 /**

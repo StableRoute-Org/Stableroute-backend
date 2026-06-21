@@ -1,0 +1,938 @@
+openapi: 3.0.3
+info:
+  title: StableRoute Backend
+  version: 1.0.0
+  description: Express API gateway, routing engine, and pricing service for StableRoute.
+servers:
+  - url: http://localhost:3001
+tags:
+  - name: health
+  - name: pairs
+  - name: quotes
+  - name: events
+  - name: api-keys
+  - name: webhooks
+  - name: admin
+  - name: config
+  - name: metrics
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Shallow health check
+      responses:
+        "200":
+          description: Service is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/health/deep:
+    get:
+      tags: [health]
+      operationId: getDeepHealth
+      summary: Deep readiness probe
+      responses:
+        "200":
+          description: Service is healthy or intentionally paused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeepHealthResponse"
+        "503":
+          description: A required readiness check failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeepHealthResponse"
+  /api/v1/metrics:
+    get:
+      tags: [metrics]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/v1/stats:
+    get:
+      tags: [metrics]
+      operationId: getStats
+      summary: Aggregate service snapshot
+      responses:
+        "200":
+          description: Current aggregate service state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+  /api/v1/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: List audit events
+      parameters:
+        - $ref: "#/components/parameters/SinceQuery"
+        - $ref: "#/components/parameters/LimitQuery"
+      responses:
+        "200":
+          description: Audit event page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AppEvent"
+  /api/v1/pairs:
+    get:
+      tags: [pairs]
+      operationId: listPairs
+      summary: List registered pairs
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pair list.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pairs]
+                properties:
+                  pairs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pair"
+        "304":
+          description: Pair list has not changed.
+    post:
+      tags: [pairs]
+      operationId: registerPair
+      summary: Register a pair
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairRequest"
+      responses:
+        "200":
+          description: Pair already existed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairRegistered"
+        "201":
+          description: Pair was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairRegistered"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/pairs/{source}/{destination}:
+    parameters:
+      - $ref: "#/components/parameters/SourcePath"
+      - $ref: "#/components/parameters/DestinationPath"
+    get:
+      tags: [pairs]
+      operationId: getPair
+      summary: Read a registered pair
+      responses:
+        "200":
+          description: Pair exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairRegistered"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [pairs]
+      operationId: deletePair
+      summary: Unregister a pair
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "204":
+          description: Pair was removed.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/pairs/{source}/{destination}/info:
+    get:
+      tags: [pairs]
+      operationId: getPairInfo
+      summary: Read pair metadata aggregate
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/DestinationPath"
+      responses:
+        "200":
+          description: Pair metadata, with defaults when unregistered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairInfo"
+  /api/v1/pairs/{source}/{destination}/fee_bps:
+    patch:
+      tags: [pairs]
+      operationId: setPairFeeBps
+      summary: Set pair fee basis points
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/DestinationPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feeBps]
+              properties:
+                feeBps:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+      responses:
+        "200":
+          $ref: "#/components/responses/PairMetaUpdated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/pairs/{source}/{destination}/min:
+    patch:
+      tags: [pairs]
+      operationId: setPairMinAmount
+      summary: Set pair minimum amount
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/DestinationPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minAmount]
+              properties:
+                minAmount:
+                  $ref: "#/components/schemas/IntegerString"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairMetaUpdated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/pairs/{source}/{destination}/max:
+    patch:
+      tags: [pairs]
+      operationId: setPairMaxAmount
+      summary: Set pair maximum amount
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/DestinationPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxAmount]
+              properties:
+                maxAmount:
+                  $ref: "#/components/schemas/PositiveIntegerString"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairMetaUpdated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/pairs/{source}/{destination}/liquidity:
+    patch:
+      tags: [pairs]
+      operationId: setPairLiquidity
+      summary: Set pair liquidity
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/DestinationPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [liquidity]
+              properties:
+                liquidity:
+                  $ref: "#/components/schemas/IntegerString"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairMetaUpdated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/quote:
+    get:
+      tags: [quotes]
+      operationId: getQuote
+      summary: Get a route quote
+      parameters:
+        - $ref: "#/components/parameters/SourceAssetQuery"
+        - $ref: "#/components/parameters/DestAssetQuery"
+        - $ref: "#/components/parameters/AmountQuery"
+      responses:
+        "200":
+          description: Quote result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/quote/bulk:
+    post:
+      tags: [quotes]
+      operationId: getBulkQuote
+      summary: Quote up to 100 route requests
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkQuoteRequest"
+      responses:
+        "200":
+          description: Per-item quote results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkQuoteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/api-keys:
+    get:
+      tags: [api-keys]
+      operationId: listApiKeys
+      summary: List API key prefixes
+      responses:
+        "200":
+          description: API key metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKeyItem"
+    post:
+      tags: [api-keys]
+      operationId: createApiKey
+      summary: Create an API key
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+      responses:
+        "201":
+          description: Created API key. The full key is returned once.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, label]
+                properties:
+                  key:
+                    type: string
+                    pattern: "^srk_[0-9a-f]+$"
+                  label:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/api-keys/{prefix}:
+    delete:
+      tags: [api-keys]
+      operationId: deleteApiKey
+      summary: Revoke an API key by prefix
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: prefix
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: API key was revoked.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/webhooks:
+    get:
+      tags: [webhooks]
+      operationId: listWebhooks
+      summary: List registered webhooks
+      responses:
+        "200":
+          description: Webhook metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Webhook"
+    post:
+      tags: [webhooks]
+      operationId: createWebhook
+      summary: Register a webhook
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookRequest"
+      responses:
+        "201":
+          description: Registered webhook.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/webhooks/{id}:
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^wh_[0-9a-f]{16}$"
+      responses:
+        "204":
+          description: Webhook was deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+  /api/v1/admin/pause:
+    post:
+      tags: [admin]
+      operationId: pauseService
+      summary: Pause non-idempotent requests
+      security:
+        - AdminBearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/PauseState"
+  /api/v1/admin/unpause:
+    post:
+      tags: [admin]
+      operationId: unpauseService
+      summary: Resume non-idempotent requests
+      security:
+        - AdminBearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/PauseState"
+  /api/v1/admin/status:
+    get:
+      tags: [admin]
+      operationId: getAdminStatus
+      summary: Read pause status
+      responses:
+        "200":
+          $ref: "#/components/responses/PauseState"
+  /api/v1/config:
+    get:
+      tags: [config]
+      operationId: getConfig
+      summary: Read runtime config
+      responses:
+        "200":
+          $ref: "#/components/responses/Config"
+    patch:
+      tags: [config]
+      operationId: patchConfig
+      summary: Patch runtime config
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigPatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Config"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServicePaused"
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Planned API key authentication for write routes.
+    AdminBearerAuth:
+      type: http
+      scheme: bearer
+      description: Planned bearer-token authentication for admin routes.
+  parameters:
+    SourcePath:
+      name: source
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/AssetCode"
+    DestinationPath:
+      name: destination
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/AssetCode"
+    SourceAssetQuery:
+      name: source_asset
+      in: query
+      required: true
+      schema:
+        $ref: "#/components/schemas/AssetCode"
+    DestAssetQuery:
+      name: dest_asset
+      in: query
+      required: true
+      schema:
+        $ref: "#/components/schemas/AssetCode"
+    AmountQuery:
+      name: amount
+      in: query
+      required: true
+      schema:
+        $ref: "#/components/schemas/PositiveIntegerString"
+    SinceQuery:
+      name: since
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+    LimitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 10000
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServicePaused:
+      description: The service is paused and refused a non-idempotent request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PairMetaUpdated:
+      description: Updated pair metadata.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PairMeta"
+    PauseState:
+      description: Pause state.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [paused]
+            properties:
+              paused:
+                type: boolean
+    Config:
+      description: Runtime config.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [config]
+            properties:
+              config:
+                $ref: "#/components/schemas/Config"
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, message, requestId]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          enum: [stableroute-backend]
+    DeepHealthResponse:
+      type: object
+      required: [status, uptimeSeconds, memory, pid, node, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, paused, degraded]
+        uptimeSeconds:
+          type: integer
+          minimum: 0
+        memory:
+          type: object
+          required: [rssMb, heapUsedMb]
+          properties:
+            rssMb:
+              type: integer
+              minimum: 0
+            heapUsedMb:
+              type: integer
+              minimum: 0
+        pid:
+          type: integer
+          minimum: 1
+        node:
+          type: string
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, status, durationMs]
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+                enum: [ok, fail]
+              durationMs:
+                type: number
+                minimum: 0
+    StatsResponse:
+      type: object
+      required: [totalPairs, paused]
+      properties:
+        totalPairs:
+          type: integer
+          minimum: 0
+        paused:
+          type: boolean
+    AppEvent:
+      type: object
+      required: [id, ts, type, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ts:
+          type: integer
+          minimum: 0
+        type:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+    AssetCode:
+      type: string
+      minLength: 1
+      maxLength: 12
+    IntegerString:
+      type: string
+      pattern: "^[0-9]{1,39}$"
+    PositiveIntegerString:
+      type: string
+      pattern: "^[1-9][0-9]{0,38}$"
+    Pair:
+      type: object
+      required: [source, destination]
+      properties:
+        source:
+          $ref: "#/components/schemas/AssetCode"
+        destination:
+          $ref: "#/components/schemas/AssetCode"
+    PairRequest:
+      allOf:
+        - $ref: "#/components/schemas/Pair"
+    PairRegistered:
+      allOf:
+        - $ref: "#/components/schemas/Pair"
+        - type: object
+          required: [registered]
+          properties:
+            registered:
+              type: boolean
+    PairMeta:
+      allOf:
+        - $ref: "#/components/schemas/Pair"
+        - type: object
+          required: [feeBps, minAmount, maxAmount, liquidity]
+          properties:
+            feeBps:
+              type: integer
+              minimum: 0
+              maximum: 1000
+            minAmount:
+              $ref: "#/components/schemas/IntegerString"
+            maxAmount:
+              $ref: "#/components/schemas/IntegerString"
+            liquidity:
+              $ref: "#/components/schemas/IntegerString"
+    PairInfo:
+      allOf:
+        - $ref: "#/components/schemas/PairMeta"
+        - type: object
+          required: [registered]
+          properties:
+            registered:
+              type: boolean
+    QuoteResponse:
+      type: object
+      required: [source_asset, dest_asset, amount, estimated_rate, route]
+      properties:
+        source_asset:
+          $ref: "#/components/schemas/AssetCode"
+        dest_asset:
+          $ref: "#/components/schemas/AssetCode"
+        amount:
+          $ref: "#/components/schemas/PositiveIntegerString"
+        estimated_rate:
+          type: string
+        route:
+          type: array
+          minItems: 2
+          items:
+            $ref: "#/components/schemas/AssetCode"
+    BulkQuoteRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            properties:
+              source_asset:
+                $ref: "#/components/schemas/AssetCode"
+              dest_asset:
+                $ref: "#/components/schemas/AssetCode"
+              amount:
+                $ref: "#/components/schemas/PositiveIntegerString"
+    BulkQuoteResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            oneOf:
+              - type: object
+                required: [index, ok, source_asset, dest_asset, amount, estimated_rate]
+                properties:
+                  index:
+                    type: integer
+                    minimum: 0
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  source_asset:
+                    $ref: "#/components/schemas/AssetCode"
+                  dest_asset:
+                    $ref: "#/components/schemas/AssetCode"
+                  amount:
+                    $ref: "#/components/schemas/PositiveIntegerString"
+                  estimated_rate:
+                    type: string
+              - type: object
+                required: [index, ok, error]
+                properties:
+                  index:
+                    type: integer
+                    minimum: 0
+                  ok:
+                    type: boolean
+                    enum: [false]
+                  error:
+                    type: string
+                    enum: [invalid_item]
+    ApiKeyItem:
+      type: object
+      required: [prefix, label, createdAt]
+      properties:
+        prefix:
+          type: string
+        label:
+          type: string
+        createdAt:
+          type: integer
+          minimum: 0
+    Webhook:
+      type: object
+      required: [id, url, events, createdAt]
+      properties:
+        id:
+          type: string
+          pattern: "^wh_[0-9a-f]{16}$"
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        events:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        createdAt:
+          type: integer
+          minimum: 0
+    WebhookRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        events:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    WebhookCreated:
+      allOf:
+        - $ref: "#/components/schemas/WebhookRequest"
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              pattern: "^wh_[0-9a-f]{16}$"
+    Config:
+      type: object
+      required: [rateLimitPerWindow, rateLimitWindowMs, bulkMaxItems, eventLogCap]
+      properties:
+        rateLimitPerWindow:
+          type: integer
+          minimum: 1
+        rateLimitWindowMs:
+          type: integer
+          minimum: 1
+        bulkMaxItems:
+          type: integer
+          minimum: 1
+        eventLogCap:
+          type: integer
+          minimum: 1
+    ConfigPatch:
+      type: object
+      properties:
+        rateLimitPerWindow:
+          type: integer
+          minimum: 1
+        rateLimitWindowMs:
+          type: integer
+          minimum: 1
+        bulkMaxItems:
+          type: integer
+          minimum: 1

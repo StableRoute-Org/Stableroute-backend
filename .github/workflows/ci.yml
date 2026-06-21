@@ -24,6 +24,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate OpenAPI spec
+        run: npm run openapi:validate
+
       - name: Run tests
         run: npm test
 

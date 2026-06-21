@@ -1,5 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import SwaggerParser from "@apidevtools/swagger-parser";
 import request from "supertest";
+import YAML from "yaml";
 import app from "../index";
+
+const openApiSpec = YAML.parse(readFileSync(resolve("openapi.yaml"), "utf8")) as {
+  openapi: string;
+  info: { version: string };
+  paths: Record<string, unknown>;
+};
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -156,7 +166,8 @@ describe("StableRoute Backend", () => {
   it("serves an OpenAPI 3.0 spec with the expected paths", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
     expect(res.status).toBe(200);
-    expect(res.body.openapi).toBe("3.0.3");
+    expect(res.body).toEqual(openApiSpec);
+    await expect(SwaggerParser.validate(res.body)).resolves.toBeTruthy();
     expect(res.body.paths["/api/v1/pairs"]).toBeTruthy();
     expect(res.body.paths["/api/v1/quote"]).toBeTruthy();
     expect(res.body.paths["/api/v1/admin/pause"]).toBeTruthy();

@@ -79,6 +79,10 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## API keys
+
+Create an API key with `POST /api/v1/api-keys`, then send it on protected write routes as `X-Api-Key: <key>`. The raw key is returned only at creation time; the server stores a SHA-256 hash plus the displayed prefix. Pair registration, pair metadata PATCH routes, and webhook creation require a valid key and return `401 unauthorized` when it is missing, unknown, or revoked.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

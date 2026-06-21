@@ -6,18 +6,49 @@ import app from "../index";
 // 60 s window and cannot bleed across tests.
 const WINDOW_MS = 60_000;
 let baseTime = Date.now();
+const originalNodeEnv = process.env.NODE_ENV;
+let dateNowSpy: jest.SpyInstance<number, []>;
+let consoleLogSpy: jest.SpyInstance;
+const defaultRateLimitConfig = {
+  rateLimitPerWindow: 60,
+  rateLimitWindowMs: WINDOW_MS,
+  bulkMaxItems: 100,
+};
 
 function advanceBase() {
   baseTime += WINDOW_MS * 2;
 }
 
-beforeEach(() => {
-  advanceBase();
-  jest.spyOn(Date, "now").mockReturnValue(baseTime);
+beforeAll(() => {
+  process.env.NODE_ENV = "development";
 });
 
-afterEach(() => {
-  jest.restoreAllMocks();
+beforeEach(async () => {
+  process.env.NODE_ENV = "test";
+  await request(app)
+    .patch("/api/v1/config")
+    .send(defaultRateLimitConfig);
+  advanceBase();
+  process.env.NODE_ENV = "development";
+  dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
+});
+
+afterEach(async () => {
+  dateNowSpy.mockRestore();
+  consoleLogSpy.mockRestore();
+  process.env.NODE_ENV = "test";
+  await request(app)
+    .patch("/api/v1/config")
+    .send(defaultRateLimitConfig);
+});
+
+afterAll(() => {
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });
 
 describe("rate limiter", () => {

@@ -265,13 +265,26 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   res.json({ items });
 });
 
-type ApiKeyRecord = { label: string; createdAt: number };
+type ApiKeyRecord = { prefix: string; label: string; createdAt: number };
 const apiKeyStore = new Map<string, ApiKeyRecord>();
+const hashApiKey = (key: string): string => createHash("sha256").update(key).digest("hex");
+
+/**
+ * Require a previously minted API key without storing raw key material.
+ */
+const requireApiKey = (req: Request, res: Response, next: NextFunction) => {
+  const key = req.header("x-api-key");
+  if (!key || !apiKeyStore.has(hashApiKey(key))) {
+    sendError(res, req, 401, "unauthorized", "valid API key required");
+    return;
+  }
+  next();
+};
 
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
   let found: string | undefined;
-  for (const k of apiKeyStore.keys()) if (k.slice(0, 8) === prefix) { found = k; break; }
+  for (const [hash, record] of apiKeyStore) if (record.prefix === prefix) { found = hash; break; }
   if (!found) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
@@ -281,8 +294,8 @@ app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
-  const items = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
-    prefix: k.slice(0, 8),
+  const items = Array.from(apiKeyStore.values()).map((m) => ({
+    prefix: m.prefix,
     label: m.label,
     createdAt: m.createdAt,
   }));
@@ -296,7 +309,7 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
     return;
   }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now() });
+  apiKeyStore.set(hashApiKey(key), { prefix: key.slice(0, 8), label, createdAt: Date.now() });
   res.status(201).json({ key, label });
 });
 
@@ -318,7 +331,7 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
   res.json({ items });
 });
 
-app.post("/api/v1/webhooks", (req: Request, res: Response) => {
+app.post("/api/v1/webhooks", requireApiKey, (req: Request, res: Response) => {
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
@@ -345,7 +358,7 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/liquidity", requireApiKey, (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
   if (!pairRegistry.has(k)) {
@@ -363,7 +376,7 @@ app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Re
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/max", requireApiKey, (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
   if (!pairRegistry.has(k)) {
@@ -381,7 +394,7 @@ app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/min", requireApiKey, (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
   if (!pairRegistry.has(k)) {
@@ -399,7 +412,7 @@ app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/fee_bps", requireApiKey, (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
   if (!pairRegistry.has(k)) {
@@ -522,7 +535,7 @@ app.get("/api/v1/pairs", (req: Request, res: Response) => {
  * admin auth guard once the gateway lands). Body: { source, destination }.
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
-app.post("/api/v1/pairs", (req: Request, res: Response) => {
+app.post("/api/v1/pairs", requireApiKey, (req: Request, res: Response) => {
   const { source, destination } = req.body ?? {};
   if (!isAssetCode(source) || !isAssetCode(destination)) {
     return sendError(

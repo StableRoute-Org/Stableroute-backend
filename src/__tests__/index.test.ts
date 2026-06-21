@@ -11,6 +11,16 @@ const expectCanonicalError = (
   expect(body.requestId).toBe(requestId);
 };
 
+let apiKey = "";
+const apiKeyHeaders = () => ({ "X-Api-Key": apiKey });
+
+beforeAll(async () => {
+  const res = await request(app)
+    .post("/api/v1/api-keys")
+    .send({ label: "index-test-suite" });
+  apiKey = res.body.key;
+});
+
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
@@ -78,6 +88,7 @@ describe("StableRoute Backend", () => {
 
     const tooLarge = await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .set("X-Request-Id", "err-413")
       .send({ payload: "x".repeat(110_000) });
     expect(tooLarge.status).toBe(413);
@@ -85,6 +96,7 @@ describe("StableRoute Backend", () => {
 
     const serverError = await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .set("Content-Type", "application/json")
       .set("X-Request-Id", "err-500")
       .send("{");
@@ -95,6 +107,7 @@ describe("StableRoute Backend", () => {
     await request(app).post("/api/v1/admin/pause");
     const paused = await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .set("X-Request-Id", "err-503")
       .send({ source: "PAU", destination: "REQ" });
     expect(paused.status).toBe(503);
@@ -110,6 +123,7 @@ describe("StableRoute Backend", () => {
 
       const reg = await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "PAIR_A", destination: "PAIR_B" });
       expect(reg.status).toBe(201);
       expect(reg.body).toEqual({
@@ -129,9 +143,11 @@ describe("StableRoute Backend", () => {
     it("is idempotent: re-registering returns 200", async () => {
       await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "IDEM_A", destination: "IDEM_B" });
       const second = await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "IDEM_A", destination: "IDEM_B" });
       expect(second.status).toBe(200);
     });
@@ -139,6 +155,7 @@ describe("StableRoute Backend", () => {
     it("rejects source == destination with 400", async () => {
       const res = await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "USDC", destination: "USDC" });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/must differ/);
@@ -147,6 +164,7 @@ describe("StableRoute Backend", () => {
     it("rejects too-long asset codes with 400", async () => {
       const res = await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "USDC", destination: "THIRTEENLETTERS" });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/1-12 character strings/);
@@ -181,6 +199,7 @@ describe("StableRoute Backend", () => {
   it("registers and removes a webhook", async () => {
     const create = await request(app)
       .post("/api/v1/webhooks")
+      .set(apiKeyHeaders())
       .send({ url: "https://example.com/wh", events: ["pair.registered"] });
     expect(create.status).toBe(201);
     expect(create.body.id).toMatch(/^wh_/);
@@ -191,6 +210,7 @@ describe("StableRoute Backend", () => {
   it("rejects webhook with non-http url", async () => {
     const res = await request(app)
       .post("/api/v1/webhooks")
+      .set(apiKeyHeaders())
       .send({ url: "ftp://nope.example", events: ["x"] });
     expect(res.status).toBe(400);
   });
@@ -198,6 +218,7 @@ describe("StableRoute Backend", () => {
   it("records and surfaces pair.registered events", async () => {
     await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .send({ source: "EVT", destination: "LOG" });
     const events = await request(app).get("/api/v1/events?limit=50");
     expect(events.status).toBe(200);
@@ -219,9 +240,46 @@ describe("StableRoute Backend", () => {
     expect(create.body.key).toMatch(/^srk_/);
     const prefix = create.body.key.slice(0, 8);
     const list = await request(app).get("/api/v1/api-keys");
-    expect(list.body.items.some((k: { prefix: string }) => k.prefix === prefix)).toBe(true);
+    const listedKey = list.body.items.find((k: { prefix: string }) => k.prefix === prefix);
+    expect(listedKey).toBeTruthy();
+    expect(listedKey).not.toHaveProperty("key");
     const del = await request(app).delete(`/api/v1/api-keys/${prefix}`);
     expect(del.status).toBe(204);
+  });
+
+  it("rejects guarded writes without an API key", async () => {
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .set("X-Request-Id", "missing-api-key")
+      .send({ source: "NOAUTH", destination: "PAIR" });
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, "missing-api-key", "unauthorized");
+  });
+
+  it("rejects guarded writes with an unknown API key", async () => {
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .set("X-Api-Key", "srk_not_a_real_key")
+      .set("X-Request-Id", "unknown-api-key")
+      .send({ url: "https://example.com/h", events: ["pair.registered"] });
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, "unknown-api-key", "unauthorized");
+  });
+
+  it("rejects a revoked API key on guarded writes", async () => {
+    const create = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "revoked" });
+    const revokedKey = create.body.key;
+    await request(app).delete(`/api/v1/api-keys/${revokedKey.slice(0, 8)}`);
+
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .set("X-Api-Key", revokedKey)
+      .set("X-Request-Id", "revoked-api-key")
+      .send({ source: "OLD", destination: "KEY" });
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, "revoked-api-key", "unauthorized");
   });
 
   describe("GET /api/v1/health/deep — readiness probe", () => {
@@ -313,12 +371,14 @@ describe("StableRoute Backend", () => {
     await request(app).post("/api/v1/admin/pause");
     const blocked = await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .send({ source: "PAU", destination: "SED" });
     expect(blocked.status).toBe(503);
     expect(blocked.body.error).toBe("service_paused");
     await request(app).post("/api/v1/admin/unpause");
     const ok = await request(app)
       .post("/api/v1/pairs")
+      .set(apiKeyHeaders())
       .send({ source: "PAU", destination: "SED" });
     expect(ok.status === 200 || ok.status === 201).toBe(true);
   });
@@ -327,9 +387,11 @@ describe("StableRoute Backend", () => {
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "USD", destination: "EUR" });
       const set = await request(app)
         .patch("/api/v1/pairs/USD/EUR/fee_bps")
+        .set(apiKeyHeaders())
         .send({ feeBps: 50 });
       expect(set.status).toBe(200);
       expect(set.body.feeBps).toBe(50);
@@ -341,6 +403,7 @@ describe("StableRoute Backend", () => {
     it("rejects PATCH /fee_bps when pair is not registered", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/AAA/BBB/fee_bps")
+        .set(apiKeyHeaders())
         .send({ feeBps: 5 });
       expect(res.status).toBe(404);
     });
@@ -350,6 +413,7 @@ describe("StableRoute Backend", () => {
     it("registers, reads, and unregisters a pair", async () => {
       await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "ALIVE", destination: "PAIR" });
 
       // Read single pair
@@ -380,6 +444,7 @@ describe("StableRoute Backend", () => {
     beforeEach(async () => {
       await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "META", destination: "TEST" });
     });
 
@@ -390,6 +455,7 @@ describe("StableRoute Backend", () => {
     it("patches liquidity", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
+        .set(apiKeyHeaders())
         .send({ liquidity: "50000" });
       expect(res.status).toBe(200);
       expect(res.body.liquidity).toBe("50000");
@@ -398,6 +464,7 @@ describe("StableRoute Backend", () => {
     it("rejects liquidity with non-numeric string", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
+        .set(apiKeyHeaders())
         .send({ liquidity: "abc" });
       expect(res.status).toBe(400);
     });
@@ -405,6 +472,7 @@ describe("StableRoute Backend", () => {
     it("patches maxAmount", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
+        .set(apiKeyHeaders())
         .send({ maxAmount: "99999" });
       expect(res.status).toBe(200);
       expect(res.body.maxAmount).toBe("99999");
@@ -413,6 +481,7 @@ describe("StableRoute Backend", () => {
     it("rejects maxAmount with zero", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
+        .set(apiKeyHeaders())
         .send({ maxAmount: "0" });
       expect(res.status).toBe(400);
     });
@@ -420,6 +489,7 @@ describe("StableRoute Backend", () => {
     it("patches minAmount", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
+        .set(apiKeyHeaders())
         .send({ minAmount: "100" });
       expect(res.status).toBe(200);
       expect(res.body.minAmount).toBe("100");
@@ -428,6 +498,7 @@ describe("StableRoute Backend", () => {
     it("rejects minAmount with negative", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
+        .set(apiKeyHeaders())
         .send({ minAmount: "-5" });
       expect(res.status).toBe(400);
     });
@@ -435,16 +506,19 @@ describe("StableRoute Backend", () => {
     it("returns 404 for unregistered pair on all patch endpoints", async () => {
       const liquidity = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/liquidity")
+        .set(apiKeyHeaders())
         .send({ liquidity: "10" });
       expect(liquidity.status).toBe(404);
 
       const max = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/max")
+        .set(apiKeyHeaders())
         .send({ maxAmount: "10" });
       expect(max.status).toBe(404);
 
       const min = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/min")
+        .set(apiKeyHeaders())
         .send({ minAmount: "10" });
       expect(min.status).toBe(404);
     });
@@ -497,6 +571,7 @@ describe("StableRoute Backend", () => {
 
       await request(app)
         .post("/api/v1/webhooks")
+        .set(apiKeyHeaders())
         .send({ url: "https://hook.example/evt", events: ["pair.registered"] });
 
       const listFull = await request(app).get("/api/v1/webhooks");
@@ -507,11 +582,13 @@ describe("StableRoute Backend", () => {
     it("rejects invalid events array", async () => {
       const badEvents = await request(app)
         .post("/api/v1/webhooks")
+        .set(apiKeyHeaders())
         .send({ url: "https://example.com/h", events: "not-an-array" });
       expect(badEvents.status).toBe(400);
 
       const emptyEvents = await request(app)
         .post("/api/v1/webhooks")
+        .set(apiKeyHeaders())
         .send({ url: "https://example.com/h", events: [] });
       expect(emptyEvents.status).toBe(400);
     });
@@ -553,6 +630,7 @@ describe("StableRoute Backend", () => {
     it("filters events by since timestamp", async () => {
       await request(app)
         .post("/api/v1/pairs")
+        .set(apiKeyHeaders())
         .send({ source: "SINCE", destination: "TEST" });
 
       const farFuture = Date.now() + 100000;

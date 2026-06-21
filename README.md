@@ -48,8 +48,10 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 On every push/PR to `main`, GitHub Actions runs:
 
 - `npm ci`
+- `npm run lint`
 - `npm run build`
 - `npm test`
+- `npm run test:coverage`
 
 Ensure these pass locally before pushing.
 

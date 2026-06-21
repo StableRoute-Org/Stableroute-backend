@@ -79,6 +79,13 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Validation
+
+Request validation lives in `src/validation.ts`. Route handlers use zod schemas
+through a shared `validate(schema, source)` middleware, which returns the
+canonical `400 invalid_request` body and keeps parsed values on the request for
+the handler.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

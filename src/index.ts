@@ -1,6 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import {
+  apiKeyBodySchema,
+  bulkQuoteBodySchema,
+  configPatchSchema,
+  feeBpsPatchSchema,
+  getValidated,
+  liquidityPatchSchema,
+  maxAmountPatchSchema,
+  minAmountPatchSchema,
+  pairBodySchema,
+  quoteQuerySchema,
+  validate,
+  webhookBodySchema,
+} from "./validation";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -289,12 +303,8 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
   res.json({ items });
 });
 
-app.post("/api/v1/api-keys", (req: Request, res: Response) => {
-  const { label } = req.body ?? {};
-  if (typeof label !== "string" || label.length === 0 || label.length > 64) {
-    sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
-    return;
-  }
+app.post("/api/v1/api-keys", validate(apiKeyBodySchema, "body"), (req: Request, res: Response) => {
+  const { label } = getValidated<{ label: string }>(req);
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
   apiKeyStore.set(key, { label, createdAt: Date.now() });
   res.status(201).json({ key, label });
@@ -318,16 +328,8 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
   res.json({ items });
 });
 
-app.post("/api/v1/webhooks", (req: Request, res: Response) => {
-  const { url, events } = req.body ?? {};
-  if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
-    sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
-    return;
-  }
-  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
-    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
-    return;
-  }
+app.post("/api/v1/webhooks", validate(webhookBodySchema, "body"), (req: Request, res: Response) => {
+  const { url, events } = getValidated<{ url: string; events: string[] }>(req);
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   webhookStore.set(id, { url, events, createdAt: Date.now() });
   res.status(201).json({ id, url, events });
@@ -345,72 +347,50 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
+const requireRegisteredPair = (req: Request, res: Response, next: NextFunction) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
   }
-  const { liquidity } = req.body ?? {};
-  if (typeof liquidity !== "string" || !/^[0-9]{1,39}$/.test(liquidity)) {
-    sendError(res, req, 400, "invalid_request", "liquidity must be a non-negative integer string");
-    return;
-  }
+  next();
+};
+
+app.patch("/api/v1/pairs/:source/:destination/liquidity", requireRegisteredPair, validate(liquidityPatchSchema, "body"), (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  const { liquidity } = getValidated<{ liquidity: string }>(req);
   const meta = pairMeta.get(k) ?? defaultMeta();
   meta.liquidity = liquidity;
   pairMeta.set(k, meta);
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/max", requireRegisteredPair, validate(maxAmountPatchSchema, "body"), (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { maxAmount } = req.body ?? {};
-  if (typeof maxAmount !== "string" || !/^[1-9][0-9]{0,38}$/.test(maxAmount)) {
-    sendError(res, req, 400, "invalid_request", "maxAmount must be a positive integer string");
-    return;
-  }
+  const { maxAmount } = getValidated<{ maxAmount: string }>(req);
   const meta = pairMeta.get(k) ?? defaultMeta();
   meta.maxAmount = maxAmount;
   pairMeta.set(k, meta);
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/min", requireRegisteredPair, validate(minAmountPatchSchema, "body"), (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { minAmount } = req.body ?? {};
-  if (typeof minAmount !== "string" || !/^[0-9]{1,39}$/.test(minAmount)) {
-    sendError(res, req, 400, "invalid_request", "minAmount must be a non-negative integer string");
-    return;
-  }
+  const { minAmount } = getValidated<{ minAmount: string }>(req);
   const meta = pairMeta.get(k) ?? defaultMeta();
   meta.minAmount = minAmount;
   pairMeta.set(k, meta);
   res.json({ source, destination, ...meta });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
+app.patch("/api/v1/pairs/:source/:destination/fee_bps", requireRegisteredPair, validate(feeBpsPatchSchema, "body"), (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { feeBps } = req.body ?? {};
-  if (typeof feeBps !== "number" || !Number.isInteger(feeBps) || feeBps < 0 || feeBps > 1000) {
-    sendError(res, req, 400, "invalid_request", "feeBps must be an integer in [0,1000]");
-    return;
-  }
+  const { feeBps } = getValidated<{ feeBps: number }>(req);
   const meta = pairMeta.get(k) ?? defaultMeta();
   meta.feeBps = feeBps;
   pairMeta.set(k, meta);
@@ -451,16 +431,11 @@ const config: Record<string, number> = {
   eventLogCap: 10_000,
 };
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
-app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
-  for (const k of allowed) {
-    if (k in (req.body ?? {})) {
-      const v = req.body[k];
-      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
-        sendError(res, req, 400, "invalid_request", `${k} must be positive integer`);
-        return;
-      }
-      config[k] = v;
+app.patch("/api/v1/config", validate(configPatchSchema, "body"), (req: Request, res: Response) => {
+  const patch = getValidated<Partial<Record<"rateLimitPerWindow" | "rateLimitWindowMs" | "bulkMaxItems", number>>>(req);
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      config[key] = value;
     }
   }
   res.json({ config });
@@ -522,20 +497,8 @@ app.get("/api/v1/pairs", (req: Request, res: Response) => {
  * admin auth guard once the gateway lands). Body: { source, destination }.
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
-app.post("/api/v1/pairs", (req: Request, res: Response) => {
-  const { source, destination } = req.body ?? {};
-  if (!isAssetCode(source) || !isAssetCode(destination)) {
-    return sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      "source and destination must be 1-12 character strings"
-    );
-  }
-  if (source === destination) {
-    return sendError(res, req, 400, "invalid_request", "source and destination must differ");
-  }
+app.post("/api/v1/pairs", validate(pairBodySchema, "body"), (req: Request, res: Response) => {
+  const { source, destination } = getValidated<{ source: string; destination: string }>(req);
   const key = pairKey(source, destination);
   const isNew = !pairRegistry.has(key);
   pairRegistry.add(key);
@@ -543,34 +506,23 @@ app.post("/api/v1/pairs", (req: Request, res: Response) => {
   res.status(isNew ? 201 : 200).json({ source, destination, registered: true });
 });
 
-// Asset symbols are short uppercase identifiers (USDC, EURC, XLM, …).
-// Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
-// anything that is not a single string so an array param can't smuggle
-// through as a "truthy" value.
-const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" && v.length > 0 && v.length <= 12;
+const parseAmount = (amount: string): bigint => BigInt(amount);
 
-// Quote amount: a base-units integer string. Parsed via BigInt so we
-// never lose precision on amounts above Number.MAX_SAFE_INTEGER.
-const parseAmount = (v: unknown): bigint | null => {
-  if (typeof v !== "string" || !/^[1-9][0-9]{0,38}$/.test(v)) return null;
-  try {
-    const n = BigInt(v);
-    return n > 0n ? n : null;
-  } catch {
-    return null;
-  }
-};
-
-app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
-  const { items } = req.body ?? {};
-  if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
-    sendError(res, req, 400, "invalid_request", "items must be 1-100 entries");
-    return;
-  }
+app.post("/api/v1/quote/bulk", validate(bulkQuoteBodySchema, "body"), (req: Request, res: Response) => {
+  const { items } = getValidated<{ items: Array<{ source_asset?: unknown; dest_asset?: unknown; amount?: unknown }> }>(req);
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
     const { source_asset, dest_asset, amount } = it ?? {};
-    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
+    const invalidItem =
+      typeof source_asset !== "string" ||
+      source_asset.length === 0 ||
+      source_asset.length > 12 ||
+      typeof dest_asset !== "string" ||
+      dest_asset.length === 0 ||
+      dest_asset.length > 12 ||
+      typeof amount !== "string" ||
+      !/^[1-9][0-9]{0,38}$/.test(amount) ||
+      source_asset === dest_asset;
+    if (invalidItem) {
       return { index: i, ok: false, error: "invalid_item" };
     }
     return {
@@ -585,40 +537,9 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   res.json({ results });
 });
 
-app.get("/api/v1/quote", (req: Request, res: Response) => {
-  const { source_asset, dest_asset, amount } = req.query;
-
-  if (!source_asset || !dest_asset || !amount) {
-    return sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      "Missing required query params: source_asset, dest_asset, amount"
-    );
-  }
-  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
-    return sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      "source_asset and dest_asset must be 1-12 character strings"
-    );
-  }
-  if (source_asset === dest_asset) {
-    return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
-  }
+app.get("/api/v1/quote", validate(quoteQuerySchema, "query"), (req: Request, res: Response) => {
+  const { source_asset, dest_asset, amount } = getValidated<{ source_asset: string; dest_asset: string; amount: string }>(req);
   const parsedAmount = parseAmount(amount);
-  if (parsedAmount === null) {
-    return sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      "amount must be a positive integer string with no leading zero"
-    );
-  }
 
   res.json({
     source_asset,

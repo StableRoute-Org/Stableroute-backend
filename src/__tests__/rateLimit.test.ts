@@ -6,18 +6,45 @@ import app from "../index";
 // 60 s window and cannot bleed across tests.
 const WINDOW_MS = 60_000;
 let baseTime = Date.now();
+const originalNodeEnv = process.env.NODE_ENV;
+let dateNowSpy: jest.SpyInstance<number, []>;
+let consoleLogSpy: jest.SpyInstance;
 
 function advanceBase() {
   baseTime += WINDOW_MS * 2;
 }
 
+function metricValue(text: string, name: string, labels?: Record<string, string>) {
+  const labelText = labels
+    ? `\\{${Object.entries(labels)
+        .map(([key, value]) => `${key}="${value}"`)
+        .join(",")}\\}`
+    : "";
+  const match = text.match(new RegExp(`^${name}${labelText} ([0-9.e+-]+)$`, "m"));
+  return match ? Number(match[1]) : 0;
+}
+
+beforeAll(() => {
+  process.env.NODE_ENV = "development";
+});
+
 beforeEach(() => {
   advanceBase();
-  jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
-  jest.restoreAllMocks();
+  dateNowSpy.mockRestore();
+  consoleLogSpy.mockRestore();
+});
+
+afterAll(() => {
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });
 
 describe("rate limiter", () => {
@@ -35,6 +62,16 @@ describe("rate limiter", () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(429);
     expect(res.body.error).toBe("rate_limited");
+
+    dateNowSpy.mockReturnValue(baseTime + WINDOW_MS + 1);
+    const metrics = await request(app).get("/api/v1/metrics");
+    expect(metricValue(metrics.text, "stableroute_rate_limited_total")).toBeGreaterThanOrEqual(1);
+    expect(
+      metricValue(metrics.text, "stableroute_http_requests_total", {
+        method: "GET",
+        status: "429",
+      })
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("includes Retry-After: 60 on the 429 response", async () => {

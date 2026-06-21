@@ -9,11 +9,57 @@ app.use(cors());
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
+type MetricResponseKind = "paused" | "rate_limited";
+type MetricLocals = { stableRouteMetricKind?: MetricResponseKind };
 
 /**
  * Read the request id attached by the correlation middleware.
  */
 const getRequestId = (req: Request): string | undefined => (req as RequestWithId).id;
+
+const durationBucketsSeconds = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+type HttpMetric = { count: number; sumSeconds: number; buckets: number[] };
+const httpMetrics = new Map<string, HttpMetric>();
+let rateLimitedTotal = 0;
+let pausedResponsesTotal = 0;
+
+const httpMetricKey = (method: string, status: number) => `${method.toUpperCase()} ${status}`;
+
+/**
+ * Record one completed HTTP request without storing path, IP, or request body data.
+ */
+const observeHttpRequest = (
+  method: string,
+  status: number,
+  durationSeconds: number,
+  responseKind?: MetricResponseKind
+) => {
+  const key = httpMetricKey(method, status);
+  const metric = httpMetrics.get(key) ?? {
+    count: 0,
+    sumSeconds: 0,
+    buckets: durationBucketsSeconds.map(() => 0),
+  };
+  metric.count += 1;
+  metric.sumSeconds += durationSeconds;
+  for (let i = 0; i < durationBucketsSeconds.length; i += 1) {
+    if (durationSeconds <= durationBucketsSeconds[i]) {
+      metric.buckets[i] += 1;
+    }
+  }
+  httpMetrics.set(key, metric);
+  if (responseKind === "rate_limited") rateLimitedTotal += 1;
+  if (responseKind === "paused") pausedResponsesTotal += 1;
+};
+
+const formatLabelValue = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+
+const metricLabels = (method: string, status: string, extra: Record<string, string> = {}) => {
+  const labels = { method, status, ...extra };
+  return Object.entries(labels)
+    .map(([key, value]) => `${key}="${formatLabelValue(value)}"`)
+    .join(",");
+};
 
 /**
  * Send the canonical API error body used by explicit handlers and middleware.
@@ -37,6 +83,33 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Request timing records aggregate Prometheus metrics and emits a structured
+// log per finished request outside tests.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const startNs = process.hrtime.bigint();
+  res.on("finish", () => {
+    const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
+    observeHttpRequest(
+      req.method,
+      res.statusCode,
+      ms / 1_000,
+      (res.locals as MetricLocals).stableRouteMetricKind
+    );
+    if (process.env.NODE_ENV !== "test") {
+      console.log(
+        JSON.stringify({
+          requestId: getRequestId(req),
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          durationMs: Math.round(ms * 10) / 10,
+        })
+      );
+    }
+  });
+  next();
+});
+
 app.use(express.json({ limit: "100kb" }));
 
 // Pause guard: refuses non-idempotent methods with 503 except
@@ -46,6 +119,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const m = req.method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
   if (req.path === "/api/v1/admin/unpause") return next();
+  (res.locals as MetricLocals).stableRouteMetricKind = "paused";
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
@@ -64,6 +138,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   );
   if (bucket.length >= RATE_LIMIT_PER_WINDOW) {
     res.setHeader("Retry-After", "60");
+    (res.locals as MetricLocals).stableRouteMetricKind = "rate_limited";
     sendError(
       res,
       req,
@@ -75,27 +150,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   bucket.push(now);
   rateBuckets.set(ip, bucket);
-  next();
-});
-
-// Request timing — emits a single structured log per finished request
-// and sets Server-Timing.
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const startNs = process.hrtime.bigint();
-  res.on("finish", () => {
-    const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
-    if (process.env.NODE_ENV !== "test") {
-      console.log(
-        JSON.stringify({
-          requestId: getRequestId(req),
-          method: req.method,
-          path: req.path,
-          status: res.statusCode,
-          durationMs: Math.round(ms * 10) / 10,
-        })
-      );
-    }
-  });
   next();
 });
 
@@ -474,7 +528,49 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
     "# HELP stableroute_paused 1 if paused, 0 otherwise.",
     "# TYPE stableroute_paused gauge",
     `stableroute_paused ${paused ? 1 : 0}`,
+    "# HELP stableroute_http_requests_total Total HTTP responses by method and status.",
+    "# TYPE stableroute_http_requests_total counter",
   ];
+
+  const sortedMetrics = Array.from(httpMetrics.entries()).sort(([a], [b]) => a.localeCompare(b));
+  for (const [key, metric] of sortedMetrics) {
+    const [method, status] = key.split(" ");
+    lines.push(
+      `stableroute_http_requests_total{${metricLabels(method, status)}} ${metric.count}`
+    );
+  }
+
+  lines.push(
+    "# HELP stableroute_http_request_duration_seconds HTTP request duration in seconds.",
+    "# TYPE stableroute_http_request_duration_seconds histogram"
+  );
+  for (const [key, metric] of sortedMetrics) {
+    const [method, status] = key.split(" ");
+    for (let i = 0; i < durationBucketsSeconds.length; i += 1) {
+      lines.push(
+        `stableroute_http_request_duration_seconds_bucket{${metricLabels(method, status, {
+          le: String(durationBucketsSeconds[i]),
+        })}} ${metric.buckets[i]}`
+      );
+    }
+    lines.push(
+      `stableroute_http_request_duration_seconds_bucket{${metricLabels(method, status, {
+        le: "+Inf",
+      })}} ${metric.count}`,
+      `stableroute_http_request_duration_seconds_sum{${metricLabels(method, status)}} ${metric.sumSeconds}`,
+      `stableroute_http_request_duration_seconds_count{${metricLabels(method, status)}} ${metric.count}`
+    );
+  }
+
+  lines.push(
+    "# HELP stableroute_rate_limited_total Total HTTP 429 rate-limited responses.",
+    "# TYPE stableroute_rate_limited_total counter",
+    `stableroute_rate_limited_total ${rateLimitedTotal}`,
+    "# HELP stableroute_paused_responses_total Total HTTP 503 responses generated by the pause guard.",
+    "# TYPE stableroute_paused_responses_total counter",
+    `stableroute_paused_responses_total ${pausedResponsesTotal}`
+  );
+
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(lines.join("\n") + "\n");
 });

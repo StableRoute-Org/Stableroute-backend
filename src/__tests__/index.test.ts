@@ -11,6 +11,24 @@ const expectCanonicalError = (
   expect(body.requestId).toBe(requestId);
 };
 
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const metricValue = (
+  text: string,
+  name: string,
+  labels?: Record<string, string>
+): number => {
+  const labelText = labels
+    ? `\\{${escapeRegex(
+        Object.entries(labels)
+          .map(([key, value]) => `${key}="${value}"`)
+          .join(",")
+      )}\\}`
+    : "";
+  const match = text.match(new RegExp(`^${escapeRegex(name)}${labelText} ([0-9.e+-]+)$`, "m"));
+  return match ? Number(match[1]) : 0;
+};
+
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
@@ -307,6 +325,69 @@ describe("StableRoute Backend", () => {
     expect(res.headers["content-type"]).toMatch(/^text\/plain/);
     expect(res.text).toMatch(/stableroute_pairs_total/);
     expect(res.text).toMatch(/stableroute_paused/);
+    expect(res.text).toMatch(/stableroute_http_requests_total/);
+    expect(res.text).toMatch(/stableroute_http_request_duration_seconds_bucket/);
+    expect(res.text).toMatch(/stableroute_rate_limited_total/);
+    expect(res.text).toMatch(/stableroute_paused_responses_total/);
+  });
+
+  it("records request counters and latency buckets without raw paths", async () => {
+    const before = await request(app).get("/api/v1/metrics");
+    const beforeOk = metricValue(before.text, "stableroute_http_requests_total", {
+      method: "GET",
+      status: "200",
+    });
+
+    const ok = await request(app).get("/health");
+    expect(ok.status).toBe(200);
+    const bad = await request(app).get("/api/v1/quote");
+    expect(bad.status).toBe(400);
+
+    const after = await request(app).get("/api/v1/metrics");
+    expect(
+      metricValue(after.text, "stableroute_http_requests_total", {
+        method: "GET",
+        status: "200",
+      })
+    ).toBeGreaterThanOrEqual(beforeOk + 1);
+    expect(
+      metricValue(after.text, "stableroute_http_requests_total", {
+        method: "GET",
+        status: "400",
+      })
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      metricValue(after.text, "stableroute_http_request_duration_seconds_bucket", {
+        method: "GET",
+        status: "200",
+        le: "+Inf",
+      })
+    ).toBeGreaterThanOrEqual(1);
+    expect(after.text).not.toContain("/health");
+    expect(after.text).not.toContain("127.0.0.1");
+  });
+
+  it("records paused 503 responses in dedicated counters", async () => {
+    const before = await request(app).get("/api/v1/metrics");
+    const beforePaused = metricValue(before.text, "stableroute_paused_responses_total");
+
+    await request(app).post("/api/v1/admin/pause");
+    const blocked = await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "MTR", destination: "PAU" });
+    await request(app).post("/api/v1/admin/unpause");
+
+    expect(blocked.status).toBe(503);
+    const after = await request(app).get("/api/v1/metrics");
+    expect(metricValue(after.text, "stableroute_paused_responses_total")).toBeGreaterThan(
+      beforePaused
+    );
+    expect(
+      metricValue(after.text, "stableroute_http_requests_total", {
+        method: "POST",
+        status: "503",
+      })
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("admin/pause blocks writes and unpause restores", async () => {

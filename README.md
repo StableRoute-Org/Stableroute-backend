@@ -75,6 +75,22 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Metrics
+
+`GET /api/v1/metrics` exposes Prometheus text metrics:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `stableroute_pairs_total` | gauge | none | Number of registered pairs. |
+| `stableroute_paused` | gauge | none | `1` when the service is paused, otherwise `0`. |
+| `stableroute_http_requests_total` | counter | `method`, `status` | Total HTTP responses by method and status code. |
+| `stableroute_http_request_duration_seconds` | histogram | `method`, `status`, `le` | Request latency buckets in seconds. |
+| `stableroute_rate_limited_total` | counter | none | Total `429` responses emitted by the rate limiter. |
+| `stableroute_paused_responses_total` | counter | none | Total `503` responses emitted by the pause guard. |
+
+Request metrics intentionally avoid raw paths, request bodies, IP addresses,
+and headers so the endpoint does not expose high-cardinality or sensitive data.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

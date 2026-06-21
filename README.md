@@ -33,6 +33,27 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+The service reads configuration from process environment variables supplied by
+your shell, container runtime, or hosting platform. `.env` and `.env.*` files are
+git-ignored for local secrets; `.env.example` is committed as a safe template.
+
+| Variable | Default | Status | Effect |
+|----------|---------|--------|--------|
+| `PORT` | `3001` | Active | Sets the HTTP port used by `src/server.ts` and documented local API URL. |
+| `NODE_ENV` | unset | Active | When set to `test`, request logging and the in-memory rate limiter are disabled for Jest. Use `development` for local runs unless a host sets another mode. |
+| `ADMIN_TOKEN` | unset | Planned | Reserved for upcoming admin authentication. Leave blank until that guard lands. |
+| `CORS_ALLOWED_ORIGINS` | unset | Planned | Reserved for upcoming explicit CORS allow-listing. Current CORS behavior uses the Express `cors()` default. |
+| `TRUST_PROXY` | `false` | Planned | Reserved for future proxy-aware deployments. |
+| `LOG_LEVEL` | `info` | Planned | Reserved for upcoming structured logging controls. |
+
+Example local override:
+
+```bash
+PORT=4000 NODE_ENV=development npm run dev
+```
+
 ## Scripts
 
 | Script | Description |

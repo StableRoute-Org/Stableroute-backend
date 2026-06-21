@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 
@@ -27,6 +27,33 @@ const sendError = (
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
 
+/**
+ * Require `Authorization: Bearer <ADMIN_TOKEN>` using timing-safe comparison.
+ */
+const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected) {
+    sendError(res, req, 503, "admin_token_unset", "ADMIN_TOKEN must be configured");
+    return;
+  }
+
+  const header = req.header("authorization") ?? "";
+  const prefix = "Bearer ";
+  const provided = header.startsWith(prefix) ? header.slice(prefix.length) : "";
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  const authorized =
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer);
+
+  if (!authorized) {
+    sendError(res, req, 401, "unauthorized", "valid admin bearer token required");
+    return;
+  }
+
+  next();
+};
+
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -39,13 +66,14 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: "100kb" }));
 
-// Pause guard: refuses non-idempotent methods with 503 except
-// /admin/unpause, so an operator can always recover.
+// Pause guard: refuses non-idempotent methods with 503 except protected
+// operator endpoints, so an operator can always recover or reconfigure.
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (!paused) return next();
   const m = req.method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
-  if (req.path === "/api/v1/admin/unpause") return next();
+  if (req.path.startsWith("/api/v1/admin/")) return next();
+  if (req.path === "/api/v1/config" && m === "PATCH") return next();
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
@@ -115,6 +143,11 @@ app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.json({
     openapi: "3.0.3",
     info: { title: "StableRoute Backend", version: "1.0.0" },
+    components: {
+      securitySchemes: {
+        AdminBearer: { type: "http", scheme: "bearer" },
+      },
+    },
     paths: {
       "/health": { get: { summary: "Shallow health" } },
       "/api/v1/health/deep": { get: { summary: "Deep health" } },
@@ -137,9 +170,13 @@ app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
       "/api/v1/api-keys/{prefix}": { delete: {} },
       "/api/v1/webhooks": { get: {}, post: {} },
       "/api/v1/webhooks/{id}": { delete: {} },
-      "/api/v1/admin/pause": { post: {} },
-      "/api/v1/admin/unpause": { post: {} },
-      "/api/v1/admin/status": { get: {} },
+      "/api/v1/admin/pause": { post: { security: [{ AdminBearer: [] }] } },
+      "/api/v1/admin/unpause": { post: { security: [{ AdminBearer: [] }] } },
+      "/api/v1/admin/status": { get: { security: [{ AdminBearer: [] }] } },
+      "/api/v1/config": {
+        get: { summary: "Read runtime config" },
+        patch: { summary: "Update runtime config", security: [{ AdminBearer: [] }] },
+      },
     },
   });
 });
@@ -227,11 +264,11 @@ app.get("/api/v1/health/deep", (req: Request, res: Response) => {
 });
 
 let paused = false;
-app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/pause", requireAdmin, (_req: Request, res: Response) => {
   paused = true;
   res.json({ paused });
 });
-app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/unpause", requireAdmin, (_req: Request, res: Response) => {
   paused = false;
   res.json({ paused });
 });
@@ -440,7 +477,7 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   res.json({ source, destination, registered: true });
 });
 
-app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
+app.get("/api/v1/admin/status", requireAdmin, (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
@@ -451,7 +488,7 @@ const config: Record<string, number> = {
   eventLogCap: 10_000,
 };
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
-app.patch("/api/v1/config", (req: Request, res: Response) => {
+app.patch("/api/v1/config", requireAdmin, (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {

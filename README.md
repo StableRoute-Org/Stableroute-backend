@@ -33,6 +33,13 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | HTTP port for the server. Defaults to `3001`. |
+| `ADMIN_TOKEN` | Required bearer token for `/api/v1/admin/*` and `PATCH /api/v1/config`. Send it as `Authorization: Bearer <token>`. When unset, protected routes return 503 and stay closed. |
+
 ## Scripts
 
 | Script | Description |

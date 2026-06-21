@@ -1,6 +1,10 @@
 import request from "supertest";
 import app from "../index";
 
+const ADMIN_TOKEN = "stableroute-admin-test-token";
+const adminAuth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+const originalAdminToken = process.env.ADMIN_TOKEN;
+
 const expectCanonicalError = (
   body: Record<string, unknown>,
   requestId: string,
@@ -10,6 +14,22 @@ const expectCanonicalError = (
   expect(body.message).toBeTruthy();
   expect(body.requestId).toBe(requestId);
 };
+
+beforeEach(() => {
+  process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+});
+
+afterEach(() => {
+  process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+});
+
+afterAll(() => {
+  if (originalAdminToken === undefined) {
+    delete process.env.ADMIN_TOKEN;
+  } else {
+    process.env.ADMIN_TOKEN = originalAdminToken;
+  }
+});
 
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
@@ -92,14 +112,14 @@ describe("StableRoute Backend", () => {
     expectCanonicalError(serverError.body, "err-500", "internal_error");
     expect(serverError.body).toMatchObject({ method: "POST", path: "/api/v1/pairs" });
 
-    await request(app).post("/api/v1/admin/pause");
+    await request(app).post("/api/v1/admin/pause").set(adminAuth);
     const paused = await request(app)
       .post("/api/v1/pairs")
       .set("X-Request-Id", "err-503")
       .send({ source: "PAU", destination: "REQ" });
     expect(paused.status).toBe(503);
     expectCanonicalError(paused.body, "err-503", "service_paused");
-    await request(app).post("/api/v1/admin/unpause");
+    await request(app).post("/api/v1/admin/unpause").set(adminAuth);
   });
 
   describe("/api/v1/pairs", () => {
@@ -157,9 +177,19 @@ describe("StableRoute Backend", () => {
     const res = await request(app).get("/api/v1/openapi.json");
     expect(res.status).toBe(200);
     expect(res.body.openapi).toBe("3.0.3");
+    expect(res.body.components.securitySchemes.AdminBearer).toMatchObject({
+      type: "http",
+      scheme: "bearer",
+    });
     expect(res.body.paths["/api/v1/pairs"]).toBeTruthy();
     expect(res.body.paths["/api/v1/quote"]).toBeTruthy();
     expect(res.body.paths["/api/v1/admin/pause"]).toBeTruthy();
+    expect(res.body.paths["/api/v1/admin/pause"].post.security).toEqual([
+      { AdminBearer: [] },
+    ]);
+    expect(res.body.paths["/api/v1/config"].patch.security).toEqual([
+      { AdminBearer: [] },
+    ]);
   });
 
   it("reads and patches /api/v1/config", async () => {
@@ -167,6 +197,7 @@ describe("StableRoute Backend", () => {
     expect(get.body.config.rateLimitPerWindow).toBeGreaterThan(0);
     const patch = await request(app)
       .patch("/api/v1/config")
+      .set(adminAuth)
       .send({ rateLimitPerWindow: 120 });
     expect(patch.body.config.rateLimitPerWindow).toBe(120);
   });
@@ -174,6 +205,7 @@ describe("StableRoute Backend", () => {
   it("rejects /config patches with negative integers", async () => {
     const res = await request(app)
       .patch("/api/v1/config")
+      .set(adminAuth)
       .send({ rateLimitPerWindow: -1 });
     expect(res.status).toBe(400);
   });
@@ -273,13 +305,13 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns paused status when service is paused", async () => {
-      await request(app).post("/api/v1/admin/pause");
+      await request(app).post("/api/v1/admin/pause").set(adminAuth);
       const res = await request(app).get("/api/v1/health/deep");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("paused");
       // Checks array still present
       expect(Array.isArray(res.body.checks)).toBe(true);
-      await request(app).post("/api/v1/admin/unpause");
+      await request(app).post("/api/v1/admin/unpause").set(adminAuth);
     });
 
     it("still has backward-compatible fields alongside checks", async () => {
@@ -310,13 +342,13 @@ describe("StableRoute Backend", () => {
   });
 
   it("admin/pause blocks writes and unpause restores", async () => {
-    await request(app).post("/api/v1/admin/pause");
+    await request(app).post("/api/v1/admin/pause").set(adminAuth);
     const blocked = await request(app)
       .post("/api/v1/pairs")
       .send({ source: "PAU", destination: "SED" });
     expect(blocked.status).toBe(503);
     expect(blocked.body.error).toBe("service_paused");
-    await request(app).post("/api/v1/admin/unpause");
+    await request(app).post("/api/v1/admin/unpause").set(adminAuth);
     const ok = await request(app)
       .post("/api/v1/pairs")
       .send({ source: "PAU", destination: "SED" });
@@ -523,8 +555,65 @@ describe("StableRoute Backend", () => {
   });
 
   describe("admin endpoints", () => {
+    it("rejects admin requests without a bearer token", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/status")
+        .set("X-Request-Id", "admin-missing");
+      expect(res.status).toBe(401);
+      expectCanonicalError(res.body, "admin-missing", "unauthorized");
+    });
+
+    it("rejects malformed admin authorization headers", async () => {
+      const res = await request(app)
+        .post("/api/v1/admin/pause")
+        .set("Authorization", "Token not-a-bearer-token")
+        .set("X-Request-Id", "admin-malformed");
+      expect(res.status).toBe(401);
+      expectCanonicalError(res.body, "admin-malformed", "unauthorized");
+    });
+
+    it("rejects wrong admin tokens without leaking token length", async () => {
+      const shortToken = await request(app)
+        .get("/api/v1/admin/status")
+        .set("Authorization", "Bearer wrong")
+        .set("X-Request-Id", "admin-wrong-short");
+      expect(shortToken.status).toBe(401);
+      expectCanonicalError(shortToken.body, "admin-wrong-short", "unauthorized");
+
+      const sameLengthToken = await request(app)
+        .get("/api/v1/admin/status")
+        .set("Authorization", `Bearer ${"x".repeat(ADMIN_TOKEN.length)}`)
+        .set("X-Request-Id", "admin-wrong-same-length");
+      expect(sameLengthToken.status).toBe(401);
+      expectCanonicalError(sameLengthToken.body, "admin-wrong-same-length", "unauthorized");
+      expect(sameLengthToken.body.message).toBe(shortToken.body.message);
+    });
+
+    it("fails closed when ADMIN_TOKEN is unset", async () => {
+      delete process.env.ADMIN_TOKEN;
+      const res = await request(app)
+        .get("/api/v1/admin/status")
+        .set(adminAuth)
+        .set("X-Request-Id", "admin-unset");
+      expect(res.status).toBe(503);
+      expectCanonicalError(res.body, "admin-unset", "admin_token_unset");
+    });
+
+    it("still requires a bearer token while service is paused", async () => {
+      await request(app).post("/api/v1/admin/pause").set(adminAuth);
+      try {
+        const res = await request(app)
+          .post("/api/v1/admin/pause")
+          .set("X-Request-Id", "admin-paused-missing");
+        expect(res.status).toBe(401);
+        expectCanonicalError(res.body, "admin-paused-missing", "unauthorized");
+      } finally {
+        await request(app).post("/api/v1/admin/unpause").set(adminAuth);
+      }
+    });
+
     it("GET /api/v1/admin/status returns paused state", async () => {
-      const res = await request(app).get("/api/v1/admin/status");
+      const res = await request(app).get("/api/v1/admin/status").set(adminAuth);
       expect(res.status).toBe(200);
       expect("paused" in res.body).toBe(true);
     });
@@ -534,6 +623,7 @@ describe("StableRoute Backend", () => {
     it("rejects all invalid config values", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
+        .set(adminAuth)
         .send({ rateLimitPerWindow: -1, rateLimitWindowMs: 0, bulkMaxItems: -100 });
       expect(res.status).toBe(400);
     });
@@ -541,6 +631,7 @@ describe("StableRoute Backend", () => {
     it("patches multiple config fields at once", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
+        .set(adminAuth)
         .send({ rateLimitPerWindow: 100, rateLimitWindowMs: 30000, bulkMaxItems: 50 });
       expect(res.status).toBe(200);
       expect(res.body.config.rateLimitPerWindow).toBe(100);

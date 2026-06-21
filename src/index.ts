@@ -1,11 +1,29 @@
 import { createHash, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
 app.use(cors());
+// JSON API responses do not need browser-executable resources.
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'none'"],
+    },
+  },
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  crossOriginResourcePolicy: { policy: "same-origin" },
+  frameguard: { action: "deny" },
+  referrerPolicy: { policy: "no-referrer" },
+  strictTransportSecurity: {
+    maxAge: 31_536_000,
+    includeSubDomains: true,
+  },
+}));
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
@@ -96,14 +114,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       );
     }
   });
-  next();
-});
-
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   next();
 });
 

@@ -18,6 +18,18 @@ describe("StableRoute Backend", () => {
     expect(res.body).toMatchObject({ status: "ok", service: "stableroute-backend" });
   });
 
+  it("sets helmet security headers on API responses", async () => {
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-security-policy"]).toBe("default-src 'none'");
+    expect(res.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["x-frame-options"]).toBe("DENY");
+    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    expect(res.headers["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(res.headers["cross-origin-resource-policy"]).toBe("same-origin");
+  });
+
   it("GET /api/v1/quote with params returns quote", async () => {
     const res = await request(app)
       .get("/api/v1/quote")

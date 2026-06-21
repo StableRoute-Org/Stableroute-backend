@@ -33,6 +33,13 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | HTTP port for the server. Defaults to `3001`. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of exact browser origins allowed by CORS. Defaults to localhost and 127.0.0.1 origins on ports 3000 and 3001 for local development. |
+
 ## Scripts
 
 | Script | Description |

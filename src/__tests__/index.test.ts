@@ -18,6 +18,44 @@ describe("StableRoute Backend", () => {
     expect(res.body).toMatchObject({ status: "ok", service: "stableroute-backend" });
   });
 
+  it("allows default localhost CORS origins", async () => {
+    const res = await request(app)
+      .get("/health")
+      .set("Origin", "http://localhost:3000");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+  });
+
+  it("does not echo disallowed CORS origins", async () => {
+    const res = await request(app)
+      .get("/health")
+      .set("Origin", "https://evil.example");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("leaves same-origin requests without Origin unaffected", async () => {
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("allows preflight requests from allowlisted origins only", async () => {
+    const allowed = await request(app)
+      .options("/api/v1/pairs")
+      .set("Origin", "http://localhost:3001")
+      .set("Access-Control-Request-Method", "POST");
+    expect(allowed.status).toBe(204);
+    expect(allowed.headers["access-control-allow-origin"]).toBe("http://localhost:3001");
+
+    const disallowed = await request(app)
+      .options("/api/v1/pairs")
+      .set("Origin", "https://evil.example")
+      .set("Access-Control-Request-Method", "POST");
+    expect(disallowed.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
   it("GET /api/v1/quote with params returns quote", async () => {
     const res = await request(app)
       .get("/api/v1/quote")

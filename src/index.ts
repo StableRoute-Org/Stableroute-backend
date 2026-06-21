@@ -5,7 +5,36 @@ import cors from "cors";
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-app.use(cors());
+const DEFAULT_CORS_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+];
+
+/**
+ * Resolve the exact CORS origin allowlist from env or local dev defaults.
+ */
+const corsAllowedOrigins = (raw: string | undefined): Set<string> => {
+  const origins = raw
+    ?.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  return new Set(origins && origins.length > 0 ? origins : DEFAULT_CORS_ORIGINS);
+};
+
+const allowedCorsOrigins = corsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+app.use(cors({
+  credentials: false,
+  origin: (origin, callback) => {
+    if (!origin || allowedCorsOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
+  optionsSuccessStatus: 204,
+}));
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;

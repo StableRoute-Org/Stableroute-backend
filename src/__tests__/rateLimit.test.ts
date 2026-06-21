@@ -5,19 +5,33 @@ import app from "../index";
 // base so that bucket entries from prior tests are always outside the
 // 60 s window and cannot bleed across tests.
 const WINDOW_MS = 60_000;
+const originalNodeEnv = process.env.NODE_ENV;
 let baseTime = Date.now();
 
 function advanceBase() {
   baseTime += WINDOW_MS * 2;
 }
 
+beforeAll(() => {
+  process.env.NODE_ENV = "development";
+});
+
 beforeEach(() => {
   advanceBase();
   jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  jest.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
+});
+
+afterAll(() => {
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });
 
 describe("rate limiter", () => {

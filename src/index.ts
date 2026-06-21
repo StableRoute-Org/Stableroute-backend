@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 
@@ -26,6 +28,31 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+const DEFAULT_PAUSE_STATE_FILE = ".stableroute-state.json";
+const pauseStateFile =
+  process.env.STABLEROUTE_STATE_FILE ||
+  (process.env.NODE_ENV === "test" ? undefined : DEFAULT_PAUSE_STATE_FILE);
+
+const readPersistedPauseState = (): boolean => {
+  if (!pauseStateFile || !existsSync(pauseStateFile)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(pauseStateFile, "utf8")) as { paused?: unknown };
+    return parsed.paused === true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Persist the operator pause flag so deploys and restarts keep the same mode.
+ */
+const persistPauseState = (nextPaused: boolean): void => {
+  if (!pauseStateFile) return;
+  const absolutePath = resolve(pauseStateFile);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, `${JSON.stringify({ paused: nextPaused })}\n`);
+};
 
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
@@ -226,14 +253,27 @@ app.get("/api/v1/health/deep", (req: Request, res: Response) => {
   }
 });
 
-let paused = false;
+type AppEvent = { id: string; ts: number; type: string; payload: Record<string, unknown> };
+const eventLog: AppEvent[] = [];
+const EVENT_LOG_CAP = 10_000;
+function recordEvent(type: string, payload: Record<string, unknown>) {
+  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
+  if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
+}
+
+let paused = readPersistedPauseState();
+function setPaused(nextPaused: boolean) {
+  persistPauseState(nextPaused);
+  paused = nextPaused;
+  recordEvent(paused ? "admin.paused" : "admin.unpaused", { paused });
+  return paused;
+}
+
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
-  paused = true;
-  res.json({ paused });
+  res.json({ paused: setPaused(true) });
 });
 app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
-  paused = false;
-  res.json({ paused });
+  res.json({ paused: setPaused(false) });
 });
 // Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity.
 type PairMeta = {
@@ -249,14 +289,6 @@ const defaultMeta = (): PairMeta => ({
   maxAmount: "0",
   liquidity: "0",
 });
-
-type AppEvent = { id: string; ts: number; type: string; payload: Record<string, unknown> };
-const eventLog: AppEvent[] = [];
-const EVENT_LOG_CAP = 10_000;
-function recordEvent(type: string, payload: Record<string, unknown>) {
-  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
-  if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
-}
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);

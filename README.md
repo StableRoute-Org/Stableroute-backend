@@ -75,6 +75,18 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Durable pause state
+
+`POST /api/v1/admin/pause` and `POST /api/v1/admin/unpause` persist the
+operator pause flag so deploys and process restarts keep the same mode. The
+default state file is `.stableroute-state.json` in the working directory.
+Set `STABLEROUTE_STATE_FILE=/path/to/state.json` to store it elsewhere.
+
+Pause changes are also recorded as `admin.paused` and `admin.unpaused` events
+in `GET /api/v1/events`. A restored pause is reflected in
+`GET /api/v1/admin/status`, `GET /api/v1/health/deep`, and the
+`stableroute_paused` metric.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

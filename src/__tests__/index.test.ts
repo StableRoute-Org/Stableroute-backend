@@ -528,6 +528,16 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect("paused" in res.body).toBe(true);
     });
+
+    it("records pause and unpause audit events", async () => {
+      await request(app).post("/api/v1/admin/pause");
+      await request(app).post("/api/v1/admin/unpause");
+
+      const events = await request(app).get("/api/v1/events?limit=20");
+      const eventTypes = events.body.items.map((event: { type: string }) => event.type);
+      expect(eventTypes).toContain("admin.paused");
+      expect(eventTypes).toContain("admin.unpaused");
+    });
   });
 
   describe("config edge cases", () => {

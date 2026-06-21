@@ -309,6 +309,17 @@ describe("StableRoute Backend", () => {
     expect(res.text).toMatch(/stableroute_paused/);
   });
 
+  it("GET /api/v1/metrics reports paused state", async () => {
+    await request(app).post("/api/v1/admin/pause");
+    try {
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+      expect(res.text).toMatch(/stableroute_paused 1/);
+    } finally {
+      await request(app).post("/api/v1/admin/unpause");
+    }
+  });
+
   it("admin/pause blocks writes and unpause restores", async () => {
     await request(app).post("/api/v1/admin/pause");
     const blocked = await request(app)
@@ -343,6 +354,21 @@ describe("StableRoute Backend", () => {
         .patch("/api/v1/pairs/AAA/BBB/fee_bps")
         .send({ feeBps: 5 });
       expect(res.status).toBe(404);
+    });
+
+    it.each([
+      ["string", "5"],
+      ["decimal", 1.5],
+      ["negative", -1],
+      ["too high", 1001],
+    ])("rejects fee_bps that is %s", async (_label, feeBps) => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BADFEE", destination: "PAIR" });
+      const res = await request(app)
+        .patch("/api/v1/pairs/BADFEE/PAIR/fee_bps")
+        .send({ feeBps });
+      expect(res.status).toBe(400);
     });
   });
 
@@ -410,6 +436,17 @@ describe("StableRoute Backend", () => {
       expect(res.body.maxAmount).toBe("99999");
     });
 
+    it("patches maxAmount on a pair without existing metadata", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "MAXNEW", destination: "META" });
+      const res = await request(app)
+        .patch("/api/v1/pairs/MAXNEW/META/max")
+        .send({ maxAmount: "12345" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ feeBps: 0, maxAmount: "12345" });
+    });
+
     it("rejects maxAmount with zero", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
@@ -423,6 +460,17 @@ describe("StableRoute Backend", () => {
         .send({ minAmount: "100" });
       expect(res.status).toBe(200);
       expect(res.body.minAmount).toBe("100");
+    });
+
+    it("patches minAmount on a pair without existing metadata", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "MINNEW", destination: "META" });
+      const res = await request(app)
+        .patch("/api/v1/pairs/MINNEW/META/min")
+        .send({ minAmount: "42" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ feeBps: 0, minAmount: "42" });
     });
 
     it("rejects minAmount with negative", async () => {
@@ -458,6 +506,11 @@ describe("StableRoute Backend", () => {
   });
 
   describe("POST /api/v1/quote/bulk", () => {
+    it("rejects a missing request body", async () => {
+      const res = await request(app).post("/api/v1/quote/bulk");
+      expect(res.status).toBe(400);
+    });
+
     it("rejects empty items", async () => {
       const res = await request(app)
         .post("/api/v1/quote/bulk")
@@ -487,6 +540,14 @@ describe("StableRoute Backend", () => {
       expect(res.body.results[1].ok).toBe(false);
       expect(res.body.results[2].ok).toBe(false);
     });
+
+    it("marks null items invalid", async () => {
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({ items: [null] });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_item" });
+    });
   });
 
   describe("webhook edge cases", () => {
@@ -514,6 +575,23 @@ describe("StableRoute Backend", () => {
         .post("/api/v1/webhooks")
         .send({ url: "https://example.com/h", events: [] });
       expect(emptyEvents.status).toBe(400);
+
+      const nonStringEvents = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/h", events: ["ok", 1] });
+      expect(nonStringEvents.status).toBe(400);
+    });
+
+    it("rejects missing and oversized webhook URLs", async () => {
+      const missingUrl = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ events: ["pair.registered"] });
+      expect(missingUrl.status).toBe(400);
+
+      const tooLongUrl = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: `https://example.com/${"x".repeat(2049)}`, events: ["pair.registered"] });
+      expect(tooLongUrl.status).toBe(400);
     });
 
     it("returns 404 when deleting non-existent webhook", async () => {
@@ -584,6 +662,13 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .post("/api/v1/api-keys")
         .send({ label: "" });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects labels longer than 64 characters", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "x".repeat(65) });
       expect(res.status).toBe(400);
     });
 

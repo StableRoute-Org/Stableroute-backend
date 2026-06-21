@@ -79,6 +79,23 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Webhook delivery
+
+`POST /api/v1/webhooks` registers an HTTP(S) endpoint and returns a one-time
+`secret` alongside the webhook id. Store this secret when the webhook is
+created; `GET /api/v1/webhooks` intentionally omits it.
+
+When an event matches a webhook's `events` subscription, StableRoute posts the
+event JSON to the webhook URL with:
+
+- `Content-Type: application/json`
+- `X-StableRoute-Event: <event type>`
+- `X-StableRoute-Signature: sha256=<hex hmac>`
+
+The signature is an HMAC-SHA256 of the exact JSON request body using the
+webhook secret. Delivery retries network errors and 5xx responses up to three
+attempts with exponential backoff; 4xx responses are treated as terminal.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

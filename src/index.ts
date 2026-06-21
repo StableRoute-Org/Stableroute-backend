@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import { deliverEvent, type DeliveryOutcome } from "./webhookDelivery";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -253,9 +254,36 @@ const defaultMeta = (): PairMeta => ({
 type AppEvent = { id: string; ts: number; type: string; payload: Record<string, unknown> };
 const eventLog: AppEvent[] = [];
 const EVENT_LOG_CAP = 10_000;
-function recordEvent(type: string, payload: Record<string, unknown>) {
-  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
+type WebhookRecord = { url: string; events: string[]; secret: string; createdAt: number };
+const webhookStore = new Map<string, WebhookRecord>();
+function appendEvent(type: string, payload: Record<string, unknown>): AppEvent {
+  const event = { id: randomUUID(), ts: Date.now(), type, payload };
+  eventLog.push(event);
   if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
+  return event;
+}
+function recordDeliveryOutcome(outcome: DeliveryOutcome) {
+  appendEvent("webhook.delivery", outcome);
+}
+function recordEvent(type: string, payload: Record<string, unknown>) {
+  const event = appendEvent(type, payload);
+  void deliverEvent(
+    event,
+    Array.from(webhookStore.entries()).map(([id, webhook]) => ({
+      id,
+      url: webhook.url,
+      events: webhook.events,
+      secret: webhook.secret,
+    })),
+    { onOutcome: recordDeliveryOutcome }
+  ).catch((err) => {
+    appendEvent("webhook.delivery", {
+      eventId: event.id,
+      eventType: event.type,
+      ok: false,
+      error: err instanceof Error ? err.message : "delivery failed",
+    });
+  });
 }
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
@@ -300,9 +328,6 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
   res.status(201).json({ key, label });
 });
 
-type WebhookRecord = { url: string; events: string[]; createdAt: number };
-const webhookStore = new Map<string, WebhookRecord>();
-
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const { id } = req.params;
   if (!webhookStore.has(id)) {
@@ -314,7 +339,12 @@ app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
-  const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
+  const items = Array.from(webhookStore.entries()).map(([id, m]) => ({
+    id,
+    url: m.url,
+    events: m.events,
+    createdAt: m.createdAt,
+  }));
   res.json({ items });
 });
 
@@ -329,8 +359,9 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     return;
   }
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  webhookStore.set(id, { url, events, createdAt: Date.now() });
-  res.status(201).json({ id, url, events });
+  const secret = randomBytes(32).toString("hex");
+  webhookStore.set(id, { url, events, secret, createdAt: Date.now() });
+  res.status(201).json({ id, url, events, secret });
 });
 
 /** Aggregate read of every per-pair slot in one round-trip. */
@@ -639,7 +670,12 @@ app.use((req: Request, res: Response) => {
 // { error, message, requestId } as the explicit 400 / 404 bodies so
 // clients can branch on `error` uniformly.
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-  if (err && typeof err === "object" && "type" in err && (err as { type: string }).type === "entity.too.large") {
+  if (
+    err &&
+    typeof err === "object" &&
+    "type" in err &&
+    (err as { type: string }).type === "entity.too.large"
+  ) {
     sendError(res, req, 413, "payload_too_large", "request body exceeds the 100 KiB limit");
     return;
   }

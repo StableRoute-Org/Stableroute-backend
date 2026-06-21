@@ -184,6 +184,7 @@ describe("StableRoute Backend", () => {
       .send({ url: "https://example.com/wh", events: ["pair.registered"] });
     expect(create.status).toBe(201);
     expect(create.body.id).toMatch(/^wh_/);
+    expect(create.body.secret).toMatch(/^[0-9a-f]{64}$/);
     const del = await request(app).delete(`/api/v1/webhooks/${create.body.id}`);
     expect(del.status).toBe(204);
   });
@@ -502,6 +503,7 @@ describe("StableRoute Backend", () => {
       const listFull = await request(app).get("/api/v1/webhooks");
       expect(listFull.status).toBe(200);
       expect(listFull.body.items.length).toBeGreaterThanOrEqual(1);
+      expect(listFull.body.items.every((item: Record<string, unknown>) => !("secret" in item))).toBe(true);
     });
 
     it("rejects invalid events array", async () => {

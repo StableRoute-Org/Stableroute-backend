@@ -353,7 +353,7 @@ app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Re
     return;
   }
   const { liquidity } = req.body ?? {};
-  if (typeof liquidity !== "string" || !/^[0-9]{1,39}$/.test(liquidity)) {
+  if (typeof liquidity !== "string" || !/^(0|[1-9][0-9]{0,38})$/.test(liquidity)) {
     sendError(res, req, 400, "invalid_request", "liquidity must be a non-negative integer string");
     return;
   }
@@ -389,7 +389,7 @@ app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response
     return;
   }
   const { minAmount } = req.body ?? {};
-  if (typeof minAmount !== "string" || !/^[0-9]{1,39}$/.test(minAmount)) {
+  if (typeof minAmount !== "string" || !/^(0|[1-9][0-9]{0,38})$/.test(minAmount)) {
     sendError(res, req, 400, "invalid_request", "minAmount must be a non-negative integer string");
     return;
   }

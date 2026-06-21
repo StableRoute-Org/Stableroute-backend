@@ -5,6 +5,18 @@ import cors from "cors";
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
+const trustProxyFromEnv = (raw: string | undefined): boolean | number | string => {
+  const value = raw?.trim();
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  return value;
+};
+
+app.set("trust proxy", trustProxyFromEnv(process.env.TRUST_PROXY));
 app.use(cors());
 
 type RequestWithId = Request & { id?: string };
@@ -26,6 +38,13 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+const config: Record<string, number> = {
+  rateLimitPerWindow: 60,
+  rateLimitWindowMs: 60_000,
+  bulkMaxItems: 100,
+  eventLogCap: 10_000,
+};
 
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
@@ -49,34 +68,49 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
-// Per-IP sliding-window rate limiter: 60 requests per 60 second window.
-// Disabled in test mode so the test suite can make many requests without
-// hitting the limit.
-const RATE_LIMIT_PER_WINDOW = 60;
-const RATE_LIMIT_WINDOW_MS = 60_000;
 const rateBuckets = new Map<string, number[]>();
-app.use((req: Request, res: Response, next: NextFunction) => {
+app.locals.rateLimitBuckets = rateBuckets;
+
+const pruneRateBuckets = (now: number, windowMs: number) => {
+  for (const [ip, hits] of rateBuckets) {
+    const liveHits = hits.filter((t) => now - t < windowMs);
+    if (liveHits.length === 0) {
+      rateBuckets.delete(ip);
+    } else {
+      rateBuckets.set(ip, liveHits);
+    }
+  }
+};
+
+/**
+ * Proxy-aware sliding-window rate limiter with lazy expired-bucket eviction.
+ */
+const rateLimit = (req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
+  const limit = config.rateLimitPerWindow;
+  const windowMs = config.rateLimitWindowMs;
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
-  const bucket = (rateBuckets.get(ip) ?? []).filter(
-    (t) => now - t < RATE_LIMIT_WINDOW_MS
-  );
-  if (bucket.length >= RATE_LIMIT_PER_WINDOW) {
-    res.setHeader("Retry-After", "60");
+  pruneRateBuckets(now, windowMs);
+  const bucket = rateBuckets.get(ip) ?? [];
+  if (bucket.length >= limit) {
+    const retryAfterSeconds = Math.ceil(windowMs / 1000);
+    res.setHeader("Retry-After", String(retryAfterSeconds));
     sendError(
       res,
       req,
       429,
       "rate_limited",
-      `more than ${RATE_LIMIT_PER_WINDOW} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s`
+      `more than ${limit} requests per ${retryAfterSeconds}s`
     );
     return;
   }
   bucket.push(now);
   rateBuckets.set(ip, bucket);
   next();
-});
+};
+
+app.use(rateLimit);
 
 // Request timing — emits a single structured log per finished request
 // and sets Server-Timing.
@@ -444,12 +478,6 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
-const config: Record<string, number> = {
-  rateLimitPerWindow: 60,
-  rateLimitWindowMs: 60_000,
-  bulkMaxItems: 100,
-  eventLogCap: 10_000,
-};
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;

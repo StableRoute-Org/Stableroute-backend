@@ -33,6 +33,13 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | HTTP port for the server. Defaults to `3001`. |
+| `TRUST_PROXY` | Express `trust proxy` setting for deployments behind a trusted proxy or load balancer. Leave unset or `false` to ignore client-supplied `X-Forwarded-For`; set to a hop count such as `1`, `true`, or an Express trust proxy subnet value only when the proxy is trusted. |
+
 ## Scripts
 
 | Script | Description |

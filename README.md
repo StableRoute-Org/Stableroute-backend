@@ -79,6 +79,18 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Structured logging
+
+Requests are logged with `pino` as structured JSON, including `requestId`,
+`method`, `path`, `status`, and `durationMs`. Error-handler failures are logged
+at `error` level with the stack via pino's error serializer. Set `LOG_LEVEL`
+to control verbosity; it defaults to `info`. Logging is disabled under
+`NODE_ENV=test` so test output stays clean.
+
+Request bodies are not logged. The logger is also configured to redact
+`Authorization` and `X-Api-Key` headers if future call sites include headers in
+log metadata.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

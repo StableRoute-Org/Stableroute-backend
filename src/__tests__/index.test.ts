@@ -1,5 +1,6 @@
 import request from "supertest";
 import app from "../index";
+import { logger } from "../logger";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -10,6 +11,10 @@ const expectCanonicalError = (
   expect(body.message).toBeTruthy();
   expect(body.requestId).toBe(requestId);
 };
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
@@ -53,6 +58,28 @@ describe("StableRoute Backend", () => {
       .set("X-Request-Id", caller);
     expect(res.status).toBe(200);
     expect(res.headers["x-request-id"]).toBe(caller);
+  });
+
+  it("logs completed requests with correlation fields", async () => {
+    const requestLog = { info: jest.fn(), error: jest.fn() };
+    const childSpy = jest
+      .spyOn(logger, "child")
+      .mockReturnValue(requestLog as unknown as ReturnType<typeof logger.child>);
+
+    const res = await request(app)
+      .get("/health")
+      .set("X-Request-Id", "log-request-1");
+
+    expect(res.status).toBe(200);
+    expect(childSpy).toHaveBeenCalledWith({
+      requestId: "log-request-1",
+      method: "GET",
+      path: "/health",
+    });
+    expect(requestLog.info).toHaveBeenCalledWith(
+      { status: 200, durationMs: expect.any(Number) },
+      "request completed"
+    );
   });
 
   it("returns a structured 404 with requestId for unknown routes", async () => {
@@ -100,6 +127,26 @@ describe("StableRoute Backend", () => {
     expect(paused.status).toBe(503);
     expectCanonicalError(paused.body, "err-503", "service_paused");
     await request(app).post("/api/v1/admin/unpause");
+  });
+
+  it("logs error-handler failures without request bodies", async () => {
+    const requestLog = { info: jest.fn(), error: jest.fn() };
+    jest
+      .spyOn(logger, "child")
+      .mockReturnValue(requestLog as unknown as ReturnType<typeof logger.child>);
+
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .set("Content-Type", "application/json")
+      .set("X-Request-Id", "log-error-1")
+      .send("{");
+
+    expect(res.status).toBe(500);
+    expect(requestLog.error).toHaveBeenCalledWith(
+      { err: expect.any(Error), status: 500 },
+      "request failed"
+    );
+    expect(requestLog.error.mock.calls[0][0]).not.toHaveProperty("body");
   });
 
   describe("/api/v1/pairs", () => {

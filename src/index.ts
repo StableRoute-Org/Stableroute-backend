@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import { logger } from "./logger";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -26,6 +27,13 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+const getRequestLogger = (req: Request) =>
+  logger.child({
+    requestId: getRequestId(req),
+    method: req.method,
+    path: req.path,
+  });
 
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
@@ -82,19 +90,16 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // and sets Server-Timing.
 app.use((req: Request, res: Response, next: NextFunction) => {
   const startNs = process.hrtime.bigint();
+  const requestLog = getRequestLogger(req);
   res.on("finish", () => {
     const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
-    if (process.env.NODE_ENV !== "test") {
-      console.log(
-        JSON.stringify({
-          requestId: getRequestId(req),
-          method: req.method,
-          path: req.path,
-          status: res.statusCode,
-          durationMs: Math.round(ms * 10) / 10,
-        })
-      );
-    }
+    requestLog.info(
+      {
+        status: res.statusCode,
+        durationMs: Math.round(ms * 10) / 10,
+      },
+      "request completed"
+    );
   });
   next();
 });
@@ -640,11 +645,16 @@ app.use((req: Request, res: Response) => {
 // clients can branch on `error` uniformly.
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (err && typeof err === "object" && "type" in err && (err as { type: string }).type === "entity.too.large") {
+    getRequestLogger(req).error(
+      { err: err instanceof Error ? err : undefined, status: 413 },
+      "request failed"
+    );
     sendError(res, req, 413, "payload_too_large", "request body exceeds the 100 KiB limit");
     return;
   }
-  const message =
-    err instanceof Error ? err.message : "Unexpected server error";
+  const errorForLog = err instanceof Error ? err : new Error("Unexpected server error");
+  getRequestLogger(req).error({ err: errorForLog, status: 500 }, "request failed");
+  const message = errorForLog.message;
   sendError(res, req, 500, "internal_error", message, {
     method: req.method,
     path: req.path,

@@ -79,6 +79,10 @@ never hangs.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Webhook URL policy
+
+Webhook registrations accept only `http` and `https` URLs up to 2048 characters. To reduce SSRF risk before delivery workers dispatch outbound requests, registration rejects `localhost`, loopback, private, link-local, and IPv6 unique-local hosts, plus non-default ports below 1024.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

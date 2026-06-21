@@ -195,6 +195,34 @@ describe("StableRoute Backend", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each([
+    ["cloud metadata", "http://169.254.169.254/latest/meta-data"],
+    ["localhost", "HTTP://LOCALHOST/webhook"],
+    ["loopback IPv4", "http://127.0.0.1/webhook"],
+    ["private 10/8", "http://10.0.0.5/webhook"],
+    ["private 172.16/12", "http://172.16.4.5/webhook"],
+    ["private 192.168/16", "http://192.168.1.10/webhook"],
+    ["loopback IPv6", "http://[::1]/webhook"],
+    ["link-local IPv6", "http://[fe80::1]/webhook"],
+    ["low non-default port", "https://example.com:81/webhook"],
+  ])("rejects SSRF-prone webhook URL: %s", async (_label, url) => {
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .set("X-Request-Id", "webhook-ssrf")
+      .send({ url, events: ["pair.registered"] });
+    expect(res.status).toBe(400);
+    expectCanonicalError(res.body, "webhook-ssrf", "invalid_request");
+    expect(res.body.message).toMatch(/public host/);
+  });
+
+  it("accepts public webhook URLs on high non-default ports", async () => {
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .send({ url: "https://hooks.example.com:8443/evt", events: ["pair.registered"] });
+    expect(res.status).toBe(201);
+    expect(res.body.url).toBe("https://hooks.example.com:8443/evt");
+  });
+
   it("records and surfaces pair.registered events", async () => {
     await request(app)
       .post("/api/v1/pairs")

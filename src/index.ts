@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { BlockList, isIP } from "node:net";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 
@@ -302,6 +303,32 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
 
 type WebhookRecord = { url: string; events: string[]; createdAt: number };
 const webhookStore = new Map<string, WebhookRecord>();
+const webhookBlockedHosts = new BlockList();
+webhookBlockedHosts.addSubnet("127.0.0.0", 8, "ipv4");
+webhookBlockedHosts.addSubnet("10.0.0.0", 8, "ipv4");
+webhookBlockedHosts.addSubnet("172.16.0.0", 12, "ipv4");
+webhookBlockedHosts.addSubnet("192.168.0.0", 16, "ipv4");
+webhookBlockedHosts.addSubnet("169.254.0.0", 16, "ipv4");
+webhookBlockedHosts.addAddress("::1", "ipv6");
+webhookBlockedHosts.addSubnet("fe80::", 10, "ipv6");
+webhookBlockedHosts.addSubnet("fc00::", 7, "ipv6");
+
+/**
+ * Return true only for webhook targets that are public HTTP(S) hosts.
+ */
+const isPublicWebhookUrl = (parsedUrl: URL): boolean => {
+  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return false;
+
+  const ipVersion = isIP(hostname);
+  if (ipVersion !== 0) {
+    const family = ipVersion === 4 ? "ipv4" : "ipv6";
+    if (webhookBlockedHosts.check(hostname, family)) return false;
+  }
+
+  if (parsedUrl.port !== "" && Number(parsedUrl.port) < 1024) return false;
+  return true;
+};
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const { id } = req.params;
@@ -320,8 +347,23 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   const { url, events } = req.body ?? {};
-  if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
+  if (typeof url !== "string" || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
+    return;
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
+    return;
+  }
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
+    return;
+  }
+  if (!isPublicWebhookUrl(parsedUrl)) {
+    sendError(res, req, 400, "invalid_request", "url must target a public host and port");
     return;
   }
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {

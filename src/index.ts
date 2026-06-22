@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import {
+  createStorageAdapterFromEnv,
+  defaultPairMeta,
+  type PairMeta,
+} from "./store/adapter";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+const storage = createStorageAdapterFromEnv();
 
 app.use(cors());
 
@@ -156,16 +162,12 @@ app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
 const runHealthChecks = (): Array<{ name: string; status: "ok" | "fail"; durationMs: number }> => {
   const checks: Array<{ name: string; status: "ok" | "fail"; durationMs: number }> = [];
 
-  // Storage check — verifies that the in-memory store can write and read back.
+  // Storage check — verifies that the configured store can write and read back.
   const storageStart = Date.now();
   try {
-    const testKey = `__health_${storageStart}_${Math.random()}`;
-    pairMeta.set(testKey, defaultMeta());
-    const readback = pairMeta.get(testKey);
-    pairMeta.delete(testKey);
     checks.push({
       name: "storage",
-      status: readback !== undefined ? "ok" : "fail",
+      status: storage.probe() ? "ok" : "fail",
       durationMs: Date.now() - storageStart,
     });
   } catch {
@@ -236,55 +238,34 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 // Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity.
-type PairMeta = {
-  feeBps: number;
-  minAmount: string;
-  maxAmount: string;
-  liquidity: string;
-};
-const pairMeta = new Map<string, PairMeta>();
-const defaultMeta = (): PairMeta => ({
-  feeBps: 0,
-  minAmount: "0",
-  maxAmount: "0",
-  liquidity: "0",
-});
+const defaultMeta = defaultPairMeta;
 
-type AppEvent = { id: string; ts: number; type: string; payload: Record<string, unknown> };
-const eventLog: AppEvent[] = [];
 const EVENT_LOG_CAP = 10_000;
 function recordEvent(type: string, payload: Record<string, unknown>) {
-  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
-  if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
+  storage.appendEvent({ id: randomUUID(), ts: Date.now(), type, payload });
 }
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);
   const limit = Math.min(EVENT_LOG_CAP, Math.max(1, Number(req.query.limit ?? 100)));
-  const items = eventLog.filter((e) => e.ts >= since).slice(-limit);
+  const items = storage.listEvents(since, limit);
   res.json({ items });
 });
 
-type ApiKeyRecord = { label: string; createdAt: number };
-const apiKeyStore = new Map<string, ApiKeyRecord>();
-
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
-  let found: string | undefined;
-  for (const k of apiKeyStore.keys()) if (k.slice(0, 8) === prefix) { found = k; break; }
-  if (!found) {
+  if (!storage.deleteApiKeyByPrefix(prefix)) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
   }
-  apiKeyStore.delete(found);
   res.status(204).send();
 });
 
 app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
-  const items = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
-    prefix: k.slice(0, 8),
-    label: m.label,
-    createdAt: m.createdAt,
+  const items = storage.listApiKeys().map(({ key, record }) => ({
+    prefix: key.slice(0, 8),
+    label: record.label,
+    createdAt: record.createdAt,
   }));
   res.json({ items });
 });
@@ -296,25 +277,21 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
     return;
   }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now() });
+  storage.saveApiKey(key, { label, createdAt: Date.now() });
   res.status(201).json({ key, label });
 });
 
-type WebhookRecord = { url: string; events: string[]; createdAt: number };
-const webhookStore = new Map<string, WebhookRecord>();
-
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const { id } = req.params;
-  if (!webhookStore.has(id)) {
+  if (!storage.deleteWebhook(id)) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
-  webhookStore.delete(id);
   res.status(204).send();
 });
 
 app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
-  const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
+  const items = storage.listWebhooks().map(({ id, record }) => ({ id, ...record }));
   res.json({ items });
 });
 
@@ -329,7 +306,7 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     return;
   }
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  webhookStore.set(id, { url, events, createdAt: Date.now() });
+  storage.saveWebhook(id, { url, events, createdAt: Date.now() });
   res.status(201).json({ id, url, events });
 });
 
@@ -340,15 +317,15 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   res.json({
     source,
     destination,
-    registered: pairRegistry.has(k),
-    ...(pairMeta.get(k) ?? defaultMeta()),
+    registered: storage.hasPair(k),
+    ...(storage.getPairMeta(k) ?? defaultMeta()),
   });
 });
 
 app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
+  if (!storage.hasPair(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
   }
@@ -357,16 +334,15 @@ app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Re
     sendError(res, req, 400, "invalid_request", "liquidity must be a non-negative integer string");
     return;
   }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.liquidity = liquidity;
-  pairMeta.set(k, meta);
+  const meta: PairMeta = { ...(storage.getPairMeta(k) ?? defaultMeta()), liquidity };
+  storage.setPairMeta(k, meta);
   res.json({ source, destination, ...meta });
 });
 
 app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
+  if (!storage.hasPair(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
   }
@@ -375,16 +351,15 @@ app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response
     sendError(res, req, 400, "invalid_request", "maxAmount must be a positive integer string");
     return;
   }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.maxAmount = maxAmount;
-  pairMeta.set(k, meta);
+  const meta: PairMeta = { ...(storage.getPairMeta(k) ?? defaultMeta()), maxAmount };
+  storage.setPairMeta(k, meta);
   res.json({ source, destination, ...meta });
 });
 
 app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
+  if (!storage.hasPair(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
   }
@@ -393,16 +368,15 @@ app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response
     sendError(res, req, 400, "invalid_request", "minAmount must be a non-negative integer string");
     return;
   }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.minAmount = minAmount;
-  pairMeta.set(k, meta);
+  const meta: PairMeta = { ...(storage.getPairMeta(k) ?? defaultMeta()), minAmount };
+  storage.setPairMeta(k, meta);
   res.json({ source, destination, ...meta });
 });
 
 app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
+  if (!storage.hasPair(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
   }
@@ -411,9 +385,8 @@ app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Resp
     sendError(res, req, 400, "invalid_request", "feeBps must be an integer in [0,1000]");
     return;
   }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.feeBps = feeBps;
-  pairMeta.set(k, meta);
+  const meta: PairMeta = { ...(storage.getPairMeta(k) ?? defaultMeta()), feeBps };
+  storage.setPairMeta(k, meta);
   res.json({ source, destination, ...meta });
 });
 
@@ -421,11 +394,11 @@ app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Resp
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
+  if (!storage.hasPair(k)) {
     sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
     return;
   }
-  pairRegistry.delete(k);
+  storage.deletePair(k);
   recordEvent("pair.unregistered", { source, destination });
   res.status(204).send();
 });
@@ -433,7 +406,7 @@ app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) =
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;
-  if (!pairRegistry.has(pairKey(source, destination))) {
+  if (!storage.hasPair(pairKey(source, destination))) {
     sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
     return;
   }
@@ -470,7 +443,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
   const lines = [
     "# HELP stableroute_pairs_total Number of registered pairs.",
     "# TYPE stableroute_pairs_total gauge",
-    `stableroute_pairs_total ${pairRegistry.size}`,
+    `stableroute_pairs_total ${storage.pairCount()}`,
     "# HELP stableroute_paused 1 if paused, 0 otherwise.",
     "# TYPE stableroute_paused gauge",
     `stableroute_paused ${paused ? 1 : 0}`,
@@ -481,7 +454,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
 
 app.get("/api/v1/stats", (_req: Request, res: Response) => {
   res.json({
-    totalPairs: pairRegistry.size,
+    totalPairs: storage.pairCount(),
     paused,
   });
 });
@@ -490,12 +463,6 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 // Pair registry
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// In-memory mirror of the on-chain DataKey::Pair(source, dest) set the
-// router contract maintains. The settlement worker fans out from the
-// contract to this Map on startup and on every pair-registration event.
-// Process restart resets the map; persistence lands with the database
-// adapter.
-const pairRegistry = new Set<string>();
 const pairKey = (source: string, dest: string) => `${source}::${dest}`;
 
 /**
@@ -503,7 +470,7 @@ const pairKey = (source: string, dest: string) => `${source}::${dest}`;
  * Response: { pairs: [{ source, destination }, ...] }
  */
 app.get("/api/v1/pairs", (req: Request, res: Response) => {
-  const pairs = Array.from(pairRegistry).map((k) => {
+  const pairs = storage.listPairs().map((k) => {
     const [source, destination] = k.split("::");
     return { source, destination };
   });
@@ -537,8 +504,7 @@ app.post("/api/v1/pairs", (req: Request, res: Response) => {
     return sendError(res, req, 400, "invalid_request", "source and destination must differ");
   }
   const key = pairKey(source, destination);
-  const isNew = !pairRegistry.has(key);
-  pairRegistry.add(key);
+  const isNew = storage.addPair(key);
   recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
   res.status(isNew ? 201 : 200).json({ source, destination, registered: true });
 });

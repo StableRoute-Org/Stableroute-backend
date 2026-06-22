@@ -43,6 +43,18 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 | `npm test` | Run Jest tests |
 | `npm run lint` | Run ESLint |
 
+## Storage backend
+
+StableRoute uses a pluggable storage adapter for registered pairs, pair
+metadata, API keys, webhooks, and audit events.
+
+- `STORAGE_BACKEND=memory` is the default and keeps the original process-local
+  behavior.
+- `STORAGE_BACKEND=json` persists state to a local JSON file and reloads it on
+  startup.
+- `STORAGE_FILE=./stableroute-storage.json` overrides the JSON file path when
+  `STORAGE_BACKEND=json`.
+
 ## CI/CD
 
 On every push/PR to `main`, GitHub Actions runs:
@@ -62,7 +74,7 @@ Ensure these pass locally before pushing.
   health check fails.
 - **`checks[]`**: An array of `{ name, status, durationMs }` objects, one per
   dependency. Current checks:
-  - `storage` — verifies the in-memory store can write and read back.
+  - `storage` — verifies the configured store can write and read back.
   - `clock` — verifies the system clock is producing post-epoch timestamps.
 - **`uptimeSeconds`**, **`memory`** (rssMb, heapUsedMb), **`pid`**, **`node`** —
   kept for backward compatibility.

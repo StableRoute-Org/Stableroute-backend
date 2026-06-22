@@ -6,18 +6,29 @@ import app from "../index";
 // 60 s window and cannot bleed across tests.
 const WINDOW_MS = 60_000;
 let baseTime = Date.now();
+const originalNodeEnv = process.env.NODE_ENV;
+let dateNowSpy: jest.SpyInstance;
+let consoleLogSpy: jest.SpyInstance;
 
 function advanceBase() {
   baseTime += WINDOW_MS * 2;
 }
 
 beforeEach(() => {
+  process.env.NODE_ENV = "development";
   advanceBase();
-  jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  dateNowSpy = jest.spyOn(Date, "now").mockReturnValue(baseTime);
+  consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
-  jest.restoreAllMocks();
+  dateNowSpy.mockRestore();
+  consoleLogSpy.mockRestore();
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });
 
 describe("rate limiter", () => {
@@ -68,7 +79,7 @@ describe("rate limiter", () => {
     expect(res.status).toBe(429);
 
     // Advance time past the 60 s window
-    jest.spyOn(Date, "now").mockReturnValue(baseTime + WINDOW_MS + 1);
+    dateNowSpy.mockReturnValue(baseTime + WINDOW_MS + 1);
 
     res = await request(app).get("/health");
     expect(res.status).toBe(200);

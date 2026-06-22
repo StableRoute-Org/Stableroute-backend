@@ -33,6 +33,33 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+Local configuration is optional for the default development server. To customize
+runtime settings, copy the sample file and edit the generated `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+`.env` and other local env files are git-ignored; only `.env.example` should be
+committed.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `PORT` | `3001` | HTTP port read by `src/index.ts` and `src/server.ts`. If unset, both entrypoints listen on port 3001. |
+| `NODE_ENV` | `development` | Runtime mode. When set to `test`, request logging is skipped so Jest output stays clean. |
+| `ADMIN_TOKEN` | empty | Reserved for upcoming admin-only endpoints. Leave empty until an admin route requires it; use a strong non-public token outside local development. |
+| `CORS_ALLOWED_ORIGINS` | empty | Reserved for upcoming configurable CORS allowlists. Use comma-separated origins such as `http://localhost:3000,https://app.example.com`. |
+| `TRUST_PROXY` | `false` | Reserved for proxy-aware Express deployments. Enable only when the app is behind a trusted reverse proxy. |
+| `LOG_LEVEL` | `info` | Reserved for upcoming structured logging. Suggested values are `debug`, `info`, `warn`, and `error`. |
+
+Security notes:
+
+- Do not commit `.env`.
+- Do not put production secrets in `.env.example`.
+- Redact tokens and private values before pasting logs into issues or PRs.
+
 ## Scripts
 
 | Script | Description |

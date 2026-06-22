@@ -258,6 +258,13 @@ function recordEvent(type: string, payload: Record<string, unknown>) {
   if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
 }
 
+export const __testHooks = {
+  clearEventLog: () => {
+    eventLog.length = 0;
+  },
+  recordEvent,
+};
+
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);
   const limit = Math.min(EVENT_LOG_CAP, Math.max(1, Number(req.query.limit ?? 100)));

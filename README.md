@@ -33,6 +33,40 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```
    API: `http://localhost:3001` (or `PORT` env var).
 
+## Environment
+
+Copy `.env.example` to `.env` for local development:
+
+```bash
+cp .env.example .env
+```
+
+The repository git-ignores `.env` and `.env.*`, so local configuration and
+secrets stay out of commits. `.env.example` contains only safe placeholder
+values and comments.
+
+### Active variables
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `PORT` | `3001` | Sets the Express HTTP listener port in `src/server.ts` and the exported `PORT` constant in `src/index.ts`. |
+| `NODE_ENV` | unset | When set to `test`, disables request logging and the in-memory rate limiter so automated tests can run deterministically. |
+
+### Reserved variables
+
+These variables are documented in `.env.example` for upcoming work, but the
+current runtime does not read them yet:
+
+| Variable | Planned effect |
+|----------|----------------|
+| `ADMIN_TOKEN` | Bearer token for admin pause/unpause and config mutation endpoints. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated CORS allowlist to replace wildcard CORS. |
+| `TRUST_PROXY` | Proxy-aware client IP handling for rate limiting. |
+| `LOG_LEVEL` | Structured logger verbosity once the logger is configurable. |
+
+Keep this table in sync with `process.env` reads in `src/index.ts` and
+`src/server.ts` when new runtime configuration is added.
+
 ## Scripts
 
 | Script | Description |

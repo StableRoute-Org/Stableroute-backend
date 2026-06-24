@@ -102,6 +102,46 @@ describe("StableRoute Backend", () => {
     await request(app).post("/api/v1/admin/unpause");
   });
 
+  it("rejects non-JSON content types on mutating requests with a body", async () => {
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .set("Content-Type", "text/plain")
+      .set("X-Request-Id", "content-type-415")
+      .send("source=TXT&destination=PLAIN");
+
+    expect(res.status).toBe(415);
+    expectCanonicalError(res.body, "content-type-415", "unsupported_media_type");
+    expect(res.body.message).toMatch(/Content-Type must be application\/json/);
+  });
+
+  it("accepts JSON content types with charset parameters", async () => {
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .set("Content-Type", "application/json; charset=utf-8")
+      .send(JSON.stringify({ source: "JSON_CT", destination: "CHARSET" }));
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      source: "JSON_CT",
+      destination: "CHARSET",
+      registered: true,
+    });
+  });
+
+  it("does not require a JSON content type for empty-body mutating requests", async () => {
+    const del = await request(app)
+      .delete("/api/v1/pairs/NOT/THERE")
+      .set("Content-Type", "text/plain");
+    expect(del.status).toBe(404);
+    expect(del.body.error).toBe("not_found");
+
+    const pause = await request(app).post("/api/v1/admin/pause");
+    expect(pause.status).toBe(200);
+    expect(pause.body.paused).toBe(true);
+
+    await request(app).post("/api/v1/admin/unpause");
+  });
+
   describe("/api/v1/pairs", () => {
     it("starts empty and registers a new pair with 201", async () => {
       const list1 = await request(app).get("/api/v1/pairs");

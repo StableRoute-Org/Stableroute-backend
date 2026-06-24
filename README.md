@@ -120,6 +120,12 @@ endpoint without documenting it.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+Mutating requests that carry a body (`POST`, `PATCH`, or `PUT`) must declare
+`Content-Type: application/json`; charset parameters such as
+`application/json; charset=utf-8` are accepted. Requests with a non-JSON body
+type are rejected with `415 unsupported_media_type` before handlers see an
+unparsed body.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

@@ -28,6 +28,31 @@ const sendError = (
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
 
+/**
+ * Reject body-bearing mutating requests that are not declared as JSON before
+ * they can reach route handlers with an unparsed body.
+ */
+const requireJsonContentType = (req: Request, res: Response, next: NextFunction) => {
+  const method = req.method.toUpperCase();
+  const mustBeJson = method === "POST" || method === "PATCH" || method === "PUT";
+  const hasPayload =
+    Number(req.header("content-length") ?? 0) > 0 ||
+    req.header("transfer-encoding") !== undefined;
+
+  if (mustBeJson && hasPayload && !req.is("application/json")) {
+    sendError(
+      res,
+      req,
+      415,
+      "unsupported_media_type",
+      "Content-Type must be application/json for requests with a body"
+    );
+    return;
+  }
+
+  next();
+};
+
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -38,6 +63,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+app.use(requireJsonContentType);
 app.use(express.json({ limit: "100kb" }));
 
 // Pause guard: refuses non-idempotent methods with 503 except

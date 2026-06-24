@@ -104,6 +104,18 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## OpenAPI spec
+
+The OpenAPI document is the single source of truth in `src/openapi.ts`
+(exported as `openApiSpec`). The `GET /api/v1/openapi.json` handler serves it
+verbatim instead of an inline literal, so the spec can be imported by tests.
+
+`src/__tests__/openapi.test.ts` includes a **route-drift guard** that walks the
+Express router stack, converts each registered `/api/v1/...` route to its
+OpenAPI templated form (`:param` → `{param}`), and asserts every discovered path
+appears as a key in `openApiSpec.paths`. This makes it impossible to ship a new
+endpoint without documenting it.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

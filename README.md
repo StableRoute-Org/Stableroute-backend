@@ -45,10 +45,11 @@ reference, including request/response shapes and `curl` examples.
 The backend is configured entirely through environment variables. The
 table below lists every variable the code reads — there are no others.
 
-| Variable   | Purpose                                                                                              | Default       | Example       |
-|------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
-| `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
-| `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+| Variable             | Purpose                                                                                              | Default       | Example       |
+|----------------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
+| `PORT`               | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
+| `NODE_ENV`           | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+| `REQUEST_TIMEOUT_MS` | Per-request deadline. Slow handlers return `503 request_timeout`; invalid values use the default.    | `10000`       | `2500`        |
 
 `.env.example` is the template for these variables. Copy it to `.env`
 and edit the values for local development:
@@ -118,7 +119,7 @@ endpoint without documenting it.
 
 ## Error responses
 
-Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
+Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors and `503 request_timeout` responses correlated with the `X-Request-Id` response header.
 
 ## Contributing
 

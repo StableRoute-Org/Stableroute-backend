@@ -1,5 +1,11 @@
 import request from "supertest";
-import app from "../index";
+import express, { type Request, type Response } from "express";
+import app, {
+  createRequestTimeoutMiddleware,
+  resolveRequestTimeoutMs,
+} from "../index";
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -100,6 +106,67 @@ describe("StableRoute Backend", () => {
     expect(paused.status).toBe(503);
     expectCanonicalError(paused.body, "err-503", "service_paused");
     await request(app).post("/api/v1/admin/unpause");
+  });
+
+  describe("request timeout guard", () => {
+    const makeTimeoutApp = (timeoutMs: number) => {
+      const timeoutApp = express();
+      timeoutApp.use((req: Request, res: Response, next) => {
+        const id = req.header("x-request-id") ?? "timeout-test-id";
+        (req as Request & { id?: string }).id = id;
+        res.setHeader("X-Request-Id", id);
+        next();
+      });
+      timeoutApp.use(createRequestTimeoutMiddleware(timeoutMs));
+      return timeoutApp;
+    };
+
+    it("lets handlers complete within the deadline", async () => {
+      const timeoutApp = makeTimeoutApp(50);
+      timeoutApp.get("/fast", (_req: Request, res: Response) => {
+        res.json({ ok: true });
+      });
+
+      const res = await request(timeoutApp)
+        .get("/fast")
+        .set("X-Request-Id", "timeout-fast");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(res.headers["x-request-id"]).toBe("timeout-fast");
+    });
+
+    it("returns canonical 503 request_timeout for slow handlers", async () => {
+      const timeoutApp = makeTimeoutApp(5);
+      timeoutApp.get("/slow", async (_req: Request, res: Response) => {
+        await delay(25);
+        if (!res.headersSent) res.json({ late: true });
+      });
+
+      const res = await request(timeoutApp)
+        .get("/slow")
+        .set("X-Request-Id", "timeout-slow");
+      expect(res.status).toBe(503);
+      expectCanonicalError(res.body, "timeout-slow", "request_timeout");
+    });
+
+    it("does not double-send when headers are already sent", async () => {
+      const timeoutApp = makeTimeoutApp(5);
+      timeoutApp.get("/stream", async (_req: Request, res: Response) => {
+        res.write("hello");
+        await delay(25);
+        res.end(" done");
+      });
+
+      const res = await request(timeoutApp).get("/stream");
+      expect(res.status).toBe(200);
+      expect(res.text).toBe("hello done");
+    });
+
+    it("falls back to the default timeout for invalid environment values", () => {
+      expect(resolveRequestTimeoutMs("0")).toBe(10_000);
+      expect(resolveRequestTimeoutMs("not-a-number")).toBe(10_000);
+      expect(resolveRequestTimeoutMs("123.9")).toBe(123);
+    });
   });
 
   describe("/api/v1/pairs", () => {

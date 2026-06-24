@@ -44,6 +44,7 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 | `not_found`         | 404  | Resource does not exist, or no route matches the method + path.                    |
 | `payload_too_large` | 413  | Request body exceeds the 100 KiB JSON limit.                                        |
 | `rate_limited`      | 429  | More than 60 requests per 60 s from one IP. Sets `Retry-After: 60`. Disabled when `NODE_ENV=test`. |
+| `request_timeout`   | 503  | Request handling exceeded `REQUEST_TIMEOUT_MS` before a response was sent.          |
 | `service_paused`    | 503  | Service is paused and a non-idempotent request was made (see Admin / pause).        |
 | `internal_error`    | 500  | Unhandled exception; `message` carries the error text plus `method`/`path`.         |
 

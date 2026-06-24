@@ -28,6 +28,71 @@ const sendError = (
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve the request timeout from the environment.
+ * Invalid or non-positive values fall back to the production-safe default.
+ */
+export const resolveRequestTimeoutMs = (
+  value = process.env.REQUEST_TIMEOUT_MS
+): number => {
+  if (value === undefined || value.trim() === "") return DEFAULT_REQUEST_TIMEOUT_MS;
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REQUEST_TIMEOUT_MS;
+
+  return Math.floor(parsed);
+};
+
+/**
+ * Guard requests that outlive the configured deadline.
+ * The timer is cleared on normal completion/close, and it avoids a second
+ * response when a streaming handler already sent headers.
+ */
+export const createRequestTimeoutMiddleware =
+  (timeoutMs = resolveRequestTimeoutMs()) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    let cleared = false;
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      clearTimeout(timer);
+    };
+
+    const timer = setTimeout(() => {
+      if (cleared) return;
+
+      if (res.headersSent) {
+        clear();
+        if (process.env.NODE_ENV !== "test") {
+          console.warn(
+            JSON.stringify({
+              requestId: getRequestId(req),
+              method: req.method,
+              path: req.path,
+              timeoutMs,
+              event: "request_timeout_after_headers_sent",
+            })
+          );
+        }
+        return;
+      }
+
+      sendError(
+        res,
+        req,
+        503,
+        "request_timeout",
+        `Request exceeded ${timeoutMs}ms timeout`
+      );
+    }, timeoutMs);
+
+    res.on("finish", clear);
+    res.on("close", clear);
+    next();
+  };
+
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -37,6 +102,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Request-Id", id);
   next();
 });
+
+app.use(createRequestTimeoutMiddleware());
 
 app.use(express.json({ limit: "100kb" }));
 

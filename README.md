@@ -6,6 +6,7 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 
 - **Express** REST API (TypeScript)
 - **Health** and **quote** endpoints as a base for the routing engine and pricing service
+- **Exact-input and exact-output quote flows** for route pricing
 
 ## API reference
 

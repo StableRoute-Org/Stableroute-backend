@@ -672,4 +672,49 @@ describe("StableRoute Backend", () => {
       expect(res.body.amount).toBe(huge);
     });
   });
+
+  describe("GET /api/v1/quote/reverse", () => {
+    it("returns the required input for an exact-output quote", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "100" });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        source_asset: "USDC",
+        dest_asset: "EURC",
+        target_amount: "100",
+        required_input: "100",
+        estimated_rate: "1.0",
+        route: ["USDC", "EURC"],
+      });
+    });
+
+    it("rejects missing reverse quote params with the canonical error shape", async () => {
+      const res = await request(app).get("/api/v1/quote/reverse");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/source_asset, dest_asset, target_amount/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("rejects reverse quotes where source and destination match", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "USDC", target_amount: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/must differ/);
+    });
+
+    it("preserves very large reverse targets with BigInt arithmetic", async () => {
+      const target = "999999999999999999999999999999999999999";
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "XLM", dest_asset: "EURC", target_amount: target });
+
+      expect(res.status).toBe(200);
+      expect(res.body.target_amount).toBe(target);
+      expect(res.body.required_input).toBe(target);
+    });
+  });
 });

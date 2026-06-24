@@ -534,6 +534,13 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Solve the exact-output quote for the input amount required to deliver the
+ * target amount. Current pricing is 1:1, but this helper keeps all arithmetic
+ * in BigInt so future fee/rate layers cannot accidentally lose precision.
+ */
+const solveInput = (targetAmount: bigint): bigint => targetAmount;
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -555,6 +562,51 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     };
   });
   res.json({ results });
+});
+
+app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
+  const { source_asset, dest_asset, target_amount } = req.query;
+
+  if (!source_asset || !dest_asset || !target_amount) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "Missing required query params: source_asset, dest_asset, target_amount"
+    );
+  }
+  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source_asset and dest_asset must be 1-12 character strings"
+    );
+  }
+  if (source_asset === dest_asset) {
+    return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
+  }
+  const parsedTarget = parseAmount(target_amount);
+  if (parsedTarget === null) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "target_amount must be a positive integer string with no leading zero"
+    );
+  }
+
+  res.json({
+    source_asset,
+    dest_asset,
+    target_amount: parsedTarget.toString(),
+    required_input: solveInput(parsedTarget).toString(),
+    estimated_rate: "1.0",
+    route: [source_asset, dest_asset],
+  });
 });
 
 app.get("/api/v1/quote", (req: Request, res: Response) => {

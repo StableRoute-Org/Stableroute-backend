@@ -31,7 +31,31 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
    ```bash
    npm run dev
    ```
-   API: `http://localhost:3001` (or `PORT` env var).
+   API: `http://localhost:3001` (or `PORT` env var). See
+   [Configuration](#configuration) for the full list of environment
+   variables and how to use the `.env.example` template.
+
+## Configuration
+
+The backend is configured entirely through environment variables. The
+table below lists every variable the code reads — there are no others.
+
+| Variable   | Purpose                                                                                              | Default       | Example       |
+|------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
+| `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
+| `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+
+`.env.example` is the template for these variables. Copy it to `.env`
+and edit the values for local development:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is git-ignored (see `.gitignore`), so your local values are never
+committed. The application does not auto-load `.env`; export the
+variables into your shell (or use your process manager / `--env-file`)
+before starting the server.
 
 ## Scripts
 

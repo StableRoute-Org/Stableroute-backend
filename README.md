@@ -120,6 +120,12 @@ endpoint without documenting it.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+Clients may send `X-Request-Id` for correlation. Caller-provided ids are echoed
+only when they match `^[A-Za-z0-9._-]{1,200}$`; missing or unsafe values
+(including control characters, whitespace, or over-length ids) are replaced
+with a generated UUID before the value is written to response headers, logs, or
+error bodies.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

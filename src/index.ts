@@ -10,11 +10,19 @@ app.use(cors());
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{1,200}$/;
 
 /**
  * Read the request id attached by the correlation middleware.
  */
 const getRequestId = (req: Request): string | undefined => (req as RequestWithId).id;
+
+/**
+ * Accept caller-provided request ids only when they are safe for response
+ * headers and structured logs; otherwise generate a fresh correlation id.
+ */
+export const sanitizeRequestId = (incoming: string | undefined): string =>
+  incoming && SAFE_REQUEST_ID.test(incoming) ? incoming : randomUUID();
 
 /**
  * Send the canonical API error body used by explicit handlers and middleware.
@@ -32,7 +40,7 @@ const sendError = (
 // return the canonical error shape with a correlation id.
 app.use((req: Request, res: Response, next: NextFunction) => {
   const incoming = req.header("x-request-id");
-  const id = incoming && incoming.length <= 200 ? incoming : randomUUID();
+  const id = sanitizeRequestId(incoming);
   (req as RequestWithId).id = id;
   res.setHeader("X-Request-Id", id);
   next();

@@ -1,5 +1,5 @@
 import request from "supertest";
-import app from "../index";
+import app, { sanitizeRequestId } from "../index";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -53,6 +53,40 @@ describe("StableRoute Backend", () => {
       .set("X-Request-Id", caller);
     expect(res.status).toBe(200);
     expect(res.headers["x-request-id"]).toBe(caller);
+  });
+
+  it("replaces unsafe caller-provided X-Request-Id values with a UUID", async () => {
+    const unsafe = "trace id with spaces";
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .set("X-Request-Id", unsafe);
+
+    expect(res.status).toBe(400);
+    expect(res.headers["x-request-id"]).not.toBe(unsafe);
+    expect(res.headers["x-request-id"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+    expect(res.body.requestId).toBe(res.headers["x-request-id"]);
+    expect(res.body.requestId).not.toContain(" ");
+  });
+
+  it("sanitizes control characters and oversized request ids before echoing them", () => {
+    const valid = "Trace_123.alpha-beta";
+    expect(sanitizeRequestId(valid)).toBe(valid);
+
+    for (const unsafe of [
+      "trace\r\nforged: header",
+      "trace\twith-tab",
+      "trace/with/slash",
+      "x".repeat(201),
+      "",
+    ]) {
+      const sanitized = sanitizeRequestId(unsafe);
+      expect(sanitized).not.toBe(unsafe);
+      expect(sanitized).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
+    }
   });
 
   it("returns a structured 404 with requestId for unknown routes", async () => {

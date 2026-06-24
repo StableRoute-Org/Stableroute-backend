@@ -92,14 +92,17 @@ Quick checklist:
 ## Coverage
 
 Test coverage thresholds are enforced in CI via Jest's `coverageThreshold`.
-Current targets: **statements ≥ 89%**, **branches ≥ 81%**, **functions ≥ 87%**,
-**lines ≥ 89%**.
+Current targets: **statements ≥ 90%**, **branches ≥ 80%**, **functions ≥ 88%**,
+**lines ≥ 90%**.
 
-> **Note:** `server.ts` (24 lines of startup/teardown boilerplate) is excluded
-> from coverage targets because importing it starts a server that keeps the
-> event loop alive and prevents Jest from exiting. Once `server.ts` is
-> refactored for testability, thresholds can be raised toward 95% per the
-> original campaign requirements.
+> **Note:** `server.ts` is now refactored into side-effect-free, exported
+> functions (`createServer`, `registerSignalHandlers`, `start`) with the actual
+> `app.listen` guarded by `require.main === module`. It can therefore be
+> imported and exercised by `src/__tests__/server.test.ts` (it starts on an
+> ephemeral port, serves `/health`, and closes cleanly) without keeping the
+> event loop alive. The signal-handler shutdown body calls `process.exit`, so
+> it is deliberately not invoked under test, which is why `server.ts` keeps a
+> small amount of uncovered branch.
 
 Generate a local coverage report:
 

@@ -42,6 +42,7 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 |---------------------|------|------------------------------------------------------------------------------------|
 | `invalid_request`   | 400  | Request validation failed (missing/invalid params or body).                        |
 | `not_found`         | 404  | Resource does not exist, or no route matches the method + path.                    |
+| `pair_not_registered` | 404 | Quote requested for a source/destination pair that was not registered first.       |
 | `payload_too_large` | 413  | Request body exceeds the 100 KiB JSON limit.                                        |
 | `rate_limited`      | 429  | More than 60 requests per 60 s from one IP. Sets `Retry-After: 60`. Disabled when `NODE_ENV=test`. |
 | `service_paused`    | 503  | Service is paused and a non-idempotent request was made (see Admin / pause).        |
@@ -196,6 +197,9 @@ Get a single route quote. All three params are query-string params.
 
 - **Query:** `source_asset` (1–12 chars), `dest_asset` (1–12 chars),
   `amount` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
+- **Registration:** `source_asset` → `dest_asset` must be registered first with
+  `POST /api/v1/pairs`, unless `ALLOW_UNREGISTERED_QUOTES=true` is set for
+  demo compatibility.
 - **Response 200:**
   ```json
   {
@@ -208,7 +212,8 @@ Get a single route quote. All three params are query-string params.
   ```
 - **Errors:** `400 invalid_request` if any param is missing, if assets are
   not 1–12 char strings, if `source_asset === dest_asset`, or if `amount`
-  is not a valid positive integer string.
+  is not a valid positive integer string; `404 pair_not_registered` if the
+  pair was not registered and demo compatibility is not enabled.
 
 ### `POST /api/v1/quote/bulk`
 
@@ -219,7 +224,8 @@ per-item rather than failing the whole request.
   (1–100 items).
 - **Response 200:** `{ "results": [ … ] }` where each result is either
   `{ index, ok: true, source_asset, dest_asset, amount, estimated_rate }`
-  or `{ index, ok: false, error: "invalid_item" }`.
+  or `{ index, ok: false, error: "invalid_item" }` /
+  `{ index, ok: false, error: "pair_not_registered", source_asset, dest_asset }`.
 - **Errors:** `400 invalid_request` if `items` is not an array of 1–100 entries.
 
 ---

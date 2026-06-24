@@ -534,6 +534,13 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Process-level compatibility switch for demos that intentionally quote
+ * arbitrary pairs. It defaults to the safe registered-only behavior and is
+ * never controlled by request input.
+ */
+const allowUnregisteredQuotes = () => process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -544,6 +551,9 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     const { source_asset, dest_asset, amount } = it ?? {};
     if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
+    }
+    if (!allowUnregisteredQuotes() && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+      return { index: i, ok: false, error: "pair_not_registered", source_asset, dest_asset };
     }
     return {
       index: i,
@@ -589,6 +599,16 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       400,
       "invalid_request",
       "amount must be a positive integer string with no leading zero"
+    );
+  }
+  if (!allowUnregisteredQuotes() && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+    return sendError(
+      res,
+      req,
+      404,
+      "pair_not_registered",
+      `pair ${source_asset}->${dest_asset} is not registered`,
+      { source_asset, dest_asset }
     );
   }
 

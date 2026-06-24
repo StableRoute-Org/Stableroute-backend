@@ -19,6 +19,10 @@ describe("StableRoute Backend", () => {
   });
 
   it("GET /api/v1/quote with params returns quote", async () => {
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
+
     const res = await request(app)
       .get("/api/v1/quote")
       .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
@@ -26,6 +30,31 @@ describe("StableRoute Backend", () => {
     expect(res.body.source_asset).toBe("USDC");
     expect(res.body.dest_asset).toBe("EURC");
     expect(res.body.route).toEqual(["USDC", "EURC"]);
+  });
+
+  it("GET /api/v1/quote rejects unregistered pairs after validation passes", async () => {
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .set("X-Request-Id", "quote-unregistered")
+      .query({ source_asset: "NOPEA", dest_asset: "NOPEB", amount: "100" });
+    expect(res.status).toBe(404);
+    expectCanonicalError(res.body, "quote-unregistered", "pair_not_registered");
+    expect(res.body).toMatchObject({ source_asset: "NOPEA", dest_asset: "NOPEB" });
+  });
+
+  it("GET /api/v1/quote can allow unregistered pairs with the env opt-out", async () => {
+    const previous = process.env.ALLOW_UNREGISTERED_QUOTES;
+    process.env.ALLOW_UNREGISTERED_QUOTES = "true";
+    try {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "DEMOA", dest_asset: "DEMOB", amount: "100" });
+      expect(res.status).toBe(200);
+      expect(res.body.route).toEqual(["DEMOA", "DEMOB"]);
+    } finally {
+      if (previous === undefined) delete process.env.ALLOW_UNREGISTERED_QUOTES;
+      else process.env.ALLOW_UNREGISTERED_QUOTES = previous;
+    }
   });
 
   it("GET /api/v1/quote without params returns 400 with canonical error shape", async () => {
@@ -473,19 +502,27 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns per-item results with valid and invalid entries", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BULKA", destination: "BULKB" });
+
       const res = await request(app)
         .post("/api/v1/quote/bulk")
         .send({
           items: [
-            { source_asset: "USDC", dest_asset: "EURC", amount: "100" },
-            { source_asset: "USDC", dest_asset: "USDC", amount: "100" },
+            { source_asset: "BULKA", dest_asset: "BULKB", amount: "100" },
+            { source_asset: "BULKC", dest_asset: "BULKD", amount: "100" },
+            { source_asset: "BULKA", dest_asset: "BULKA", amount: "100" },
             { source_asset: "XLM", dest_asset: "", amount: "50" },
           ],
         });
       expect(res.status).toBe(200);
       expect(res.body.results[0].ok).toBe(true);
       expect(res.body.results[1].ok).toBe(false);
+      expect(res.body.results[1].error).toBe("pair_not_registered");
       expect(res.body.results[2].ok).toBe(false);
+      expect(res.body.results[2].error).toBe("invalid_item");
+      expect(res.body.results[3].ok).toBe(false);
     });
   });
 

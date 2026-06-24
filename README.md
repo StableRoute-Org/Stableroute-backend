@@ -7,6 +7,11 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 - **Express** REST API (TypeScript)
 - **Health** and **quote** endpoints as a base for the routing engine and pricing service
 
+## API reference
+
+See [docs/api.md](docs/api.md) for the complete endpoint and error-code
+reference, including request/response shapes and `curl` examples.
+
 ## Prerequisites
 
 - Node.js 18+

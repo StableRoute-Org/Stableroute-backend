@@ -307,8 +307,9 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
 
 /** Aggregate read of every per-pair slot in one round-trip. */
 app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   res.json({
     source,
     destination,
@@ -318,8 +319,9 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
 });
 
 app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
@@ -336,8 +338,9 @@ app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Re
 });
 
 app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
@@ -354,8 +357,9 @@ app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response
 });
 
 app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
@@ -372,8 +376,9 @@ app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response
 });
 
 app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", "pair not registered");
     return;
@@ -391,8 +396,9 @@ app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Resp
 
 /** Unregister a pair. */
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key: k } = pair;
   if (!pairRegistry.has(k)) {
     sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
     return;
@@ -404,8 +410,10 @@ app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) =
 
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  if (!pairRegistry.has(pairKey(source, destination))) {
+  const pair = normalizePairParams(req, res);
+  if (!pair) return;
+  const { source, destination, key } = pair;
+  if (!pairRegistry.has(key)) {
     sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
     return;
   }
@@ -495,14 +503,16 @@ app.get("/api/v1/pairs", (req: Request, res: Response) => {
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
 app.post("/api/v1/pairs", (req: Request, res: Response) => {
-  const { source, destination } = req.body ?? {};
-  if (!isAssetCode(source) || !isAssetCode(destination)) {
+  const { source: rawSource, destination: rawDestination } = req.body ?? {};
+  const source = normalizeAsset(rawSource);
+  const destination = normalizeAsset(rawDestination);
+  if (!source || !destination) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "source and destination must be 1-12 character strings"
+      "source and destination must be 1-12 character alphanumeric strings"
     );
   }
   if (source === destination) {
@@ -519,8 +529,31 @@ app.post("/api/v1/pairs", (req: Request, res: Response) => {
 // Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
 // anything that is not a single string so an array param can't smuggle
 // through as a "truthy" value.
-const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" && v.length > 0 && v.length <= 12;
+const normalizeAsset = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  if (/[\x00-\x1F\x7F]/.test(v)) return null;
+  const trimmed = v.trim();
+  return /^[A-Za-z0-9]{1,12}$/.test(trimmed) ? trimmed.toUpperCase() : null;
+};
+
+const normalizePairParams = (
+  req: Request,
+  res: Response
+): { source: string; destination: string; key: string } | null => {
+  const source = normalizeAsset(req.params.source);
+  const destination = normalizeAsset(req.params.destination);
+  if (!source || !destination) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source and destination must be 1-12 character alphanumeric strings"
+    );
+    return null;
+  }
+  return { source, destination, key: pairKey(source, destination) };
+};
 
 // Quote amount: a base-units integer string. Parsed via BigInt so we
 // never lose precision on amounts above Number.MAX_SAFE_INTEGER.
@@ -542,15 +575,21 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   }
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
     const { source_asset, dest_asset, amount } = it ?? {};
-    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
+    const sourceAsset = normalizeAsset(source_asset);
+    const destAsset = normalizeAsset(dest_asset);
+    if (!sourceAsset || !destAsset) {
+      return { index: i, ok: false, error: "invalid_asset" };
+    }
+    const parsedAmount = parseAmount(amount);
+    if (parsedAmount === null || sourceAsset === destAsset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
     return {
       index: i,
       ok: true,
-      source_asset,
-      dest_asset,
-      amount: String(amount),
+      source_asset: sourceAsset,
+      dest_asset: destAsset,
+      amount: parsedAmount.toString(),
       estimated_rate: "1.0",
     };
   });
@@ -569,16 +608,18 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       "Missing required query params: source_asset, dest_asset, amount"
     );
   }
-  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
+  const sourceAsset = normalizeAsset(source_asset);
+  const destAsset = normalizeAsset(dest_asset);
+  if (!sourceAsset || !destAsset) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "source_asset and dest_asset must be 1-12 character strings"
+      "source_asset and dest_asset must be 1-12 character alphanumeric strings"
     );
   }
-  if (source_asset === dest_asset) {
+  if (sourceAsset === destAsset) {
     return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
   }
   const parsedAmount = parseAmount(amount);
@@ -593,11 +634,11 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
   }
 
   res.json({
-    source_asset,
-    dest_asset,
+    source_asset: sourceAsset,
+    dest_asset: destAsset,
     amount: parsedAmount.toString(),
     estimated_rate: "1.0",
-    route: [source_asset, dest_asset],
+    route: [sourceAsset, destAsset],
   });
 });
 

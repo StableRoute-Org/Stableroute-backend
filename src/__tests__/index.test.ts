@@ -110,29 +110,29 @@ describe("StableRoute Backend", () => {
 
       const reg = await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "PAIR_A", destination: "PAIR_B" });
+        .send({ source: "PAIRA", destination: "PAIRB" });
       expect(reg.status).toBe(201);
       expect(reg.body).toEqual({
-        source: "PAIR_A",
-        destination: "PAIR_B",
+        source: "PAIRA",
+        destination: "PAIRB",
         registered: true,
       });
 
       const list2 = await request(app).get("/api/v1/pairs");
       expect(list2.body.pairs.length).toBe(initialCount + 1);
       expect(list2.body.pairs).toContainEqual({
-        source: "PAIR_A",
-        destination: "PAIR_B",
+        source: "PAIRA",
+        destination: "PAIRB",
       });
     });
 
     it("is idempotent: re-registering returns 200", async () => {
       await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "IDEM_A", destination: "IDEM_B" });
+        .send({ source: "IDEMA", destination: "IDEMB" });
       const second = await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "IDEM_A", destination: "IDEM_B" });
+        .send({ source: "IDEMA", destination: "IDEMB" });
       expect(second.status).toBe(200);
     });
 
@@ -149,7 +149,65 @@ describe("StableRoute Backend", () => {
         .post("/api/v1/pairs")
         .send({ source: "USDC", destination: "THIRTEENLETTERS" });
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 character alphanumeric strings/);
+    });
+
+    it("normalizes lowercase and surrounding whitespace before registering pairs", async () => {
+      const reg = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: " usdc ", destination: "eurc" });
+      expect(reg.status).toBe(201);
+      expect(reg.body).toMatchObject({
+        source: "USDC",
+        destination: "EURC",
+        registered: true,
+      });
+
+      const read = await request(app).get("/api/v1/pairs/USDC/EURC");
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({ source: "USDC", destination: "EURC" });
+
+      const idempotent = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+      expect(idempotent.status).toBe(200);
+    });
+
+    it("rejects internal whitespace and symbols in asset codes", async () => {
+      const withSpace = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "US DC", destination: "EURC" });
+      expect(withSpace.status).toBe(400);
+      expect(withSpace.body.message).toMatch(/alphanumeric/);
+
+      const withSymbol = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC!", destination: "EURC" });
+      expect(withSymbol.status).toBe(400);
+      expect(withSymbol.body.message).toMatch(/alphanumeric/);
+
+      const withControl = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC\n", destination: "EURC" });
+      expect(withControl.status).toBe(400);
+      expect(withControl.body.message).toMatch(/alphanumeric/);
+    });
+
+    it("rejects non-ASCII letters before upper-casing", async () => {
+      const germanSharpS = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ußdc", destination: "EURC" });
+      expect(germanSharpS.status).toBe(400);
+
+      const dotlessI = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ıusd", destination: "EURC" });
+      expect(dotlessI.status).toBe(400);
+
+      const ligature = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "uﬀd", destination: "EURC" });
+      expect(ligature.status).toBe(400);
     });
   });
 
@@ -395,6 +453,27 @@ describe("StableRoute Backend", () => {
       expect(res.body.liquidity).toBe("50000");
     });
 
+    it("normalizes pair-meta route params before lookup and response", async () => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/meta/test/fee_bps")
+        .send({ feeBps: 25 });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        source: "META",
+        destination: "TEST",
+        feeBps: 25,
+      });
+
+      const info = await request(app).get("/api/v1/pairs/meta/test/info");
+      expect(info.status).toBe(200);
+      expect(info.body).toMatchObject({
+        source: "META",
+        destination: "TEST",
+        registered: true,
+        feeBps: 25,
+      });
+    });
+
     it("rejects liquidity with non-numeric string", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
@@ -486,6 +565,27 @@ describe("StableRoute Backend", () => {
       expect(res.body.results[0].ok).toBe(true);
       expect(res.body.results[1].ok).toBe(false);
       expect(res.body.results[2].ok).toBe(false);
+    });
+
+    it("normalizes valid asset codes and rejects identical normalized pairs", async () => {
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: " usdc ", dest_asset: "eurc", amount: "100" },
+            { source_asset: "usdc", dest_asset: "USDC", amount: "100" },
+            { source_asset: "USD C", dest_asset: "EURC", amount: "100" },
+          ],
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({
+        ok: true,
+        source_asset: "USDC",
+        dest_asset: "EURC",
+        amount: "100",
+      });
+      expect(res.body.results[1]).toMatchObject({ ok: false, error: "invalid_item" });
+      expect(res.body.results[2]).toMatchObject({ ok: false, error: "invalid_asset" });
     });
   });
 
@@ -636,7 +736,7 @@ describe("StableRoute Backend", () => {
           amount: "100",
         });
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 character alphanumeric strings/);
     });
 
     it("rejects array-form asset params (param pollution)", async () => {
@@ -645,7 +745,31 @@ describe("StableRoute Backend", () => {
         .get("/api/v1/quote")
         .query("source_asset=USDC&source_asset=EURC&dest_asset=XLM&amount=10");
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 character alphanumeric strings/);
+    });
+
+    it("normalizes source_asset and dest_asset in quote responses", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: " usdc ", dest_asset: "eurc", amount: "100" });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        source_asset: "USDC",
+        dest_asset: "EURC",
+        route: ["USDC", "EURC"],
+      });
+    });
+
+    it("rejects internal whitespace and symbols in quote asset codes", async () => {
+      const withSpace = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USD C", dest_asset: "EURC", amount: "100" });
+      expect(withSpace.status).toBe(400);
+
+      const withSymbol = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC!", dest_asset: "EURC", amount: "100" });
+      expect(withSymbol.status).toBe(400);
     });
 
     it.each([

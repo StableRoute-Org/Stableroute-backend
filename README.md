@@ -12,6 +12,14 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+## Asset codes
+
+Pair and quote endpoints canonicalize Stellar-style asset codes before
+creating pair keys or returning responses. Codes are trimmed, upper-cased,
+and must be 1-12 ASCII alphanumeric characters. Internal whitespace, control
+characters, symbols, empty values, and polluted query arrays are rejected with
+`400 invalid_request`.
+
 ## Prerequisites
 
 - Node.js 18+

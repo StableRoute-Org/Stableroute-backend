@@ -28,6 +28,77 @@ describe("StableRoute Backend", () => {
     expect(res.body.route).toEqual(["USDC", "EURC"]);
   });
 
+  describe("quote validation boundaries", () => {
+    it.each([
+      ["1-char source asset", { source_asset: "X", dest_asset: "EURC", amount: "1" }],
+      [
+        "12-char destination asset",
+        { source_asset: "USDC", dest_asset: "TWELVECHARS", amount: "9".repeat(39) },
+      ],
+    ])("accepts %s", async (_label, query) => {
+      const res = await request(app).get("/api/v1/quote").query(query);
+      expect(res.status).toBe(200);
+      expect(res.body.amount).toBe(query.amount);
+      expect(res.body.route).toEqual([query.source_asset, query.dest_asset]);
+    });
+
+    it.each([
+      ["empty source asset", { source_asset: "", dest_asset: "EURC", amount: "1" }],
+      [
+        "13-char destination asset",
+        { source_asset: "USDC", dest_asset: "THIRTEENCHARS", amount: "1" },
+      ],
+      ["repeated source asset", { source_asset: ["USDC", "EURC"], dest_asset: "XLM", amount: "1" }],
+    ])("rejects %s", async (_label, query) => {
+      const res = await request(app).get("/api/v1/quote").query(query);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it.each([
+      ["zero", "0"],
+      ["leading zero", "01"],
+      ["40 digits", "1".repeat(40)],
+      ["decimal", "1.5"],
+      ["negative", "-1"],
+      ["non-numeric", "one"],
+    ])("rejects %s amount", async (_label, amount) => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "EURC", amount });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/positive integer string/);
+    });
+
+    it("rejects non-string bulk quote amounts and asset codes", async () => {
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "USDC", dest_asset: "EURC", amount: 100 },
+            { source_asset: ["USDC"], dest_asset: "EURC", amount: "100" },
+            { source_asset: "USDC", dest_asset: "EURC", amount: "100" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results).toEqual([
+        { index: 0, ok: false, error: "invalid_item" },
+        { index: 1, ok: false, error: "invalid_item" },
+        {
+          index: 2,
+          ok: true,
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "100",
+          estimated_rate: "1.0",
+        },
+      ]);
+    });
+  });
+
   it("GET /api/v1/quote without params returns 400 with canonical error shape", async () => {
     const res = await request(app).get("/api/v1/quote");
     expect(res.status).toBe(400);
@@ -150,6 +221,27 @@ describe("StableRoute Backend", () => {
         .send({ source: "USDC", destination: "THIRTEENLETTERS" });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/1-12 character strings/);
+    });
+
+    it.each([
+      ["single-character codes", { source: "A", destination: "B" }],
+      ["12-character codes", { source: "TWELVECHARS", destination: "TWELVECHAR2" }],
+    ])("accepts %s at the asset-code boundary", async (_label, body) => {
+      const res = await request(app).post("/api/v1/pairs").send(body);
+      expect([200, 201]).toContain(res.status);
+      expect(res.body).toMatchObject({ ...body, registered: true });
+    });
+
+    it.each([
+      ["empty source", { source: "", destination: "EURC" }],
+      ["missing destination", { source: "USDC" }],
+      ["array source", { source: ["USDC"], destination: "EURC" }],
+      ["13-character source", { source: "THIRTEENCHARS", destination: "EURC" }],
+    ])("rejects %s at the asset-code boundary", async (_label, body) => {
+      const res = await request(app).post("/api/v1/pairs").send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
     });
   });
 

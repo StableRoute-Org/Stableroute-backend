@@ -12,6 +12,15 @@ const expectCanonicalError = (
 };
 
 describe("StableRoute Backend", () => {
+  afterEach(async () => {
+    const info = await request(app).get("/api/v1/pairs/USDC/EURC/info");
+    if (info.status === 200 && info.body.registered && info.body.enabled === false) {
+      await request(app)
+        .patch("/api/v1/pairs/USDC/EURC/enabled")
+        .send({ enabled: true });
+    }
+  });
+
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
@@ -454,6 +463,33 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.registered).toBe(false);
       expect(res.body.feeBps).toBe(0);
+      expect(res.body.enabled).toBe(true);
+    });
+
+    it("toggles enabled state and stores it in pair info", async () => {
+      const disable = await request(app)
+        .patch("/api/v1/pairs/META/TEST/enabled")
+        .send({ enabled: false });
+      expect(disable.status).toBe(200);
+      expect(disable.body.enabled).toBe(false);
+
+      const info = await request(app).get("/api/v1/pairs/META/TEST/info");
+      expect(info.status).toBe(200);
+      expect(info.body.enabled).toBe(false);
+
+      const reenable = await request(app)
+        .patch("/api/v1/pairs/META/TEST/enabled")
+        .send({ enabled: true });
+      expect(reenable.status).toBe(200);
+      expect(reenable.body.enabled).toBe(true);
+    });
+
+    it("rejects non-boolean enabled payloads", async () => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/META/TEST/enabled")
+        .send({ enabled: "false" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
     });
   });
 
@@ -501,6 +537,32 @@ describe("StableRoute Backend", () => {
       expect(res.body.results[0].ok).toBe(true);
       expect(res.body.results[1].ok).toBe(false);
       expect(res.body.results[2].ok).toBe(false);
+    });
+
+    it("returns pair_disabled for disabled bulk items only", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .patch("/api/v1/pairs/USDC/EURC/enabled")
+        .send({ enabled: false });
+
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "USDC", dest_asset: "EURC", amount: "100" },
+            { source_asset: "USDC", dest_asset: "GBPC", amount: "100" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({
+        index: 0,
+        ok: false,
+        error: "pair_disabled",
+      });
+      expect(res.body.results[1].ok).toBe(true);
     });
 
     it("lowered bulkMaxItems rejects at new limit", async () => {
@@ -731,6 +793,31 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+
+    it("returns 409 when the pair is disabled, then succeeds after re-enable", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .patch("/api/v1/pairs/USDC/EURC/enabled")
+        .send({ enabled: false });
+
+      const disabled = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
+      expect(disabled.status).toBe(409);
+      expect(disabled.body.error).toBe("pair_disabled");
+
+      await request(app)
+        .patch("/api/v1/pairs/USDC/EURC/enabled")
+        .send({ enabled: true });
+
+      const enabled = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
+      expect(enabled.status).toBe(200);
+      expect(enabled.body.route).toEqual(["USDC", "EURC"]);
     });
   });
 });

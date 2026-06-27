@@ -1,5 +1,6 @@
 import request from "supertest";
 import app from "../index";
+import { resetStores } from "../stores";
 
 // Each test advances the clock by 120 s relative to the previous test's
 // base so that bucket entries from prior tests are always outside the
@@ -12,11 +13,14 @@ function advanceBase() {
 }
 
 beforeEach(() => {
+  process.env.ENABLE_RATE_LIMIT_IN_TEST = "true";
+  resetStores();
   advanceBase();
   jest.spyOn(Date, "now").mockReturnValue(baseTime);
 });
 
 afterEach(() => {
+  delete process.env.ENABLE_RATE_LIMIT_IN_TEST;
   jest.restoreAllMocks();
 });
 

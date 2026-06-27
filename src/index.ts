@@ -24,6 +24,7 @@ import { paused } from "./stores";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+const BULK_ABSOLUTE_MAX = 10_000;
 
 app.use(cors());
 
@@ -75,7 +76,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === "test") return next();
+  const rateLimitEnabledInTest = process.env.ENABLE_RATE_LIMIT_IN_TEST === "true";
+  if (process.env.NODE_ENV === "test" && !rateLimitEnabledInTest) return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
   const bucket = (rateBuckets.get(ip) ?? []).filter(
@@ -305,6 +307,25 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   });
 });
 
+app.patch("/api/v1/pairs/:source/:destination/enabled", (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    sendError(res, req, 404, "not_found", "pair not registered");
+    return;
+  }
+  const { enabled } = req.body ?? {};
+  if (typeof enabled !== "boolean") {
+    sendError(res, req, 400, "invalid_request", "enabled must be boolean");
+    return;
+  }
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  meta.enabled = enabled;
+  pairMeta.set(k, meta);
+  recordEvent(enabled ? "pair.enabled" : "pair.disabled", { source, destination });
+  res.json({ source, destination, ...meta });
+});
+
 app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
@@ -517,9 +538,14 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+const getPairEnabled = (source: string, destination: string): boolean => {
+  const meta = pairMeta.get(pairKey(source, destination));
+  return meta?.enabled ?? true;
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
-  const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
+  const maxItems = config.bulkMaxItems; // driven by config.bulkMaxItems
   if (!Array.isArray(items) || items.length === 0 || items.length > maxItems) {
     sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
@@ -528,6 +554,9 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     const { source_asset, dest_asset, amount } = it ?? {};
     if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
+    }
+    if (!getPairEnabled(source_asset, dest_asset)) {
+      return { index: i, ok: false, error: "pair_disabled" };
     }
     return {
       index: i,
@@ -573,6 +602,15 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       400,
       "invalid_request",
       "amount must be a positive integer string with no leading zero"
+    );
+  }
+  if (!getPairEnabled(source_asset, dest_asset)) {
+    return sendError(
+      res,
+      req,
+      409,
+      "pair_disabled",
+      `pair ${source_asset}->${dest_asset} is disabled`
     );
   }
 

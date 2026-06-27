@@ -124,7 +124,7 @@ accessors and a `resetStores()` helper for test isolation:
 | Store              | Type                  | Purpose                                           |
 | ------------------ | --------------------- | ------------------------------------------------- |
 | `pairRegistry`     | `Set<string>`         | Registered `"SOURCE::DEST"` pair keys              |
-| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity metadata        |
+| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity / enabled metadata |
 | `apiKeyStore`      | `Map<string, ApiKeyRecord>` | Generated API key records                     |
 | `webhookStore`     | `Map<string, WebhookRecord>` | Registered webhook records                   |
 | `eventLog`         | `AppEvent[]`          | Bounded ring-buffer of application events          |
@@ -138,6 +138,18 @@ cross-test bleed. This function is not exposed via any HTTP route.
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
+
+## Pair enable/disable gate
+
+Registered pairs now carry an `enabled` flag in their metadata. New pairs default
+to `enabled: true`.
+
+- `PATCH /api/v1/pairs/:source/:destination/enabled` accepts `{ "enabled": boolean }`
+  and records a `pair.enabled` or `pair.disabled` audit event.
+- `GET /api/v1/pairs/:source/:destination/info` surfaces the current `enabled` value.
+- `GET /api/v1/quote` returns `409 pair_disabled` when the requested pair is disabled.
+- `POST /api/v1/quote/bulk` returns per-item `{ index, ok: false, error: "pair_disabled" }`
+  for disabled pairs while continuing to evaluate the rest of the batch.
 
 ## Contributing
 

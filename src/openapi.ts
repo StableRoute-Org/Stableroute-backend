@@ -29,6 +29,7 @@ export const openApiSpec = {
       delete: { summary: "Unregister pair" },
     },
     "/api/v1/pairs/{source}/{destination}/info": { get: { summary: "Pair aggregate" } },
+    "/api/v1/pairs/{source}/{destination}/enabled": { patch: { summary: "Toggle pair enabled state" } },
     "/api/v1/pairs/{source}/{destination}/fee_bps": { patch: { summary: "Set fee" } },
     "/api/v1/pairs/{source}/{destination}/min": { patch: { summary: "Set min amount" } },
     "/api/v1/pairs/{source}/{destination}/max": { patch: { summary: "Set max amount" } },

@@ -6,6 +6,26 @@ import { openApiSpec } from "./openapi";
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
+export type TrustProxySetting = boolean | number | string | string[];
+
+export const parseTrustProxy = (value: string | undefined): TrustProxySetting => {
+  const normalized = value?.trim();
+  if (!normalized || ["false", "0"].includes(normalized.toLowerCase())) {
+    return false;
+  }
+  if (normalized.toLowerCase() === "true") return true;
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  if (normalized.includes(",")) {
+    return normalized
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+  return normalized;
+};
+
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
+
 app.use(cors());
 
 type RequestWithId = Request & { id?: string };
@@ -27,6 +47,13 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+const config: Record<string, number> = {
+  rateLimitPerWindow: 60,
+  rateLimitWindowMs: 60_000,
+  bulkMaxItems: 100,
+  eventLogCap: 10_000,
+};
 
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
@@ -50,27 +77,58 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
-// Per-IP sliding-window rate limiter: 60 requests per 60 second window.
-// Disabled in test mode so the test suite can make many requests without
-// hitting the limit.
-const RATE_LIMIT_PER_WINDOW = 60;
-const RATE_LIMIT_WINDOW_MS = 60_000;
+// Per-IP sliding-window rate limiter. The active limit/window come from
+// `config` so PATCH /api/v1/config can tune them at runtime.
 const rateBuckets = new Map<string, number[]>();
+const RATE_BUCKET_PRUNE_INTERVAL_MS = 60_000;
+let lastRateBucketPrune = 0;
+
+export const pruneExpiredRateBuckets = (
+  buckets: Map<string, number[]>,
+  now: number,
+  windowMs: number
+) => {
+  for (const [ip, timestamps] of buckets.entries()) {
+    const active = timestamps.filter((timestamp) => now - timestamp < windowMs);
+    if (active.length === 0) {
+      buckets.delete(ip);
+    } else if (active.length !== timestamps.length) {
+      buckets.set(ip, active);
+    }
+  }
+};
+
+const maybePruneRateBuckets = (now: number, windowMs: number) => {
+  const intervalMs = Math.min(windowMs, RATE_BUCKET_PRUNE_INTERVAL_MS);
+  if (lastRateBucketPrune === 0 || now - lastRateBucketPrune >= intervalMs) {
+    pruneExpiredRateBuckets(rateBuckets, now, windowMs);
+    lastRateBucketPrune = now;
+  }
+};
+
+export const resetRateLimiterStateForTests = () => {
+  rateBuckets.clear();
+  lastRateBucketPrune = 0;
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
+  const limit = config.rateLimitPerWindow;
+  const windowMs = config.rateLimitWindowMs;
+  maybePruneRateBuckets(now, windowMs);
   const bucket = (rateBuckets.get(ip) ?? []).filter(
-    (t) => now - t < RATE_LIMIT_WINDOW_MS
+    (timestamp) => now - timestamp < windowMs
   );
-  if (bucket.length >= RATE_LIMIT_PER_WINDOW) {
-    res.setHeader("Retry-After", "60");
+  if (bucket.length >= limit) {
+    res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
     sendError(
       res,
       req,
       429,
       "rate_limited",
-      `more than ${RATE_LIMIT_PER_WINDOW} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s`
+      `more than ${limit} requests per ${windowMs / 1000}s`
     );
     return;
   }
@@ -416,12 +474,6 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
-const config: Record<string, number> = {
-  rateLimitPerWindow: 60,
-  rateLimitWindowMs: 60_000,
-  bulkMaxItems: 100,
-  eventLogCap: 10_000,
-};
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;

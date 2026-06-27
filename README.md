@@ -45,10 +45,11 @@ reference, including request/response shapes and `curl` examples.
 The backend is configured entirely through environment variables. The
 table below lists every variable the code reads — there are no others.
 
-| Variable   | Purpose                                                                                              | Default       | Example       |
-|------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
-| `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
-| `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+| Variable      | Purpose                                                                                              | Default       | Example       |
+|---------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
+| `PORT`        | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
+| `NODE_ENV`    | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+| `TRUST_PROXY` | Express `trust proxy` setting for resolving `req.ip`; keep `false` unless behind a trusted proxy.    | `false`       | `1`           |
 
 `.env.example` is the template for these variables. Copy it to `.env`
 and edit the values for local development:

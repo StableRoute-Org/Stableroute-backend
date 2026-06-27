@@ -416,6 +416,9 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
+/** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
+const BULK_ABSOLUTE_MAX = 10_000;
+
 const config: Record<string, number> = {
   rateLimitPerWindow: 60,
   rateLimitWindowMs: 60_000,
@@ -430,6 +433,10 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
       const v = req.body[k];
       if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
         sendError(res, req, 400, "invalid_request", `${k} must be positive integer`);
+        return;
+      }
+      if (k === "bulkMaxItems" && v > BULK_ABSOLUTE_MAX) {
+        sendError(res, req, 400, "invalid_request", `bulkMaxItems cannot exceed ${BULK_ABSOLUTE_MAX}`);
         return;
       }
       config[k] = v;
@@ -536,8 +543,9 @@ const parseAmount = (v: unknown): bigint | null => {
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
-  if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
-    sendError(res, req, 400, "invalid_request", "items must be 1-100 entries");
+  const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
+  if (!Array.isArray(items) || items.length === 0 || items.length > maxItems) {
+    sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
   }
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {

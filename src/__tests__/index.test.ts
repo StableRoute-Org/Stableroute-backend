@@ -458,6 +458,21 @@ describe("StableRoute Backend", () => {
   });
 
   describe("POST /api/v1/quote/bulk", () => {
+    let savedBulkMax: number;
+
+    beforeEach(async () => {
+      // Save original bulkMaxItems
+      const cfg = await request(app).get("/api/v1/config");
+      savedBulkMax = cfg.body.config.bulkMaxItems;
+    });
+
+    afterEach(async () => {
+      // Restore original bulkMaxItems
+      await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: savedBulkMax });
+    });
+
     it("rejects empty items", async () => {
       const res = await request(app)
         .post("/api/v1/quote/bulk")
@@ -465,7 +480,7 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(400);
     });
 
-    it("rejects more than 100 items", async () => {
+    it("rejects more than the configured max (default 100)", async () => {
       const res = await request(app)
         .post("/api/v1/quote/bulk")
         .send({ items: new Array(101).fill({}) });
@@ -486,6 +501,52 @@ describe("StableRoute Backend", () => {
       expect(res.body.results[0].ok).toBe(true);
       expect(res.body.results[1].ok).toBe(false);
       expect(res.body.results[2].ok).toBe(false);
+    });
+
+    it("lowered bulkMaxItems rejects at new limit", async () => {
+      await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 5 });
+
+      // 5 items — should pass
+      const ok = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({ items: new Array(5).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      expect(ok.status).toBe(200);
+
+      // 6 items — should fail at the new cap
+      const over = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({ items: new Array(6).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      expect(over.status).toBe(400);
+      expect(over.body.message).toMatch(/1-5/);
+    });
+
+    it("raised bulkMaxItems accepts above default", async () => {
+      await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 150 });
+
+      // 101 items — would fail at default 100, now passes
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({ items: new Array(101).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects bulkMaxItems above absolute ceiling", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 100_001 });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/cannot exceed/);
+    });
+
+    it("accepts bulkMaxItems up to absolute ceiling", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 10_000 });
+      expect(res.status).toBe(200);
     });
   });
 

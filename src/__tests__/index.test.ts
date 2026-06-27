@@ -355,24 +355,39 @@ describe("StableRoute Backend", () => {
       // Read single pair
       const read = await request(app).get("/api/v1/pairs/ALIVE/PAIR");
       expect(read.status).toBe(200);
-      expect(read.body).toMatchObject({ source: "ALIVE", destination: "PAIR", registered: true });
+      expect(read.body).toEqual({ source: "ALIVE", destination: "PAIR", registered: true });
 
       // Unregister
       const del = await request(app).delete("/api/v1/pairs/ALIVE/PAIR");
       expect(del.status).toBe(204);
+      expect(del.text).toBe("");
+      expect(del.body).toEqual({});
 
-      // Read after delete — 404
+      // Read after delete returns the canonical 404 envelope.
       const readAfter = await request(app).get("/api/v1/pairs/ALIVE/PAIR");
       expect(readAfter.status).toBe(404);
+      expectCanonicalError(readAfter.body, readAfter.headers["x-request-id"], "not_found");
+      expect(readAfter.body.message).toContain("ALIVE->PAIR");
 
-      // Double delete — 404
+      // Double delete returns the same canonical 404 envelope.
       const delAgain = await request(app).delete("/api/v1/pairs/ALIVE/PAIR");
       expect(delAgain.status).toBe(404);
+      expectCanonicalError(delAgain.body, delAgain.headers["x-request-id"], "not_found");
+      expect(delAgain.body.message).toContain("ALIVE->PAIR");
     });
 
     it("GET single pair returns 404 for unregistered pair", async () => {
       const res = await request(app).get("/api/v1/pairs/NO/EXIST");
       expect(res.status).toBe(404);
+      expectCanonicalError(res.body, res.headers["x-request-id"], "not_found");
+      expect(res.body.message).toContain("NO->EXIST");
+    });
+
+    it("DELETE single pair returns 404 for unregistered pair", async () => {
+      const res = await request(app).delete("/api/v1/pairs/NO/EXIST");
+      expect(res.status).toBe(404);
+      expectCanonicalError(res.body, res.headers["x-request-id"], "not_found");
+      expect(res.body.message).toContain("NO->EXIST");
     });
   });
 

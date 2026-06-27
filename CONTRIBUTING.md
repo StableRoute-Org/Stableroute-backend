@@ -61,6 +61,10 @@ Feature requests should include:
 
 Do not commit secrets, private keys, access tokens, `.env` files, or production credentials. Use local environment variables or the deployment platform's secret store.
 
+See [SECURITY.md](SECURITY.md) for the private vulnerability reporting process,
+supported versions, coordinated disclosure expectations, and the current gateway
+threat model.
+
 If a change touches routing, pricing, authentication, or request handling, include a short security note in the pull request that describes the relevant risk and how the change handles it.
 
 ## Community and Campaign

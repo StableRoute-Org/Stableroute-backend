@@ -1,6 +1,6 @@
 # stableroute-backend
 
-API gateway, routing engine, and pricing service for [StableRoute](https://github.com/your-org/stableroute) — Stellar liquidity routing.
+API gateway, routing engine, and pricing service for [StableRoute](https://github.com/your-org/stableroute) ??Stellar liquidity routing.
 
 ## What this repo contains
 
@@ -11,6 +11,11 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the in-memory store model,
+middleware ordering, request lifecycle, and canonical error envelope.
 
 ## Prerequisites
 
@@ -43,7 +48,7 @@ reference, including request/response shapes and `curl` examples.
 ## Configuration
 
 The backend is configured entirely through environment variables. The
-table below lists every variable the code reads — there are no others.
+table below lists every variable the code reads ??there are no others.
 
 | Variable   | Purpose                                                                                              | Default       | Example       |
 |------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
@@ -91,9 +96,9 @@ Ensure these pass locally before pushing.
   health check fails.
 - **`checks[]`**: An array of `{ name, status, durationMs }` objects, one per
   dependency. Current checks:
-  - `storage` — verifies the in-memory store can write and read back.
-  - `clock` — verifies the system clock is producing post-epoch timestamps.
-- **`uptimeSeconds`**, **`memory`** (rssMb, heapUsedMb), **`pid`**, **`node`** —
+  - `storage` ??verifies the in-memory store can write and read back.
+  - `clock` ??verifies the system clock is producing post-epoch timestamps.
+- **`uptimeSeconds`**, **`memory`** (rssMb, heapUsedMb), **`pid`**, **`node`** ??
   kept for backward compatibility.
 
 When any required check fails, the endpoint returns **503** with
@@ -112,7 +117,7 @@ verbatim instead of an inline literal, so the spec can be imported by tests.
 
 `src/__tests__/openapi.test.ts` includes a **route-drift guard** that walks the
 Express router stack, converts each registered `/api/v1/...` route to its
-OpenAPI templated form (`:param` → `{param}`), and asserts every discovered path
+OpenAPI templated form (`:param` ??`{param}`), and asserts every discovered path
 appears as a key in `openApiSpec.paths`. This makes it impossible to ship a new
 endpoint without documenting it.
 
@@ -133,8 +138,8 @@ Quick checklist:
 ## Coverage
 
 Test coverage thresholds are enforced in CI via Jest's `coverageThreshold`.
-Current targets: **statements ≥ 90%**, **branches ≥ 80%**, **functions ≥ 88%**,
-**lines ≥ 90%**.
+Current targets: **statements ??90%**, **branches ??80%**, **functions ??88%**,
+**lines ??90%**.
 
 > **Note:** `server.ts` is now refactored into side-effect-free, exported
 > functions (`createServer`, `registerSignalHandlers`, `start`) with the actual

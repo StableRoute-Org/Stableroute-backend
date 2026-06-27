@@ -116,6 +116,25 @@ OpenAPI templated form (`:param` → `{param}`), and asserts every discovered pa
 appears as a key in `openApiSpec.paths`. This makes it impossible to ship a new
 endpoint without documenting it.
 
+## In-memory stores
+
+All runtime state lives in `src/stores.ts` — a typed module with explicit
+accessors and a `resetStores()` helper for test isolation:
+
+| Store              | Type                  | Purpose                                           |
+| ------------------ | --------------------- | ------------------------------------------------- |
+| `pairRegistry`     | `Set<string>`         | Registered `"SOURCE::DEST"` pair keys              |
+| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity metadata        |
+| `apiKeyStore`      | `Map<string, ApiKeyRecord>` | Generated API key records                     |
+| `webhookStore`     | `Map<string, WebhookRecord>` | Registered webhook records                   |
+| `eventLog`         | `AppEvent[]`          | Bounded ring-buffer of application events          |
+| `rateBuckets`      | `Map<string, number[]>` | Per-IP sliding-window timestamps (rate limiter)  |
+| `config`           | `Record<string, number>` | Tunable runtime config (rate limits, bulk caps)  |
+| `paused`           | `boolean`             | Service-level pause flag                           |
+
+Call `resetStores()` in test `beforeEach` / `afterEach` hooks to prevent
+cross-test bleed. This function is not exposed via any HTTP route.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

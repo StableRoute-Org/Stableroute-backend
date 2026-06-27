@@ -2,6 +2,25 @@ import { createHash, randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { openApiSpec } from "./openapi";
+import {
+  pairRegistry,
+  pairMeta,
+  apiKeyStore,
+  webhookStore,
+  eventLog,
+  rateBuckets,
+  config,
+  setPaused,
+  pairKey,
+  defaultMeta,
+  recordEvent,
+  EVENT_LOG_CAP,
+  type PairMeta,
+  type AppEvent,
+  type ApiKeyRecord,
+  type WebhookRecord,
+} from "./stores";
+import { paused } from "./stores";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -55,7 +74,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const rateBuckets = new Map<string, number[]>();
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -197,38 +215,14 @@ app.get("/api/v1/health/deep", (req: Request, res: Response) => {
     res.json(body);
   }
 });
-
-let paused = false;
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
-  paused = true;
+  setPaused(true);
   res.json({ paused });
 });
 app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
-  paused = false;
+  setPaused(false);
   res.json({ paused });
 });
-// Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity.
-type PairMeta = {
-  feeBps: number;
-  minAmount: string;
-  maxAmount: string;
-  liquidity: string;
-};
-const pairMeta = new Map<string, PairMeta>();
-const defaultMeta = (): PairMeta => ({
-  feeBps: 0,
-  minAmount: "0",
-  maxAmount: "0",
-  liquidity: "0",
-});
-
-type AppEvent = { id: string; ts: number; type: string; payload: Record<string, unknown> };
-const eventLog: AppEvent[] = [];
-const EVENT_LOG_CAP = 10_000;
-function recordEvent(type: string, payload: Record<string, unknown>) {
-  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
-  if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
-}
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);
@@ -236,9 +230,6 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   const items = eventLog.filter((e) => e.ts >= since).slice(-limit);
   res.json({ items });
 });
-
-type ApiKeyRecord = { label: string; createdAt: number };
-const apiKeyStore = new Map<string, ApiKeyRecord>();
 
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
@@ -271,9 +262,6 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
   apiKeyStore.set(key, { label, createdAt: Date.now() });
   res.status(201).json({ key, label });
 });
-
-type WebhookRecord = { url: string; events: string[]; createdAt: number };
-const webhookStore = new Map<string, WebhookRecord>();
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const { id } = req.params;
@@ -416,15 +404,6 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
-/** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
-const BULK_ABSOLUTE_MAX = 10_000;
-
-const config: Record<string, number> = {
-  rateLimitPerWindow: 60,
-  rateLimitWindowMs: 60_000,
-  bulkMaxItems: 100,
-  eventLogCap: 10_000,
-};
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
@@ -474,9 +453,6 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 // contract to this Map on startup and on every pair-registration event.
 // Process restart resets the map; persistence lands with the database
 // adapter.
-const pairRegistry = new Set<string>();
-const pairKey = (source: string, dest: string) => `${source}::${dest}`;
-
 /**
  * List every registered (source, destination) pair.
  * Response: { pairs: [{ source, destination }, ...] }

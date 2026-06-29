@@ -75,19 +75,19 @@ describe("stores module", () => {
     it("evicts based on config.eventLogCap when configured to a lower value", () => {
       config.eventLogCap = 5;
       for (let i = 0; i < 5; i++) {
-        recordEvent("pair.registered", { i });
+        recordEvent("pair.registered" as EventType, { i });
       }
       expect(eventLog.length).toBe(5);
-      recordEvent("pair.unregistered", { n: 1 });
+      recordEvent("pair.unregistered" as EventType, { n: 1 });
       expect(eventLog.length).toBe(5);
       expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
     });
 
     it("evicts with a cap of 1 (edge case)", () => {
       config.eventLogCap = 1;
-      recordEvent("pair.registered", {});
+      recordEvent("pair.registered" as EventType, {});
       expect(eventLog.length).toBe(1);
-      recordEvent("pair.unregistered", {});
+      recordEvent("pair.unregistered" as EventType, {});
       expect(eventLog.length).toBe(1);
       expect(eventLog[0].type).toBe("pair.unregistered");
     });

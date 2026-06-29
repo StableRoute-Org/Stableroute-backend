@@ -18,7 +18,8 @@ const SECURITY_HEADERS: [string, string | RegExp][] = [
 describe("Security headers on every response", () => {
   for (const { method, path } of ROUTES) {
     describe(`${method.toUpperCase()} ${path}`, () => {
-      let res: Response;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let res: any;
 
       beforeAll(async () => {
         res = await (request(app) as unknown as Record<string, CallableFunction>)[method](path);

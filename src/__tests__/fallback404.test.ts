@@ -26,8 +26,12 @@ describe("404 fallback and X-Request-Id echo", () => {
     );
   });
 
-  it("rejects malformed X-Request-Id and generates a fresh UUID", async () => {
-    const res = await request(app).get("/missing").set("X-Request-Id", "bad\nvalue\r\n");
+  it("rejects malformed X-Request-Id (over 200 chars) and generates a fresh UUID", async () => {
+    // HTTP headers cannot carry CR/LF bytes at the transport layer, so we test
+    // the length-limit branch instead. A 201-character ID exceeds the allowed
+    // 200-character maximum and must be replaced with a generated UUID.
+    const tooLong = "a".repeat(201);
+    const res = await request(app).get("/missing").set("X-Request-Id", tooLong);
     expect(res.headers["x-request-id"]).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     );

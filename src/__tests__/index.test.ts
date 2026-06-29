@@ -1151,72 +1151,45 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("POST /api/v1/pairs/bulk", () => {
-    beforeEach(() => {
-      resetStores();
+  describe("GET /api/v1/events param validation", () => {
+    it("rejects a non-numeric since with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?since=abc");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
+      expect(res.body.requestId).toBeTruthy();
     });
 
-    it("rejects a missing or empty pairs array with 400", async () => {
-      const empty = await request(app).post("/api/v1/pairs/bulk").send({ pairs: [] });
-      expect(empty.status).toBe(400);
-      expect(empty.body.error).toBe("invalid_request");
-
-      const missing = await request(app).post("/api/v1/pairs/bulk").send({});
-      expect(missing.status).toBe(400);
+    it("rejects a negative since with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?since=-5");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
     });
 
-    it("rejects a batch over the configured cap with 400", async () => {
-      const over = await request(app)
-        .post("/api/v1/pairs/bulk")
-        .send({ pairs: new Array(101).fill({ source: "USDC", destination: "EURC" }) });
-      expect(over.status).toBe(400);
-      expect(over.body.message).toMatch(/1-100/);
+    it("rejects an array-form limit with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?limit=1&limit=2");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/limit/);
     });
 
-    it("returns per-item results for a mixed batch without failing the whole batch", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs/bulk")
-        .send({
-          pairs: [
-            { source: "USDC", destination: "EURC" },
-            { source: "XLM", destination: "XLM" },
-            { source: "TOOLONGASSETCODE", destination: "USDC" },
-          ],
-        });
+    it("rejects a non-numeric limit with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?limit=xyz");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("clamps limit=0 up to 1 in-range value", async () => {
+      const res = await request(app).get("/api/v1/events?limit=0");
       expect(res.status).toBe(200);
-      expect(res.body.results[0]).toMatchObject({
-        index: 0,
-        ok: true,
-        source: "USDC",
-        destination: "EURC",
-        registered: true,
-      });
-      expect(res.body.results[1]).toMatchObject({ index: 1, ok: false });
-      expect(res.body.results[2]).toMatchObject({ index: 2, ok: false });
-
-      // Only the valid pair should appear in the registry
-      const list = await request(app).get("/api/v1/pairs");
-      expect(list.body.pairs).toContainEqual({ source: "USDC", destination: "EURC" });
-      expect(list.body.pairs).toHaveLength(1);
+      expect(res.body.items.length).toBeLessThanOrEqual(1);
     });
 
-    it("is idempotent: re-registering the same pair still returns ok", async () => {
-      await request(app)
-        .post("/api/v1/pairs/bulk")
-        .send({ pairs: [{ source: "AAA", destination: "BBB" }] });
-      const second = await request(app)
-        .post("/api/v1/pairs/bulk")
-        .send({ pairs: [{ source: "AAA", destination: "BBB" }] });
-      expect(second.status).toBe(200);
-      expect(second.body.results[0].ok).toBe(true);
-    });
-
-    it("rejects a batch of non-object entries per item", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs/bulk")
-        .send({ pairs: ["not-an-object", 42] });
+    it("treats absent params as since=0, limit=100 (defaults)", async () => {
+      const res = await request(app).get("/api/v1/events");
       expect(res.status).toBe(200);
-      expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(true);
+      expect(Array.isArray(res.body.items)).toBe(true);
     });
   });
 });

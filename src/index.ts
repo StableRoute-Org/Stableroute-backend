@@ -37,6 +37,7 @@ export type ApiErrorCode =
   | "not_found"
   | "invalid_request"
   | "unauthorized"
+  | "forbidden"
   | "rate_limited"
   | "service_paused"
   | "internal_error"
@@ -342,6 +343,46 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   res.json({ items: items.slice(-limit) });
 });
 
+/**
+ * Fixed catalog of authorization scopes an API key may carry. A key's scopes
+ * are a subset of this set; unknown scope strings are rejected at creation.
+ */
+const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
+
+/**
+ * Least-privilege default scope set applied when a key is created without an
+ * explicit `scopes` array. Read-only: it grants no write scope.
+ */
+const DEFAULT_SCOPES: readonly string[] = [];
+
+/**
+ * Express middleware factory asserting that the authenticated API key carries
+ * the given scope.
+ *
+ * The key is resolved from the `Authorization: Bearer <srk_...>` header. When
+ * the key is missing or unknown the guard responds `401 unauthorized`; when the
+ * key exists but lacks `scope` it responds `403 forbidden`, both using the
+ * canonical `sendError` envelope. On success it calls `next()`.
+ *
+ * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
+ * @returns An Express request handler enforcing the scope.
+ */
+const requireScope = (scope: string) =>
+  (req: Request, res: Response, next: NextFunction): void => {
+    const auth = req.header("authorization") ?? "";
+    const match = /^Bearer\s+(\S+)$/i.exec(auth);
+    const record = match ? apiKeyStore.get(match[1]) : undefined;
+    if (!record) {
+      sendError(res, req, 401, "unauthorized", "a valid API key is required");
+      return;
+    }
+    if (!record.scopes.includes(scope)) {
+      sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
+      return;
+    }
+    next();
+  };
+
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
   let found: string | undefined;
@@ -359,19 +400,52 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
     prefix: k.slice(0, 8),
     label: m.label,
     createdAt: m.createdAt,
+    scopes: m.scopes,
   }));
   res.json({ items });
 });
 
 app.post("/api/v1/api-keys", (req: Request, res: Response) => {
-  const { label } = req.body ?? {};
+  const { label, scopes } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
     return;
   }
+  let grantedScopes: string[] = [...DEFAULT_SCOPES];
+  if (scopes !== undefined) {
+    if (!Array.isArray(scopes) || scopes.some((s) => typeof s !== "string")) {
+      sendError(res, req, 400, "invalid_request", "scopes must be a string array");
+      return;
+    }
+    const unknown = (scopes as string[]).filter(
+      (s) => !(SCOPE_CATALOG as ReadonlyArray<string>).includes(s)
+    );
+    if (unknown.length > 0) {
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `unknown scope(s): ${unknown.join(", ")}. Known scopes: ${SCOPE_CATALOG.join(", ")}`
+      );
+      return;
+    }
+    grantedScopes = [...new Set(scopes as string[])];
+  }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now() });
-  res.status(201).json({ key, label });
+  apiKeyStore.set(key, { label, createdAt: Date.now(), scopes: grantedScopes });
+  res.status(201).json({ key, label, scopes: grantedScopes });
+});
+
+/**
+ * Scope-check probe. Returns `{ ok: true }` only for keys carrying the
+ * `keys:admin` scope, demonstrating (and exercising) the {@link requireScope}
+ * guard that write routes will adopt.
+ *
+ * @route GET /api/v1/api-keys/whoami
+ */
+app.get("/api/v1/api-keys/whoami", requireScope("keys:admin"), (_req: Request, res: Response) => {
+  res.json({ ok: true });
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {

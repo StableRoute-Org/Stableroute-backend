@@ -1150,4 +1150,65 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("api-key scopes and requireScope", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("defaults to an empty (read-only) scope set when scopes are omitted", async () => {
+      const res = await request(app).post("/api/v1/api-keys").send({ label: "ro" });
+      expect(res.status).toBe(201);
+      expect(res.body.scopes).toEqual([]);
+    });
+
+    it("accepts valid scopes and surfaces them in the listing", async () => {
+      const create = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "bot", scopes: ["pairs:write", "webhooks:write"] });
+      expect(create.status).toBe(201);
+      expect(create.body.scopes).toEqual(["pairs:write", "webhooks:write"]);
+
+      const list = await request(app).get("/api/v1/api-keys");
+      const prefix = create.body.key.slice(0, 8);
+      const entry = list.body.items.find((k: { prefix: string }) => k.prefix === prefix);
+      expect(entry.scopes).toEqual(["pairs:write", "webhooks:write"]);
+    });
+
+    it("rejects an unknown scope at creation", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "bad", scopes: ["pairs:write", "made:up"] });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/made:up/);
+    });
+
+    it("requireScope returns 401 without a key and 403 when the scope is missing", async () => {
+      // No Authorization header -> 401
+      const anon = await request(app).get("/api/v1/api-keys/whoami");
+      expect(anon.status).toBe(401);
+      expect(anon.body.error).toBe("unauthorized");
+
+      // Key without keys:admin -> 403
+      const ro = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "ro", scopes: ["pairs:write"] });
+      const forbidden = await request(app)
+        .get("/api/v1/api-keys/whoami")
+        .set("Authorization", `Bearer ${ro.body.key}`);
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.body.error).toBe("forbidden");
+
+      // Key with keys:admin -> ok
+      const admin = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "admin", scopes: ["keys:admin"] });
+      const ok = await request(app)
+        .get("/api/v1/api-keys/whoami")
+        .set("Authorization", `Bearer ${admin.body.key}`);
+      expect(ok.status).toBe(200);
+      expect(ok.body.ok).toBe(true);
+    });
+  });
 });

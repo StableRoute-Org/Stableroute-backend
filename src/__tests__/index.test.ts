@@ -1150,4 +1150,68 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("strict body-key rejection", () => {
+    it("rejects an unknown key on POST /api/v1/api-keys and lists it", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "ok", extra: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/extra/);
+      expect(res.body.unknownKeys).toContain("extra");
+    });
+
+    it("accepts a clean body on POST /api/v1/api-keys", async () => {
+      const res = await request(app).post("/api/v1/api-keys").send({ label: "clean" });
+      expect(res.status).toBe(201);
+    });
+
+    it("rejects an unknown key on POST /api/v1/webhooks", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://x.test", events: ["a"], typo: true });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("typo");
+    });
+
+    it("rejects an unknown key on POST /api/v1/pairs", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "AAA", destination: "BBB", junk: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("junk");
+    });
+
+    it("rejects an unknown key on a pair-meta PATCH", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "SUK", destination: "DUK" });
+      const res = await request(app)
+        .patch("/api/v1/pairs/SUK/DUK/fee_bps")
+        .send({ feeBps: 10, fee_bps: 9999 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("fee_bps");
+    });
+
+    it("rejects an unknown key on PATCH /api/v1/config", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 50, nope: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("nope");
+    });
+
+    it("reports __proto__ as an unknown key without polluting the prototype", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .set("Content-Type", "application/json")
+        .send('{"label":"ok","__proto__":{"polluted":true}}');
+      expect(res.status).toBe(400);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("treats an empty body as having no unknown keys", async () => {
+      const res = await request(app).patch("/api/v1/config").send({});
+      expect(res.status).toBe(200);
+    });
+  });
 });

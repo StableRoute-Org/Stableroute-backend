@@ -149,7 +149,8 @@ metadata in one round-trip. Returns defaults even for unregistered pairs.
     "feeBps": 0,
     "minAmount": "0",
     "maxAmount": "0",
-    "liquidity": "0"
+    "liquidity": "0",
+    "rate": "1.0"
   }
   ```
 
@@ -158,7 +159,7 @@ metadata in one round-trip. Returns defaults even for unregistered pairs.
 Set the pair fee in basis points.
 
 - **Body:** `{ "feeBps": 30 }` — integer in `[0, 1000]`.
-- **Response 200:** `{ source, destination, feeBps, minAmount, maxAmount, liquidity }`.
+- **Response 200:** `{ source, destination, feeBps, minAmount, maxAmount, liquidity, rate }`.
 - **Errors:** `404 not_found` if the pair is not registered;
   `400 invalid_request` if `feeBps` is not an integer in `[0, 1000]`.
 
@@ -185,6 +186,16 @@ Set available liquidity.
 - **Body:** `{ "liquidity": "500000" }` — non-negative integer string (`/^[0-9]{1,39}$/`).
 - **Response 200:** the updated metadata object.
 - **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value).
+
+### `PATCH /api/v1/pairs/:source/:destination/rate`
+
+Set the base exchange rate used by quote responses for this pair.
+
+- **Body:** `{ "rate": "0.85" }` — positive decimal string, up to 18
+  integer digits and 12 fractional digits. `1.0` is the default.
+- **Response 200:** the updated metadata object.
+- **Errors:** `404 not_found` (unregistered); `400 invalid_request` for
+  zero, negative, non-decimal, or over-precision values.
 
 ---
 
@@ -346,7 +357,7 @@ curl -X POST http://localhost:3001/api/v1/pairs \
   -d '{"source":"USDC","destination":"EURC"}'
 ```
 
-Set fee, min, max, and liquidity for a pair:
+Set fee, min, max, liquidity, and base rate for a pair:
 
 ```bash
 curl -X PATCH http://localhost:3001/api/v1/pairs/USDC/EURC/fee_bps \
@@ -360,6 +371,9 @@ curl -X PATCH http://localhost:3001/api/v1/pairs/USDC/EURC/max \
 
 curl -X PATCH http://localhost:3001/api/v1/pairs/USDC/EURC/liquidity \
   -H 'Content-Type: application/json' -d '{"liquidity":"500000"}'
+
+curl -X PATCH http://localhost:3001/api/v1/pairs/USDC/EURC/rate \
+  -H 'Content-Type: application/json' -d '{"rate":"0.85"}'
 ```
 
 Get a quote:

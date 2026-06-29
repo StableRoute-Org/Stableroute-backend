@@ -124,7 +124,7 @@ accessors and a `resetStores()` helper for test isolation:
 | Store              | Type                  | Purpose                                           |
 | ------------------ | --------------------- | ------------------------------------------------- |
 | `pairRegistry`     | `Set<string>`         | Registered `"SOURCE::DEST"` pair keys              |
-| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity metadata        |
+| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity / rate metadata |
 | `apiKeyStore`      | `Map<string, ApiKeyRecord>` | Generated API key records                     |
 | `webhookStore`     | `Map<string, WebhookRecord>` | Registered webhook records                   |
 | `eventLog`         | `AppEvent[]`          | Bounded ring-buffer of application events          |

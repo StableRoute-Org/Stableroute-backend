@@ -75,7 +75,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === "test") return next();
+  // Most tests bypass the limiter to avoid cross-test bleed. The dedicated
+  // rate-limit suite opts back in with this header so it can exercise the
+  // production middleware without changing NODE_ENV and enabling request logs.
+  if (
+    process.env.NODE_ENV === "test" &&
+    req.header("x-stableroute-test-rate-limit") !== "enabled"
+  ) return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
   const bucket = (rateBuckets.get(ip) ?? []).filter(
@@ -377,6 +383,44 @@ app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Resp
   res.json({ source, destination, ...meta });
 });
 
+/**
+ * Validate a configured per-pair base exchange rate.
+ *
+ * Rates are decimal strings so clients do not inherit JavaScript floating-point
+ * rounding. The bounds keep values reviewable and prevent precision-abuse
+ * inputs from flowing into future quote math: up to 18 integer digits and
+ * up to 12 fractional digits, strictly greater than zero.
+ */
+const isValidRate = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  if (!/^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,12})?$/.test(value)) return false;
+  return /[1-9]/.test(value.replace(".", ""));
+};
+
+app.patch("/api/v1/pairs/:source/:destination/rate", (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    sendError(res, req, 404, "not_found", "pair not registered");
+    return;
+  }
+  const { rate } = req.body ?? {};
+  if (!isValidRate(rate)) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "rate must be a positive decimal string with up to 18 integer digits and 12 fractional digits"
+    );
+    return;
+  }
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  meta.rate = rate;
+  pairMeta.set(k, meta);
+  res.json({ source, destination, ...meta });
+});
+
 /** Unregister a pair. */
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;
@@ -405,6 +449,7 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 });
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
+const BULK_ABSOLUTE_MAX = 10_000;
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
   for (const k of allowed) {
@@ -517,6 +562,9 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+const quoteRate = (source: string, destination: string): string =>
+  pairMeta.get(pairKey(source, destination))?.rate ?? defaultMeta().rate;
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -535,7 +583,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       source_asset,
       dest_asset,
       amount: String(amount),
-      estimated_rate: "1.0",
+      estimated_rate: quoteRate(source_asset, dest_asset),
     };
   });
   res.json({ results });
@@ -580,7 +628,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
-    estimated_rate: "1.0",
+    estimated_rate: quoteRate(source_asset, dest_asset),
     route: [source_asset, dest_asset],
   });
 });

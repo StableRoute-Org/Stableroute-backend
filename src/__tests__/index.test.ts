@@ -25,6 +25,7 @@ describe("StableRoute Backend", () => {
     expect(res.status).toBe(200);
     expect(res.body.source_asset).toBe("USDC");
     expect(res.body.dest_asset).toBe("EURC");
+    expect(res.body.estimated_rate).toBe("1.0");
     expect(res.body.route).toEqual(["USDC", "EURC"]);
   });
 
@@ -432,6 +433,28 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(400);
     });
 
+    it("patches rate and exposes it from pair info", async () => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/META/TEST/rate")
+        .send({ rate: "0.85" });
+      expect(res.status).toBe(200);
+      expect(res.body.rate).toBe("0.85");
+
+      const info = await request(app).get("/api/v1/pairs/META/TEST/info");
+      expect(info.status).toBe(200);
+      expect(info.body.rate).toBe("0.85");
+    });
+
+    it("rejects invalid rate values", async () => {
+      for (const rate of ["abc", "0", "0.0", "-1", "1.", ".85", "1.1234567890123"]) {
+        const res = await request(app)
+          .patch("/api/v1/pairs/META/TEST/rate")
+          .send({ rate });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      }
+    });
+
     it("returns 404 for unregistered pair on all patch endpoints", async () => {
       const liquidity = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/liquidity")
@@ -447,6 +470,11 @@ describe("StableRoute Backend", () => {
         .patch("/api/v1/pairs/GONE/ONE/min")
         .send({ minAmount: "10" });
       expect(min.status).toBe(404);
+
+      const rate = await request(app)
+        .patch("/api/v1/pairs/GONE/ONE/rate")
+        .send({ rate: "0.85" });
+      expect(rate.status).toBe(404);
     });
 
     it("returns info with default values for unregistered pair", async () => {
@@ -454,6 +482,37 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.registered).toBe(false);
       expect(res.body.feeBps).toBe(0);
+      expect(res.body.rate).toBe("1.0");
+    });
+  });
+
+  describe("quote rate metadata", () => {
+    it("uses the stored per-pair rate for single and bulk quotes", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "RATE", destination: "EURC" });
+      const patch = await request(app)
+        .patch("/api/v1/pairs/RATE/EURC/rate")
+        .send({ rate: "0.85" });
+      expect(patch.status).toBe(200);
+
+      const single = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "RATE", dest_asset: "EURC", amount: "100" });
+      expect(single.status).toBe(200);
+      expect(single.body.estimated_rate).toBe("0.85");
+
+      const bulk = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "RATE", dest_asset: "EURC", amount: "100" },
+            { source_asset: "NONE", dest_asset: "PAIR", amount: "100" },
+          ],
+        });
+      expect(bulk.status).toBe(200);
+      expect(bulk.body.results[0].estimated_rate).toBe("0.85");
+      expect(bulk.body.results[1].estimated_rate).toBe("1.0");
     });
   });
 

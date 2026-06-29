@@ -16,10 +16,17 @@ All paths below are absolute. Versioned endpoints live under
 ### Correlation header
 
 Every response carries an `X-Request-Id` header. If the caller sends an
-`X-Request-Id` request header (≤ 200 chars) it is echoed back; otherwise
-a fresh UUID v4 is generated. The same id appears in the `requestId`
-field of every error body, so logs and error responses can be
-correlated.
+`X-Request-Id` request header that passes both the charset and length
+checks below, it is echoed back verbatim; otherwise a fresh UUID v4 is
+generated. The same id appears in the `requestId` field of every error
+body, so logs and error responses can be correlated.
+
+**Accepted format:** 1–200 characters drawn exclusively from the
+conservative token charset `[A-Za-z0-9._-]`. Values containing control
+characters (including CR `\r` / LF `\n`), spaces, or any other
+non-token bytes are **not** echoed — a generated UUID v4 is used
+instead, closing the header-injection and log-injection surface while
+preserving correlation.
 
 ### Error envelope
 

@@ -1,5 +1,5 @@
 import request from "supertest";
-import app from "../index";
+import app, { isValidRequestId } from "../index";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -53,6 +53,49 @@ describe("StableRoute Backend", () => {
       .set("X-Request-Id", caller);
     expect(res.status).toBe(200);
     expect(res.headers["x-request-id"]).toBe(caller);
+  });
+
+  it("replaces an over-length X-Request-Id (> 200 chars) with a generated UUID", async () => {
+    const tooLong = "a".repeat(201);
+    const res = await request(app)
+      .get("/health")
+      .set("X-Request-Id", tooLong);
+    expect(res.status).toBe(200);
+    const echoed = res.headers["x-request-id"];
+    expect(echoed).not.toBe(tooLong);
+    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  describe("isValidRequestId", () => {
+    it("accepts valid token characters", () => {
+      expect(isValidRequestId("abc-123_XYZ.test")).toBe(true);
+      expect(isValidRequestId("a")).toBe(true);
+      expect(isValidRequestId("a".repeat(200))).toBe(true);
+    });
+
+    it("rejects empty string", () => {
+      expect(isValidRequestId("")).toBe(false);
+    });
+
+    it("rejects strings over 200 characters", () => {
+      expect(isValidRequestId("a".repeat(201))).toBe(false);
+    });
+
+    it("rejects strings with CR or LF", () => {
+      expect(isValidRequestId("id\r\ninjection")).toBe(false);
+      expect(isValidRequestId("id\rinjection")).toBe(false);
+      expect(isValidRequestId("id\ninjection")).toBe(false);
+    });
+
+    it("rejects strings with control characters", () => {
+      expect(isValidRequestId("id\x00null")).toBe(false);
+      expect(isValidRequestId("id\x1fcontrol")).toBe(false);
+    });
+
+    it("rejects strings with spaces or non-token chars", () => {
+      expect(isValidRequestId("id with space")).toBe(false);
+      expect(isValidRequestId("id@domain")).toBe(false);
+    });
   });
 
   it("returns a structured 404 with requestId for unknown routes", async () => {

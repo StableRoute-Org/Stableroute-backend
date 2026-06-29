@@ -133,6 +133,14 @@ export const config: Record<string, number> = defaultConfig();
  */
 export let paused = false;
 
+/**
+ * Read-only maintenance flag. When `true` (and not {@link paused}), the
+ * read-only guard middleware keeps reads and quotes flowing while rejecting
+ * other mutating writes with `503 read_only_mode`. Strictly weaker than
+ * `paused`: when paused, the pause behavior wins.
+ */
+export let readOnly = false;
+
 // ─── Accessors ───────────────────────────────────────────────────────────────
 
 /**
@@ -169,6 +177,14 @@ export const setPaused = (value: boolean): void => {
   paused = value;
 };
 
+/**
+ * Set the read-only flag. Exported as a function so index.ts can mutate it
+ * without reassigning the binding.
+ */
+export const setReadOnly = (value: boolean): void => {
+  readOnly = value;
+};
+
 // ─── Reset helper (test-only) ────────────────────────────────────────────────
 
 /**
@@ -190,4 +206,5 @@ export const resetStores = (): void => {
   for (const k of Object.keys(config)) delete config[k];
   Object.assign(config, defs);
   paused = false;
+  readOnly = false;
 };

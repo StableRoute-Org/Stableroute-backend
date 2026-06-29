@@ -110,6 +110,23 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Read-only maintenance mode
+
+In addition to the full `paused` kill-switch, the backend supports a softer
+**read-only** mode that keeps reads and quotes flowing while freezing other
+mutations — useful during a migration.
+
+- `POST /api/v1/admin/read-only` — enable read-only mode.
+- `POST /api/v1/admin/read-write` — disable it (always reachable, so operators
+  can never be locked out).
+- `GET /api/v1/admin/status` returns `{ paused, readOnly }`.
+
+While read-only is on (and not paused), `GET`/`HEAD`/`OPTIONS` and the quote
+endpoints (`/api/v1/quote`, `/api/v1/quote/reverse`, `/api/v1/quote/bulk`)
+succeed; every other mutating write is rejected with `503 read_only_mode` using
+the canonical error body. `paused` is strictly stronger: when the service is
+paused, the existing pause behavior (`503 service_paused`) wins.
+
 ## OpenAPI spec
 
 The OpenAPI document is the single source of truth in `src/openapi.ts`

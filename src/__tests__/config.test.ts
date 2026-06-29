@@ -1,6 +1,6 @@
 import request from "supertest";
 import app from "../index";
-import { eventLog, resetStores, EVENT_LOG_CAP_MAX } from "../stores";
+import { eventLog, resetStores, EVENT_LOG_CAP_MAX, type EventType } from "../stores";
 
 const ALLOWED = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
 
@@ -88,7 +88,7 @@ describe("config GET/PATCH", () => {
   it("PATCH eventLogCap trims existing eventLog immediately when lowered", async () => {
     // Seed more events than the new cap
     for (let i = 0; i < 20; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
     }
     expect(eventLog.length).toBe(20);
 
@@ -104,7 +104,7 @@ describe("config GET/PATCH", () => {
     // Lower cap to 10 and verify limit is clamped to the new cap
     await request(app).patch("/api/v1/config").send({ eventLogCap: 10 });
     for (let i = 0; i < 10; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: {} });
+      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: {} });
     }
     // Requesting more than the cap should be clamped to the cap
     const res = await request(app).get("/api/v1/events?limit=9999");
@@ -114,7 +114,7 @@ describe("config GET/PATCH", () => {
 
   it("PATCH eventLogCap to 1 (cap-of-1 edge case) trims buffer to 1", async () => {
     for (let i = 0; i < 5; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
     }
     const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 1 });
     expect(res.status).toBe(200);
@@ -125,7 +125,7 @@ describe("config GET/PATCH", () => {
 
   it("PATCH eventLogCap does not trim when buffer is already within new cap", async () => {
     for (let i = 0; i < 3; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
     }
     const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 100 });
     expect(res.status).toBe(200);
@@ -136,7 +136,7 @@ describe("config GET/PATCH", () => {
     // Lower cap to 5 and fill exactly to the new cap
     await request(app).patch("/api/v1/config").send({ eventLogCap: 5 });
     for (let i = 0; i < 5; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
     }
     expect(eventLog.length).toBe(5);
     // No trim needed; buffer is at cap

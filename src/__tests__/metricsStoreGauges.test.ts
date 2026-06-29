@@ -9,7 +9,7 @@ describe("GET /api/v1/metrics — store and config gauges", () => {
   it("emits HELP/TYPE lines and zero values for empty stores", async () => {
     const res = await request(app).get("/api/v1/metrics");
     expect(res.status).toBe(200);
-    expect(res.headers["content-type"]).toMatch(/text\/plain; version=0\.0\.4/);
+    expect(res.headers["content-type"]).toMatch(/text\/plain.*version=0\.0\.4/);
 
     for (const name of [
       "stableroute_api_keys_total",

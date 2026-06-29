@@ -18,7 +18,11 @@ import {
   pairKey,
   defaultMeta,
   recordEvent,
+  trimEventLog,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
+  RATE_BUCKETS_MAX_IPS,
+  HEALTH_PROBE_KEY,
   KNOWN_EVENT_TYPES,
   type PairMeta,
   type AppEvent,
@@ -183,8 +187,40 @@ const BULK_ABSOLUTE_MAX = 100_000;
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Absolute upper-bound for the `bulkMaxItems` config key. */
-const BULK_ABSOLUTE_MAX = 100_000;
+/** Maximum number of event type subscriptions per webhook. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum character length of a single event type name. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/** Event name prefixes reserved for internal/system use. */
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
+
+/**
+ * Evict stale timestamps from the rate-bucket for `ip` and return the live
+ * (within-window) entries.
+ *
+ * Side effects:
+ * - Removes the map entry for `ip` when all its timestamps are stale.
+ * - Enforces the IP-count ceiling: when the map holds
+ *   {@link RATE_BUCKETS_MAX_IPS} entries and a new IP is admitted, the
+ *   oldest entry is deleted first so cardinality never exceeds the cap.
+ */
+export const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  // Enforce IP-count ceiling for new IPs.
+  if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
+    const oldestKey = rateBuckets.keys().next().value as string;
+    rateBuckets.delete(oldestKey);
+  }
+  const existing = rateBuckets.get(ip) ?? [];
+  const live = existing.filter((t) => now - t < windowMs);
+  // Delete empty buckets to keep memory bounded and avoid stale map entries.
+  if (existing.length > 0 && live.length === 0) {
+    rateBuckets.delete(ip);
+  }
+  return live;
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -521,7 +557,7 @@ const requireScope = (scope: string) =>
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
-    if (!record.scopes.includes(scope)) {
+    if (!(record.scopes ?? []).includes(scope)) {
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
@@ -580,7 +616,7 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
     grantedScopes = [...new Set(scopes as string[])];
   }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now() });
+  apiKeyStore.set(key, { label, createdAt: Date.now(), scopes: grantedScopes });
   // Record only the non-sensitive prefix and label — never the raw key.
   recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
   res.status(201).json({ key, label });
@@ -621,9 +657,9 @@ app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
     rotatedAt: now,
     graceExpiresAt: now + ROTATION_GRACE_MS,
   });
-  // Mint the successor, inheriting the label.
+  // Mint the successor, inheriting the label and scopes.
   const newKey = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(newKey, { label: predecessor.label, createdAt: now });
+  apiKeyStore.set(newKey, { label: predecessor.label, createdAt: now, scopes: predecessor.scopes });
   res.status(201).json({ key: newKey, label: predecessor.label, graceExpiresAt: now + ROTATION_GRACE_MS });
 });
 
@@ -654,22 +690,6 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
     return;
   }
-  // Reject subscriptions to event types the system never emits, so callers
-  // can't silently subscribe to a typo (e.g. "pair.regstered"). The "*"
-  // wildcard opts in to all current and future types.
-  const unknownEvents = (events as string[]).filter(
-    (e) => e !== "*" && !(KNOWN_EVENT_TYPES as ReadonlyArray<string>).includes(e)
-  );
-  if (unknownEvents.length > 0) {
-    sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      `unknown event type(s): ${unknownEvents.join(", ")}. Known types: ${KNOWN_EVENT_TYPES.join(", ")} (or "*")`
-    );
-    return;
-  }
   if (events.length > WEBHOOK_MAX_EVENTS) {
     sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
     return;
@@ -685,6 +705,13 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     }
     if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
       sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return;
+    }
+    // Event names must be either "*" (wildcard) or follow the "namespace.action"
+    // convention (exactly one dot, alphanumeric segments). Names with multiple
+    // dots are rejected as they indicate a typo or unsupported format.
+    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
       return;
     }
   }
@@ -891,6 +918,42 @@ const checkMaxAgainstMin = (value: unknown, meta: PairMeta): string | null => {
 };
 
 /**
+ * Cross-field guard for `PATCH .../liquidity`.
+ *
+ * Rejects a new `liquidity` below the pair's existing **non-zero** `minAmount`
+ * (a `minAmount` of `"0"` is treated as "unset"; a liquidity of `"0"` is also
+ * treated as "unset" and never triggers the check).
+ *
+ * @returns An error message when inconsistent, else `null`.
+ */
+const checkLiquidityAgainstMin = (value: unknown, meta: PairMeta): string | null => {
+  const newLiquidity = BigInt(value as string);
+  if (newLiquidity === 0n) return null; // "0" means unset — always allowed
+  const existingMin = BigInt(meta.minAmount);
+  if (existingMin !== 0n && newLiquidity < existingMin) {
+    return `liquidity (${newLiquidity}) must not be below the current minAmount (${existingMin})`;
+  }
+  return null;
+};
+
+/**
+ * Cross-field guard for `PATCH .../min` (against liquidity).
+ *
+ * Rejects a new `minAmount` above the pair's existing **non-zero** `liquidity`
+ * (a `liquidity` of `"0"` is treated as "unset" and never triggers the check).
+ *
+ * @returns An error message when inconsistent, else `null`.
+ */
+const checkMinAgainstLiquidity = (value: unknown, meta: PairMeta): string | null => {
+  const newMin = BigInt(value as string);
+  const existingLiquidity = BigInt(meta.liquidity);
+  if (existingLiquidity !== 0n && newMin > existingLiquidity) {
+    return `minAmount (${newMin}) must not exceed the current liquidity (${existingLiquidity})`;
+  }
+  return null;
+};
+
+/**
  * Descriptor table driving the four per-pair PATCH routes.
  * Each entry maps a URL suffix to its PairMeta field, body key, validator, and
  * error message — the only dimensions that differ between the four handlers.
@@ -910,6 +973,7 @@ const pairMetaPatchDescriptors: Array<{
     bodyKey: "liquidity",
     validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
     errorMessage: "liquidity must be a non-negative integer string",
+    crossCheck: checkLiquidityAgainstMin,
   },
   {
     suffix: "max",
@@ -925,7 +989,7 @@ const pairMetaPatchDescriptors: Array<{
     bodyKey: "minAmount",
     validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
-    crossCheck: checkMinAgainstMax,
+    crossCheck: (value, meta) => checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
   },
   {
     suffix: "fee_bps",
@@ -995,9 +1059,6 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused, readOnly });
 });
 
-/** Absolute upper bound on the bulkMaxItems config field. */
-const BULK_ABSOLUTE_MAX = 10_000;
-
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
@@ -1025,23 +1086,6 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   }
   res.json({ config });
 });
-
-/**
- * Canonical set of known event types emitted by the gateway.
- * Kept here so the metrics series set is stable across scrapes even when
- * the event log is empty.
- */
-const KNOWN_EVENT_TYPES = [
-  "pair.registered",
-  "pair.refreshed",
-  "pair.unregistered",
-  "apikey.created",
-  "apikey.deleted",
-  "webhook.created",
-  "webhook.deleted",
-  "admin.paused",
-  "admin.unpaused",
-] as const;
 
 /**
  * Escape a Prometheus label value per the exposition format rules:

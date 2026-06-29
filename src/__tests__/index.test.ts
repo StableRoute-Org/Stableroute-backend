@@ -1,5 +1,5 @@
 import request from "supertest";
-import app from "../index";
+import app, { isValidRequestId } from "../index";
 import { resetStores } from "../stores";
 
 const expectCanonicalError = (

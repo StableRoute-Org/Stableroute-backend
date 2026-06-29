@@ -22,6 +22,7 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "pair.meta.reset",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",
@@ -64,6 +65,8 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /** Granted authorization scopes; empty array means read-only. Defaults to [] if omitted. */
+  scopes?: string[];
   /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.
@@ -88,6 +91,19 @@ export type WebhookRecord = {
 
 /** Hard cap on event-log size; oldest entries are evicted beyond this. */
 export const EVENT_LOG_CAP = 10_000;
+
+/**
+ * Sentinel key used by the deep-health storage probe.
+ * Prefixed with a NUL control character so it can never collide with a real
+ * pair key entered by an operator (which must start with `[A-Z0-9]`).
+ */
+export const HEALTH_PROBE_KEY = "\x00__health_probe__";
+
+/**
+ * Maximum number of IPs tracked in the rate-bucket map at once.
+ * Entries beyond this limit are pruned (oldest first) to bound memory use.
+ */
+export const RATE_BUCKETS_MAX_IPS = 10_000;
 
 /**
  * Absolute maximum value accepted for `eventLogCap` in PATCH /api/v1/config.
@@ -169,8 +185,27 @@ export const pairKey = (source: string, dest: string): string =>
   `${source}::${dest}`;
 
 /**
+ * Return the active event-log capacity: uses `config.eventLogCap` when set
+ * and within valid bounds `(0, EVENT_LOG_CAP_MAX]`, otherwise falls back to
+ * {@link EVENT_LOG_CAP}.
+ */
+export const effectiveEventLogCap = (): number => {
+  const cap = config.eventLogCap;
+  if (typeof cap !== "number" || cap <= 0 || cap > EVENT_LOG_CAP_MAX) return EVENT_LOG_CAP;
+  return cap;
+};
+
+/**
+ * Trim the event log to at most `cap` entries, removing the oldest entries first.
+ * Used by PATCH /api/v1/config when `eventLogCap` is lowered.
+ */
+export const trimEventLog = (cap: number): void => {
+  while (eventLog.length > cap) eventLog.shift();
+};
+
+/**
  * Append an event to the bounded event log, evicting the oldest entry
- * when the log exceeds {@link EVENT_LOG_CAP}.
+ * when the log exceeds the effective cap.
  *
  * @param type - Must be one of the canonical {@link EventType} values; TypeScript
  *   enforces this at the call site so stray string literals are caught at compile time.

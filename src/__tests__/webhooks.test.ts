@@ -19,8 +19,8 @@ describe("Webhooks lifecycle", () => {
     await request(app).post("/api/v1/webhooks").send(validBody);
     const res = await request(app).get("/api/v1/webhooks");
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.webhooks)).toBe(true);
-    expect(res.body.webhooks).toHaveLength(1);
+    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(res.body.items).toHaveLength(1);
   });
 
   it("DELETE /api/v1/webhooks/:id removes the webhook", async () => {
@@ -29,7 +29,7 @@ describe("Webhooks lifecycle", () => {
     const del = await request(app).delete(`/api/v1/webhooks/${id}`);
     expect(del.status).toBe(204);
     const list = await request(app).get("/api/v1/webhooks");
-    expect(list.body.webhooks).toHaveLength(0);
+    expect(list.body.items).toHaveLength(0);
   });
 
   it("DELETE unknown webhook id returns 404", async () => {

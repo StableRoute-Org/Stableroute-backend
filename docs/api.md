@@ -51,6 +51,13 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 > requests return `503 service_paused`, **except** `POST /api/v1/admin/unpause`,
 > so an operator can always recover.
 
+> **CORS preflight under pause:** `OPTIONS` requests (browser CORS preflights)
+> are explicitly allowed through the pause guard.  This means `cors()` can
+> still respond with `Access-Control-Allow-Origin` / `Access-Control-Allow-Methods`
+> headers while the service is paused, preventing browser clients from being
+> locked out by a failed preflight.  This guarantee is covered by
+> `src/__tests__/cors.test.ts`.
+
 ### Security headers
 
 Every response sets `X-Content-Type-Options: nosniff`,

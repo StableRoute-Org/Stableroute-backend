@@ -39,6 +39,7 @@ type ErrorResponseExtra = Record<string, unknown>;
 export type ApiErrorCode =
   | "not_found"
   | "invalid_request"
+  | "invalid_json"
   | "unauthorized"
   | "forbidden"
   | "rate_limited"
@@ -1547,6 +1548,20 @@ app.use((req: Request, res: Response) => {
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (err && typeof err === "object" && "type" in err && (err as { type: string }).type === "entity.too.large") {
     sendError(res, req, 413, "payload_too_large", "request body exceeds the 100 KiB limit");
+    return;
+  }
+  // Malformed JSON body. express.json() raises a SyntaxError tagged with
+  // `type: "entity.parse.failed"`; map it to a canonical 400 client error
+  // instead of letting it fall through to the generic 500. The message is
+  // fixed so the raw parser text (which can echo fragments of the input) is
+  // never leaked back to the caller.
+  if (
+    err &&
+    typeof err === "object" &&
+    (("type" in err && (err as { type: string }).type === "entity.parse.failed") ||
+      err instanceof SyntaxError)
+  ) {
+    sendError(res, req, 400, "invalid_json", "request body is not valid JSON");
     return;
   }
   const isProduction = process.env.NODE_ENV === "production";

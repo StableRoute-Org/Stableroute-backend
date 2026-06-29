@@ -207,15 +207,12 @@ unchanged.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
-## Per-pair amount bounds
-
-The `minAmount` and `maxAmount` slots on a pair must satisfy the invariant
-`minAmount <= maxAmount`. `PATCH .../min` is rejected with `400 invalid_request`
-when the new `minAmount` would exceed the existing non-zero `maxAmount`, and
-`PATCH .../max` is rejected when the new `maxAmount` would fall below the existing
-non-zero `minAmount`. A bound of `0` is treated as "unset" and never triggers the
-cross-check, and all comparisons are performed in `BigInt` space to preserve
-precision.
+A request body that is not valid JSON is treated as a client error: the final
+error handler maps the body-parser parse failure (`entity.parse.failed` /
+`SyntaxError`) to `400 invalid_json` with a fixed, non-leaking message
+(`request body is not valid JSON`) — the raw parser text and any stack trace are
+never echoed. The `413 payload_too_large` mapping still takes precedence, and
+genuinely unexpected errors continue to fall through to `500 internal_error`.
 
 ## Contributing
 

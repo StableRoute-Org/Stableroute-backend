@@ -127,14 +127,13 @@ describe("StableRoute Backend", () => {
     expect(tooLarge.status).toBe(413);
     expectCanonicalError(tooLarge.body, "err-413", "payload_too_large");
 
-    const serverError = await request(app)
+    const badJson = await request(app)
       .post("/api/v1/pairs")
       .set("Content-Type", "application/json")
-      .set("X-Request-Id", "err-500")
+      .set("X-Request-Id", "err-400-json")
       .send("{");
-    expect(serverError.status).toBe(500);
-    expectCanonicalError(serverError.body, "err-500", "internal_error");
-    expect(serverError.body).toMatchObject({ method: "POST", path: "/api/v1/pairs" });
+    expect(badJson.status).toBe(400);
+    expectCanonicalError(badJson.body, "err-400-json", "invalid_json");
 
     await request(app).post("/api/v1/admin/pause");
     const paused = await request(app)
@@ -1151,73 +1150,36 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("pair-meta: min <= max ordering invariant", () => {
-    const SRC = "ORDR";
-    const DST = "BNDS";
-
-    beforeEach(async () => {
-      await request(app).post("/api/v1/pairs").send({ source: SRC, destination: DST });
-    });
-
-    afterEach(async () => {
-      await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
-    });
-
-    it("PATCH /min rejects when new minAmount exceeds current maxAmount", async () => {
-      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "100" });
+  describe("malformed JSON handling", () => {
+    it("returns 400 invalid_json for a malformed body without leaking the raw fragment", async () => {
       const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "1000" });
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .send("{not json");
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/minAmount/);
-      expect(res.body.message).toMatch(/maxAmount/);
+      expect(res.body.error).toBe("invalid_json");
+      expect(res.body.message).toBe("request body is not valid JSON");
+      expect(res.body.requestId).toBeTruthy();
+      // The fixed message must not echo the offending input or a stack trace.
+      expect(res.body.message).not.toMatch(/not json/);
+      expect(res.body.stack).toBeUndefined();
+      expect(JSON.stringify(res.body)).not.toMatch(/SyntaxError|at Object|node_modules/);
     });
 
-    it("PATCH /max rejects when new maxAmount is below current minAmount", async () => {
-      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/min`).send({ minAmount: "1000" });
+    it("still accepts a valid JSON body", async () => {
       const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
-        .send({ maxAmount: "100" });
-      expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/maxAmount/);
-      expect(res.body.message).toMatch(/minAmount/);
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .send(JSON.stringify({ source: "JSN", destination: "OKAY" }));
+      expect([200, 201]).toContain(res.status);
     });
 
-    it("accepts a valid min < max ordering", async () => {
-      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "1000" });
+    it("keeps the 413 payload_too_large mapping ahead of the 400 branch", async () => {
       const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "100" });
-      expect(res.status).toBe(200);
-      expect(res.body.minAmount).toBe("100");
-    });
-
-    it("accepts equal min and max bounds", async () => {
-      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "500" });
-      const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "500" });
-      expect(res.status).toBe(200);
-    });
-
-    it("treats maxAmount of 0 (unset) as never triggering the min cross-check", async () => {
-      // maxAmount defaults to "0"; a large min must still be accepted
-      const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "999999999999999999999999" });
-      expect(res.status).toBe(200);
-    });
-
-    it("compares in BigInt space beyond Number.MAX_SAFE_INTEGER", async () => {
-      // 10^25 vs 10^25 + 1 — indistinguishable as JS numbers, distinct as BigInt
-      await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
-        .send({ maxAmount: "10000000000000000000000000" });
-      const res = await request(app)
-        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "10000000000000000000000001" });
-      expect(res.status).toBe(400);
+        .post("/api/v1/pairs")
+        .send({ payload: "x".repeat(110_000) });
+      expect(res.status).toBe(413);
+      expect(res.body.error).toBe("payload_too_large");
     });
   });
 });

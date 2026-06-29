@@ -15,6 +15,9 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
+  effectiveEventLogCap,
+  trimEventLog,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -68,6 +71,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path === "/api/v1/admin/unpause") return next();
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
+
+/** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
+const BULK_ABSOLUTE_MAX = 100_000;
 
 // Per-IP sliding-window rate limiter: 60 requests per 60 second window.
 // Disabled in test mode so the test suite can make many requests without
@@ -226,7 +232,8 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);
-  const limit = Math.min(EVENT_LOG_CAP, Math.max(1, Number(req.query.limit ?? 100)));
+  const cap = effectiveEventLogCap();
+  const limit = Math.min(cap, Math.max(1, Number(req.query.limit ?? 100)));
   const items = eventLog.filter((e) => e.ts >= since).slice(-limit);
   res.json({ items });
 });
@@ -406,7 +413,7 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems"] as const;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
       const v = req.body[k];
@@ -418,7 +425,14 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
         sendError(res, req, 400, "invalid_request", `bulkMaxItems cannot exceed ${BULK_ABSOLUTE_MAX}`);
         return;
       }
+      if (k === "eventLogCap" && v > EVENT_LOG_CAP_MAX) {
+        sendError(res, req, 400, "invalid_request", `eventLogCap cannot exceed ${EVENT_LOG_CAP_MAX}`);
+        return;
+      }
       config[k] = v;
+      // Trim the event log immediately when the cap is lowered so that the
+      // buffer stays within the new bound without waiting for the next write.
+      if (k === "eventLogCap") trimEventLog(v);
     }
   }
   res.json({ config });

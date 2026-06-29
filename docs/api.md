@@ -308,9 +308,13 @@ Prometheus exposition format.
 
 ### `GET /api/v1/events`
 
-Audit log (in-memory ring buffer, capped at 10 000 entries).
+Audit log (in-memory ring buffer). The maximum number of stored entries is
+controlled by the `eventLogCap` config key (default 10 000; see
+`PATCH /api/v1/config` below).
 
-- **Query:** `since` (epoch ms, default `0`), `limit` (1–10 000, default `100`).
+- **Query:** `since` (epoch ms, default `0`), `limit` (1–`eventLogCap`, default
+  `100`). The `limit` is clamped to the live `eventLogCap` value, so it always
+  stays in sync with the configured cap.
 - **Response 200:** `{ "items": [ { "id", "ts", "type", "payload" } ] }`.
 
 ---
@@ -323,13 +327,30 @@ Audit log (in-memory ring buffer, capped at 10 000 entries).
 
 ### `PATCH /api/v1/config`
 
-Update mutable config values. Only `rateLimitPerWindow`,
-`rateLimitWindowMs`, and `bulkMaxItems` are writable (`eventLogCap` is
-read-only).
+Update mutable config values at runtime. The writable keys are:
+
+| Key                  | Description                                                                     | Constraints                         |
+|----------------------|---------------------------------------------------------------------------------|-------------------------------------|
+| `rateLimitPerWindow` | Maximum requests allowed per IP per `rateLimitWindowMs`.                       | Positive integer.                   |
+| `rateLimitWindowMs`  | Sliding-window duration in milliseconds for the rate limiter.                   | Positive integer.                   |
+| `bulkMaxItems`       | Maximum number of items accepted by `POST /api/v1/quote/bulk`.                 | Positive integer, ≤ 100 000.        |
+| `eventLogCap`        | Maximum number of events kept in the in-memory ring buffer.                     | Positive integer, ≤ 1 000 000.      |
+
+**`eventLogCap` behaviour:**
+- The cap is enforced at write time in `recordEvent` — every call to
+  `recordEvent` evicts the oldest entry if the buffer exceeds the configured
+  value.
+- When you lower `eventLogCap` via this endpoint the existing buffer is trimmed
+  **immediately** (oldest-first) down to the new cap, so memory is released
+  without waiting for the next write.
+- Setting `eventLogCap` above `1 000 000` is rejected with `400
+  invalid_request` to prevent unbounded memory allocation.
 
 - **Body:** any subset of the writable keys, each a positive integer.
 - **Response 200:** `{ "config": { … } }` with the merged config.
-- **Errors:** `400 invalid_request` if a provided value is not a positive integer.
+- **Errors:** `400 invalid_request` if a provided value is not a positive
+  integer, or if `eventLogCap` exceeds 1 000 000, or if `bulkMaxItems`
+  exceeds its absolute maximum.
 
 ---
 

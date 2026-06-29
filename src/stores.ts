@@ -47,6 +47,12 @@ export type WebhookRecord = {
 /** Hard cap on event-log size; oldest entries are evicted beyond this. */
 export const EVENT_LOG_CAP = 10_000;
 
+/**
+ * Absolute maximum value accepted for `eventLogCap` in PATCH /api/v1/config.
+ * Prevents malicious or accidental unbounded memory allocation.
+ */
+export const EVENT_LOG_CAP_MAX = 1_000_000;
+
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 /** Fresh pair-meta with all fields zeroed. */
@@ -113,15 +119,48 @@ export const pairKey = (source: string, dest: string): string =>
   `${source}::${dest}`;
 
 /**
- * Append an event to the bounded event log, evicting the oldest entry
- * when the log exceeds {@link EVENT_LOG_CAP}.
+ * Resolve the effective event-log cap from the live runtime config.
+ *
+ * The config value takes precedence when it is a positive integer within the
+ * allowed range. Falls back to {@link EVENT_LOG_CAP} if the config value is
+ * absent, non-integer, zero, or above {@link EVENT_LOG_CAP_MAX}.
+ */
+export const effectiveEventLogCap = (): number => {
+  const v = config.eventLogCap;
+  if (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= EVENT_LOG_CAP_MAX) {
+    return v;
+  }
+  return EVENT_LOG_CAP;
+};
+
+/**
+ * Trim `eventLog` down to `cap` entries, removing the oldest first.
+ * No-op when the log is already within the cap.
+ */
+export const trimEventLog = (cap: number): void => {
+  const excess = eventLog.length - cap;
+  if (excess > 0) eventLog.splice(0, excess);
+};
+
+/**
+ * Append an event to the bounded event log, evicting the oldest entry when
+ * the log exceeds the effective cap sourced from `config.eventLogCap`.
+ *
+ * The effective cap is resolved at write time so that operators who lower
+ * `eventLogCap` via PATCH /api/v1/config see the tighter bound applied
+ * immediately on the next write. Use {@link trimEventLog} to shrink the
+ * existing buffer proactively after a cap change.
+ *
+ * @param type    - Dot-namespaced event type string (e.g. `"pair.registered"`).
+ * @param payload - Arbitrary key/value metadata attached to the event.
  */
 export const recordEvent = (
   type: string,
   payload: Record<string, unknown>
 ): void => {
   eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
-  if (eventLog.length > EVENT_LOG_CAP) eventLog.shift();
+  const cap = effectiveEventLogCap();
+  if (eventLog.length > cap) eventLog.shift();
 };
 
 /**

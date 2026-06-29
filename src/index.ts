@@ -74,6 +74,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+/** Hard upper bound for the bulkMaxItems config key. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -305,77 +307,100 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   });
 });
 
-app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { liquidity } = req.body ?? {};
-  if (typeof liquidity !== "string" || !/^[0-9]{1,39}$/.test(liquidity)) {
-    sendError(res, req, 400, "invalid_request", "liquidity must be a non-negative integer string");
-    return;
-  }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.liquidity = liquidity;
-  pairMeta.set(k, meta);
-  res.json({ source, destination, ...meta });
-});
+/**
+ * Factory that creates an Express PATCH handler for a single `PairMeta` field.
+ *
+ * All four per-pair PATCH routes share the same flow:
+ *   1. Resolve the pair key from `:source` / `:destination` params.
+ *   2. Guard with a 404 if the pair is not registered.
+ *   3. Validate the inbound value with the field-specific `validate` function.
+ *   4. Mutate exactly the bound `field` on the stored metadata.
+ *   5. Respond with `{ source, destination, ...meta }`.
+ *
+ * Binding the field name at registration time means the handler can never
+ * accidentally mutate a different field, even if the descriptor table is
+ * extended in the future.
+ *
+ * @param field        - The key of `PairMeta` this handler is responsible for.
+ * @param bodyKey      - The request-body property name carrying the incoming value.
+ * @param validate     - Returns `true` when the value is acceptable, `false` to reject.
+ * @param errorMessage - The `message` string sent in the 400 response body.
+ */
+const makePairMetaPatch = <K extends keyof PairMeta>(
+  field: K,
+  bodyKey: string,
+  validate: (v: unknown) => boolean,
+  errorMessage: string
+) =>
+  (req: Request, res: Response): void => {
+    const { source, destination } = req.params;
+    const k = pairKey(source, destination);
+    if (!pairRegistry.has(k)) {
+      sendError(res, req, 404, "not_found", "pair not registered");
+      return;
+    }
+    const value = (req.body ?? {})[bodyKey] as unknown;
+    if (!validate(value)) {
+      sendError(res, req, 400, "invalid_request", errorMessage);
+      return;
+    }
+    const meta = pairMeta.get(k) ?? defaultMeta();
+    (meta as Record<string, unknown>)[field] = value;
+    pairMeta.set(k, meta);
+    res.json({ source, destination, ...meta });
+  };
 
-app.patch("/api/v1/pairs/:source/:destination/max", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { maxAmount } = req.body ?? {};
-  if (typeof maxAmount !== "string" || !/^[1-9][0-9]{0,38}$/.test(maxAmount)) {
-    sendError(res, req, 400, "invalid_request", "maxAmount must be a positive integer string");
-    return;
-  }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.maxAmount = maxAmount;
-  pairMeta.set(k, meta);
-  res.json({ source, destination, ...meta });
-});
+/**
+ * Descriptor table driving the four per-pair PATCH routes.
+ * Each entry maps a URL suffix to its PairMeta field, body key, validator, and
+ * error message — the only dimensions that differ between the four handlers.
+ * Reuses the same regexes / number checks as the original inline handlers.
+ */
+const pairMetaPatchDescriptors: Array<{
+  suffix: string;
+  field: keyof PairMeta;
+  bodyKey: string;
+  validate: (v: unknown) => boolean;
+  errorMessage: string;
+}> = [
+  {
+    suffix: "liquidity",
+    field: "liquidity",
+    bodyKey: "liquidity",
+    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    errorMessage: "liquidity must be a non-negative integer string",
+  },
+  {
+    suffix: "max",
+    field: "maxAmount",
+    bodyKey: "maxAmount",
+    validate: (v) => typeof v === "string" && /^[1-9][0-9]{0,38}$/.test(v),
+    errorMessage: "maxAmount must be a positive integer string",
+  },
+  {
+    suffix: "min",
+    field: "minAmount",
+    bodyKey: "minAmount",
+    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    errorMessage: "minAmount must be a non-negative integer string",
+  },
+  {
+    suffix: "fee_bps",
+    field: "feeBps",
+    bodyKey: "feeBps",
+    validate: (v) =>
+      typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000,
+    errorMessage: "feeBps must be an integer in [0,1000]",
+  },
+];
 
-app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { minAmount } = req.body ?? {};
-  if (typeof minAmount !== "string" || !/^[0-9]{1,39}$/.test(minAmount)) {
-    sendError(res, req, 400, "invalid_request", "minAmount must be a non-negative integer string");
-    return;
-  }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.minAmount = minAmount;
-  pairMeta.set(k, meta);
-  res.json({ source, destination, ...meta });
-});
-
-app.patch("/api/v1/pairs/:source/:destination/fee_bps", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const { feeBps } = req.body ?? {};
-  if (typeof feeBps !== "number" || !Number.isInteger(feeBps) || feeBps < 0 || feeBps > 1000) {
-    sendError(res, req, 400, "invalid_request", "feeBps must be an integer in [0,1000]");
-    return;
-  }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.feeBps = feeBps;
-  pairMeta.set(k, meta);
-  res.json({ source, destination, ...meta });
-});
+// Register each descriptor as a PATCH route.
+for (const { suffix, field, bodyKey, validate, errorMessage } of pairMetaPatchDescriptors) {
+  app.patch(
+    `/api/v1/pairs/:source/:destination/${suffix}`,
+    makePairMetaPatch(field, bodyKey, validate, errorMessage)
+  );
+}
 
 /** Unregister a pair. */
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {

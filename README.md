@@ -203,6 +203,21 @@ Payloads never include secret material — the raw API key and any webhook
 secret are deliberately excluded. The existing `EVENT_LOG_CAP` eviction applies
 unchanged.
 
+## Request correlation (`X-Request-Id`)
+
+Every request is assigned a correlation id that is echoed in the `X-Request-Id`
+response header and included as `requestId` in every JSON error body.
+
+**Accepted format for inbound `X-Request-Id`:**
+- Characters: `A–Z`, `a–z`, `0–9`, `.`, `_`, `-` (allowlist only — no control
+  characters, spaces, CR, LF, or other non-token bytes).
+- Length: 1–200 characters.
+
+Values that pass this check are echoed back unchanged. Values that fail — including
+anything containing CRLF sequences or other injection vectors — are silently
+replaced with a freshly generated UUID v4. This prevents header-injection and
+log-injection attacks.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

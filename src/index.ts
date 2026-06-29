@@ -28,6 +28,36 @@ import {
   type EventType,
 } from "./stores";
 
+/** Sentinel key used by the deep-health probe's scratch storage check. */
+const HEALTH_PROBE_KEY = "\x00health_probe";
+
+/** Maximum number of event-type entries per webhook subscription. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum length of a single event-type name string. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/** Event name prefixes reserved for internal use. */
+const WEBHOOK_RESERVED_PREFIXES: string[] = [];
+
+/**
+ * Evict rate-bucket entries older than the current window, then return the
+ * (now-pruned) bucket for `ip`.
+ */
+const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const existing = rateBuckets.get(ip) ?? [];
+  const bucket = existing.filter((t) => now - t < windowMs);
+  rateBuckets.set(ip, bucket);
+  return bucket;
+};
+
+/**
+ * Trim the event log to the given cap, removing the oldest entries first.
+ */
+const trimEventLog = (cap: number): void => {
+  while (eventLog.length > cap) eventLog.shift();
+};
+
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
@@ -294,21 +324,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
-
-/**
- * Evict stale timestamps from a rate-limit bucket and return the live ones.
- * A timestamp is stale when it falls outside the current sliding window.
- *
- * @param ip       - Client IP used to look up the bucket in {@link rateBuckets}.
- * @param now      - Current epoch-ms timestamp.
- * @param windowMs - Length of the sliding window in milliseconds.
- * @returns The pruned array of timestamps still within the window.
- */
-const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
-  const bucket = rateBuckets.get(ip) ?? [];
-  return bucket.filter((ts) => now - ts < windowMs);
-};
-
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -1353,7 +1368,7 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 });
 
 /** Absolute upper bound on the bulkMaxItems config field. */
-const BULK_ABSOLUTE_MAX = 10_000;
+const BULK_ABSOLUTE_MAX = 100_000;
 
 /**
  * Trim the event log in place to at most `newCap` entries, discarding the

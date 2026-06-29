@@ -14,10 +14,11 @@ module.exports = {
   testMatch: ["**/__tests__/**/*.test.ts"],
   moduleFileExtensions: ["ts", "js", "json"],
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts"],
-  // Output directory consumed by the CI artifact-upload step.
-  coverageDirectory: "coverage",
-  // lcov for tooling (Codecov, SonarQube, etc.); text-summary for the CI log.
-  coverageReporters: ["lcov", "text-summary", "html"],
+  globals: {
+    "ts-jest": {
+      diagnostics: false,
+    },
+  },
   // Coverage thresholds enforced in CI.
   // server.ts is now refactored into side-effect-free, exported functions
   // (createServer / registerSignalHandlers / start) and the actual listen is

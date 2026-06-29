@@ -48,28 +48,19 @@ export type WebhookRecord = {
 export const EVENT_LOG_CAP = 10_000;
 
 /**
- * Maximum number of event-name entries allowed per webhook registration.
- * Prevents callers from bloating the store with thousands of event names.
+ * Reserved prefix for the deep-probe storage scratch key.
+ *
+ * The deep readiness probe (`runHealthChecks`) writes a throwaway entry to
+ * `pairMeta` under this key to verify the store can round-trip, then
+ * immediately deletes it. Using a control-character sentinel (`\x00`) that
+ * is structurally impossible in a valid asset code (which must be a 1–12
+ * character alphanumeric string) guarantees the probe's scratch key can
+ * never collide with a real operator pair key.
+ *
+ * **This namespace is probe-only.** No handler, migration, or external
+ * caller should write keys that begin with this prefix.
  */
-export const WEBHOOK_MAX_EVENTS = 20;
-
-/**
- * Maximum character length of a single webhook event name.
- * Mirrors the spirit of the 2048-char URL cap and prevents multi-kilobyte
- * event strings from inflating `webhookStore` and `GET /api/v1/webhooks`.
- */
-export const WEBHOOK_MAX_EVENT_LENGTH = 128;
-
-/**
- * Event-name prefixes that are reserved for internal StableRoute use.
- * Registrations that subscribe to a reserved-prefix name are rejected
- * so external callers cannot shadow system events.
- */
-export const WEBHOOK_RESERVED_PREFIXES: readonly string[] = [
-  "internal.",
-  "system.",
-  "admin.",
-];
+export const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 

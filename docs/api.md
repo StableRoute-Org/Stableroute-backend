@@ -163,7 +163,21 @@ Register (or refresh) a pair.
 - **Response 201:** first registration — `{ source, destination, registered: true }`.
 - **Response 200:** idempotent re-registration of an existing pair (same body).
 - **Errors:** `400 invalid_request` if `source`/`destination` are not 1–12
-  char strings, or if they are equal.
+  char strings, if they are equal, or if either code begins with the
+  reserved prefix `__health` (see [Reserved probe namespace](#reserved-probe-namespace) below).
+
+#### Reserved probe namespace
+
+The deep readiness probe (`GET /api/v1/health/deep`) uses a scratch entry in
+the internal `pairMeta` store to verify read/write/delete round-trips. The
+scratch key is a fixed sentinel (`HEALTH_PROBE_KEY`) prefixed with the NUL
+control character (`\x00`), which is structurally impossible in any valid asset
+code and therefore can never collide with operator data.
+
+As an additional guard, `POST /api/v1/pairs` rejects any asset code that starts
+with `__health` (case-sensitive). This prevents a caller from registering a pair
+whose derived key could approximate the reserved namespace and be silently
+deleted by a concurrent probe run.
 
 ### `GET /api/v1/pairs/:source/:destination`
 

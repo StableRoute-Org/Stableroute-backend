@@ -15,9 +15,7 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
-  WEBHOOK_MAX_EVENTS,
-  WEBHOOK_MAX_EVENT_LENGTH,
-  WEBHOOK_RESERVED_PREFIXES,
+  HEALTH_PROBE_KEY,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -99,8 +97,7 @@ const BULK_ABSOLUTE_MAX = 10_000;
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-// Hard ceiling for the bulk-quote item cap. The operator-configurable
-// config.bulkMaxItems value cannot exceed this constant.
+/** Absolute ceiling for the `bulkMaxItems` config value (operator-configurable bulk quote cap). */
 const BULK_ABSOLUTE_MAX = 10_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
@@ -223,9 +220,11 @@ const runHealthChecks = (): Array<{ name: string; status: "ok" | "fail"; duratio
   const checks: Array<{ name: string; status: "ok" | "fail"; durationMs: number }> = [];
 
   // Storage check — verifies that the in-memory store can write and read back.
+  // Uses the reserved HEALTH_PROBE_KEY sentinel (prefixed with a NUL control
+  // character) so the scratch entry can never collide with a real pair key.
   const storageStart = Date.now();
   try {
-    const testKey = `__health_${storageStart}_${Math.random()}`;
+    const testKey = HEALTH_PROBE_KEY;
     pairMeta.set(testKey, defaultMeta());
     const readback = pairMeta.get(testKey);
     pairMeta.delete(testKey);
@@ -675,8 +674,16 @@ app.post("/api/v1/pairs", (req: Request, res: Response) => {
 // Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
 // anything that is not a single string so an array param can't smuggle
 // through as a "truthy" value.
+//
+// Codes beginning with "__health" are explicitly rejected to prevent a
+// caller from registering a pair whose derived pairKey could collide with
+// the deep-probe's reserved scratch namespace (HEALTH_PROBE_KEY), which
+// would allow a concurrent probe delete to silently drop operator data.
 const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" && v.length > 0 && v.length <= 12;
+  typeof v === "string" &&
+  v.length > 0 &&
+  v.length <= 12 &&
+  !v.startsWith("__health");
 
 // Quote amount: a base-units integer string. Parsed via BigInt so we
 // never lose precision on amounts above Number.MAX_SAFE_INTEGER.

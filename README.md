@@ -110,6 +110,22 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Metrics
+
+`GET /api/v1/metrics` exposes Prometheus text exposition format
+(`text/plain; version=0.0.4`). Alongside `stableroute_pairs_total` and
+`stableroute_paused`, it emits label-free, constant-cardinality store-size and
+config gauges:
+
+| Metric                              | Source                          |
+| ----------------------------------- | ------------------------------- |
+| `stableroute_api_keys_total`        | Number of stored API keys.      |
+| `stableroute_webhooks_total`        | Number of registered webhooks.  |
+| `stableroute_event_log_size`        | Current event-log depth.        |
+| `stableroute_rate_limit_per_window` | Configured requests per window. |
+
+These carry no labels and never include raw secrets or URLs.
+
 ## OpenAPI spec
 
 The OpenAPI document is the single source of truth in `src/openapi.ts`

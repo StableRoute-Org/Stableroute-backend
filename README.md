@@ -12,8 +12,11 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-See [docs/events.md](docs/events.md) for the event taxonomy, `AppEvent`
-envelope schema, webhook subscription model, and JSON payload examples.
+## Architecture & request lifecycle
+
+See [docs/architecture.md](docs/architecture.md) for the in-memory store model,
+the Express middleware chain in execution order (with each layer's purpose and
+rationale), a Mermaid request-flow diagram, and the canonical error envelope.
 
 ## Prerequisites
 

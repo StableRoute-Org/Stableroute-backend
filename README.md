@@ -110,6 +110,23 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
+## Stats snapshot
+
+`GET /api/v1/stats` is an unauthenticated, side-effect-free snapshot of system
+shape, derived in O(n) from the in-memory stores. It returns:
+
+| Field            | Meaning                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| `totalPairs`     | Number of registered pairs (kept for backward compatibility).  |
+| `paused`         | Service pause flag (kept for backward compatibility).          |
+| `totalApiKeys`   | Number of stored API keys.                                     |
+| `totalWebhooks`  | Number of registered webhooks.                                 |
+| `totalEvents`    | Number of entries in the audit event log.                      |
+| `pairsWithFee`   | Pairs whose `feeBps > 0`.                                      |
+| `distinctAssets` | Unique asset codes across all registered pairs.                |
+
+No raw keys, webhook URLs, or event payloads appear in the response.
+
 ## OpenAPI spec
 
 The OpenAPI document is the single source of truth in `src/openapi.ts`

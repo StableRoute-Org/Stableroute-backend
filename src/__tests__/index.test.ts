@@ -581,6 +581,62 @@ describe("StableRoute Backend", () => {
       const res = await request(app).delete("/api/v1/webhooks/nonexistent-id");
       expect(res.status).toBe(404);
     });
+
+    it("rejects events array that exceeds the max count", async () => {
+      const tooMany = Array.from({ length: 21 }, (_, i) => `event.${i}`);
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/h", events: tooMany });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("accepts events array at exactly the max count", async () => {
+      const atLimit = Array.from({ length: 20 }, (_, i) => `event.${i}`);
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/h", events: atLimit });
+      expect(res.status).toBe(201);
+    });
+
+    it("rejects event names that exceed the max length", async () => {
+      const longName = "a".repeat(129);
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/h", events: [longName] });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects blank and whitespace-only event names", async () => {
+      for (const name of ["", "   ", "\t"]) {
+        const res = await request(app)
+          .post("/api/v1/webhooks")
+          .send({ url: "https://example.com/h", events: [name] });
+        expect(res.status).toBe(400);
+      }
+    });
+
+    it("rejects event names with reserved prefixes", async () => {
+      for (const name of ["internal.foo", "system.bar", "admin.baz"]) {
+        const res = await request(app)
+          .post("/api/v1/webhooks")
+          .send({ url: "https://example.com/h", events: [name] });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      }
+    });
+
+    it("deduplicates event names before storing", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({
+          url: "https://example.com/h",
+          events: ["pair.registered", "pair.registered", "pair.updated"],
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.events).toEqual(["pair.registered", "pair.updated"]);
+    });
   });
 
   describe("admin endpoints", () => {

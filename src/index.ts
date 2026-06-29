@@ -15,6 +15,9 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  WEBHOOK_MAX_EVENTS,
+  WEBHOOK_MAX_EVENT_LENGTH,
+  WEBHOOK_RESERVED_PREFIXES,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -74,6 +77,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+/** Hard upper bound for the bulkMaxItems config key. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -288,9 +293,29 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
     return;
   }
+  if (events.length > WEBHOOK_MAX_EVENTS) {
+    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    return;
+  }
+  for (const name of events as string[]) {
+    if (name.trim().length === 0) {
+      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      return;
+    }
+    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
+      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      return;
+    }
+    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return;
+    }
+  }
+  // Deduplicate event names before storing
+  const deduped = [...new Set(events as string[])];
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  webhookStore.set(id, { url, events, createdAt: Date.now() });
-  res.status(201).json({ id, url, events });
+  webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
+  res.status(201).json({ id, url, events: deduped });
 });
 
 /** Aggregate read of every per-pair slot in one round-trip. */

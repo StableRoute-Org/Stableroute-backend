@@ -257,9 +257,17 @@ Delete by the 8-character key prefix.
 - **Body:** `{ "url": "https://example.com/hook", "events": ["pair.registered"] }`.
   `url` must be `http(s)` and ≤ 2048 chars; `events` must be a non-empty
   array of strings.
+- **Events limits:**
+  - At most **20** entries per registration (`WEBHOOK_MAX_EVENTS`).
+  - Each event name must be **≤ 128 characters** (`WEBHOOK_MAX_EVENT_LENGTH`).
+  - Event names must not be blank or whitespace-only.
+  - Event names must not start with a reserved prefix: `internal.`, `system.`,
+    or `admin.` (reserved for internal StableRoute use).
+  - Duplicate event names are **silently deduplicated** before storage.
 - **Response 201:** `{ "id": "wh_<hex>", "url", "events" }`.
+  The `events` array in the response reflects the deduplicated list.
 - **Errors:** `400 invalid_request` if `url` is invalid, or if `events`
-  is empty / not a string array.
+  violates any of the rules above.
 
 ### `GET /api/v1/webhooks`
 

@@ -22,6 +22,7 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "pair.meta.reset",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",
@@ -64,6 +65,8 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /** Scopes granted to this key. Absent on legacy keys with no scope restrictions. */
+  scopes?: string[];
   /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.
@@ -167,6 +170,16 @@ export let readOnly = false;
  */
 export const pairKey = (source: string, dest: string): string =>
   `${source}::${dest}`;
+
+/**
+ * Return the effective event log capacity: the runtime-configured value from
+ * `config.eventLogCap` when present, otherwise the module-level default
+ * {@link EVENT_LOG_CAP}.
+ */
+const effectiveEventLogCap = (): number =>
+  typeof config.eventLogCap === "number" && config.eventLogCap > 0
+    ? config.eventLogCap
+    : EVENT_LOG_CAP;
 
 /**
  * Append an event to the bounded event log, evicting the oldest entry

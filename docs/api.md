@@ -310,8 +310,21 @@ Prometheus exposition format.
 
 Audit log (in-memory ring buffer, capped at 10 000 entries).
 
-- **Query:** `since` (epoch ms, default `0`), `limit` (1–10 000, default `100`).
+- **Query:**
+  - `since` — epoch ms timestamp; only events with `ts >= since` are included (default `0`).
+  - `limit` — maximum number of events to return, clamped to `[1, 10 000]` (default `100`).
+  - `type` *(optional)* — filter results to events of exactly this type. Must be one of the
+    canonical `EventType` values: `pair.registered`, `pair.refreshed`, `pair.unregistered`.
+    When omitted all event types are returned. `since` and `limit` are applied after the
+    type filter.
 - **Response 200:** `{ "items": [ { "id", "ts", "type", "payload" } ] }`.
+- **Errors:** `400 invalid_request` if `type` is supplied but is not one of the known event types.
+
+**Example — fetch only `pair.unregistered` events in the last window:**
+
+```bash
+curl 'http://localhost:3001/api/v1/events?type=pair.unregistered&limit=50'
+```
 
 ---
 

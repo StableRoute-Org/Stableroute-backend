@@ -15,10 +15,12 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  KNOWN_EVENT_TYPES,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
   type WebhookRecord,
+  type EventType,
 } from "./stores";
 import { paused } from "./stores";
 
@@ -74,6 +76,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Absolute upper-bound for the `bulkMaxItems` config key. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -227,8 +232,30 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
 app.get("/api/v1/events", (req: Request, res: Response) => {
   const since = Number(req.query.since ?? 0);
   const limit = Math.min(EVENT_LOG_CAP, Math.max(1, Number(req.query.limit ?? 100)));
-  const items = eventLog.filter((e) => e.ts >= since).slice(-limit);
-  res.json({ items });
+
+  // Optional type filter: when present, must be one of the known event types.
+  const typeParam = req.query.type;
+  if (typeParam !== undefined) {
+    if (
+      typeof typeParam !== "string" ||
+      !(KNOWN_EVENT_TYPES as ReadonlyArray<string>).includes(typeParam)
+    ) {
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `type must be one of: ${KNOWN_EVENT_TYPES.join(", ")}`
+      );
+      return;
+    }
+  }
+
+  let items = eventLog.filter((e) => e.ts >= since);
+  if (typeParam !== undefined) {
+    items = items.filter((e) => e.type === (typeParam as EventType));
+  }
+  res.json({ items: items.slice(-limit) });
 });
 
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {

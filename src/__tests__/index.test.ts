@@ -1,5 +1,6 @@
 import request from "supertest";
 import app from "../index";
+import { resetStores } from "../stores";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -731,6 +732,98 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("GET /api/v1/events — type filter", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("filters events by a valid type", async () => {
+      // Register a pair (pair.registered) then unregister it (pair.unregistered)
+      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app).delete("/api/v1/pairs/FIL/TER");
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("excludes events of other types when type param is set", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app).delete("/api/v1/pairs/FIL/TER");
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.unregistered")).toBe(true);
+      // No pair.registered events should appear
+      expect(res.body.items.some((e: { type: string }) => e.type === "pair.registered")).toBe(false);
+    });
+
+    it("returns 400 with invalid_request for an unknown event type", async () => {
+      const res = await request(app).get("/api/v1/events").query({ type: "unknown.event" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/pair\.registered/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 with invalid_request for an injection attempt", async () => {
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered; DROP TABLE" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("returns empty items when type filter matches no events", async () => {
+      // Only register a pair (no unregister) — so pair.unregistered will not appear
+      await request(app).post("/api/v1/pairs").send({ source: "NO", destination: "MATCH" });
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(0);
+    });
+
+    it("type filter composes correctly with since param", async () => {
+      const before = Date.now() - 1;
+      await request(app).post("/api/v1/pairs").send({ source: "SNC", destination: "TST" });
+
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered", since: before });
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.items.every((e: { type: string; ts: number }) =>
+        e.type === "pair.registered" && e.ts >= before
+      )).toBe(true);
+    });
+
+    it("type filter composes correctly with limit param", async () => {
+      // Register multiple pairs to produce multiple events
+      for (let i = 0; i < 5; i++) {
+        await request(app).post("/api/v1/pairs").send({ source: `LIM${i}`, destination: "TST" });
+      }
+
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered", limit: 2 });
+      expect(res.status).toBe(200);
+      // At most 2 items returned
+      expect(res.body.items.length).toBeLessThanOrEqual(2);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+    });
+
+    it("returns all events when type param is omitted", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "ALL", destination: "EVT" });
+      await request(app).delete("/api/v1/pairs/ALL/EVT");
+
+      const res = await request(app).get("/api/v1/events");
+      expect(res.status).toBe(200);
+      const types = new Set(res.body.items.map((e: { type: string }) => e.type));
+      // Both event types should be present
+      expect(types.has("pair.registered")).toBe(true);
+      expect(types.has("pair.unregistered")).toBe(true);
     });
   });
 });

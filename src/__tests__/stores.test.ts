@@ -12,6 +12,7 @@ import {
   recordEvent,
   resetStores,
   EVENT_LOG_CAP,
+  type EventType,
 } from "../stores";
 
 describe("stores module", () => {
@@ -48,24 +49,24 @@ describe("stores module", () => {
 
   describe("recordEvent", () => {
     it("appends an event with id, ts, type, and payload", () => {
-      recordEvent("test.event", { foo: "bar" });
+      recordEvent("pair.registered", { foo: "bar" });
       expect(eventLog.length).toBe(1);
       const evt = eventLog[0];
-      expect(evt.type).toBe("test.event");
+      expect(evt.type).toBe("pair.registered");
       expect(evt.payload).toEqual({ foo: "bar" });
       expect(typeof evt.id).toBe("string");
       expect(typeof evt.ts).toBe("number");
     });
 
     it("evicts oldest entry beyond EVENT_LOG_CAP", () => {
-      // Fill to cap
+      // Fill to cap using a valid EventType cast for test scaffolding
       for (let i = 0; i < EVENT_LOG_CAP; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: {} });
+        eventLog.push({ id: `e${i}`, ts: i, type: "pair.refreshed" as EventType, payload: {} });
       }
-      recordEvent("overflow", { n: 1 });
+      recordEvent("pair.unregistered", { n: 1 });
       expect(eventLog.length).toBe(EVENT_LOG_CAP);
-      expect(eventLog[0].type).toBe("fill"); // oldest of original fill
-      expect(eventLog[eventLog.length - 1].type).toBe("overflow");
+      expect(eventLog[0].type).toBe("pair.refreshed"); // oldest of original fill
+      expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
     });
   });
 
@@ -100,7 +101,7 @@ describe("stores module", () => {
     });
 
     it("clears eventLog", () => {
-      recordEvent("test", {});
+      recordEvent("pair.registered", {});
       expect(eventLog.length).toBeGreaterThan(0);
       resetStores();
       expect(eventLog.length).toBe(0);

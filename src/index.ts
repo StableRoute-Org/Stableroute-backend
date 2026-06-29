@@ -1362,6 +1362,22 @@ const parseAmount = (v: unknown): bigint | null => {
  * @param feeBps  - Fee rate in basis points (0–1000, where 10000 bps = 100 %).
  * @returns An object with `feeAmount` and `netAmount` as `bigint` values.
  */
+/**
+ * Compute the minimum received amount after applying slippage tolerance.
+ *
+ * Uses BigInt arithmetic to preserve precision on amounts above
+ * Number.MAX_SAFE_INTEGER. The formula is:
+ *   min_received = amount - floor(amount * slippageBps / 10_000)
+ *
+ * @param amount      - The output amount to apply slippage against (must be > 0n).
+ * @param slippageBps - Slippage tolerance in basis points (0–1000).
+ * @returns The minimum guaranteed received amount.
+ */
+export const applySlippage = (amount: bigint, slippageBps: number): bigint => {
+  const slippageAmount = (amount * BigInt(slippageBps)) / 10_000n;
+  return amount - slippageAmount;
+};
+
 export const applyFee = (
   amount: bigint,
   feeBps: number
@@ -1378,13 +1394,24 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
   }
-  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
-    const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
+  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown; slippage_bps?: unknown }, i: number) => {
+    const { source_asset: rawSource, dest_asset: rawDest, amount, slippage_bps: rawSlippage } = it ?? {};
     const source_asset = normalizeAsset(rawSource);
     const dest_asset = normalizeAsset(rawDest);
-    if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
+    const parsedAmt = parseAmount(amount);
+    if (source_asset === null || dest_asset === null || parsedAmt === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
+    // Validate per-item slippage_bps (optional, integer in [0, 1000], default 0).
+    let slippage_bps = 0;
+    if (rawSlippage !== undefined) {
+      const sparsed = typeof rawSlippage === "number" && Number.isInteger(rawSlippage) ? rawSlippage : -1;
+      if (sparsed < 0 || sparsed > 1000) {
+        return { index: i, ok: false, error: "invalid_slippage_bps" };
+      }
+      slippage_bps = sparsed;
+    }
+    const min_received = applySlippage(parsedAmt, slippage_bps);
     return {
       index: i,
       ok: true,
@@ -1392,13 +1419,15 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       dest_asset,
       amount: String(amount),
       estimated_rate: "1.0",
+      slippage_bps,
+      min_received: min_received.toString(),
     };
   });
   res.json({ results });
 });
 
 app.get("/api/v1/quote", (req: Request, res: Response) => {
-  const { source_asset: rawSource, dest_asset: rawDest, amount } = req.query;
+  const { source_asset: rawSource, dest_asset: rawDest, amount, slippage_bps: rawSlippage } = req.query;
 
   if (!rawSource || !rawDest || !amount) {
     return sendError(
@@ -1434,8 +1463,19 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
+  // Parse optional slippage_bps (integer in [0, 1000], default 0).
+  let slippage_bps = 0;
+  if (rawSlippage !== undefined) {
+    const parsed = parseIntegerQueryParam(rawSlippage, 0);
+    if (parsed === null || parsed < 0 || parsed > 1000) {
+      return sendError(res, req, 400, "invalid_request", "slippage_bps must be an integer in [0, 1000]");
+    }
+    slippage_bps = parsed;
+  }
+
   const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
   const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
+  const min_received = applySlippage(netAmount, slippage_bps);
 
   res.json({
     source_asset,
@@ -1446,6 +1486,8 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     feeBps: meta.feeBps,
     feeAmount: feeAmount.toString(),
     netAmount: netAmount.toString(),
+    slippage_bps,
+    min_received: min_received.toString(),
   });
 });
 

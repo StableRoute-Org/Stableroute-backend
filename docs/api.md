@@ -210,6 +210,31 @@ Get a single route quote. All three params are query-string params.
   not 1–12 char strings, if `source_asset === dest_asset`, or if `amount`
   is not a valid positive integer string.
 
+### `GET /api/v1/quote/reverse`
+
+Reverse quote: given a target `output` amount the recipient should receive,
+returns the gross `requiredInput` the sender must provide (after the pair's
+fee is deducted). The required input is rounded **up** so the recipient is
+never short-changed.
+
+- **Query:** `source_asset` (1–12 chars), `dest_asset` (1–12 chars),
+  `output` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
+- **Response 200:**
+  ```json
+  {
+    "source_asset": "USDC",
+    "dest_asset": "EURC",
+    "output": "10000",
+    "requiredInput": "10031",
+    "feeAmount": "31",
+    "feeBps": 30,
+    "route": ["USDC", "EURC"]
+  }
+  ```
+- **Errors:** `400 invalid_request` if any param is missing, if assets are
+  not 1–12 char strings, if `source_asset === dest_asset`, or if `output`
+  is not a valid positive integer string.
+
 ### `POST /api/v1/quote/bulk`
 
 Quote up to 100 items in one request. Invalid items are reported

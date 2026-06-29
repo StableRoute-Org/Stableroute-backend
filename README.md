@@ -178,6 +178,12 @@ npm run test:coverage
 
 Coverage reports are uploaded as a CI artifact on every push/PR.
 
+## Security
+
+For the vulnerability disclosure process, supported versions, and the gateway
+threat model (unauthenticated admin routes, wildcard CORS, webhook SSRF, and
+more) see [SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT

@@ -14,6 +14,7 @@ import {
   trimEventLog,
   effectiveEventLogCap,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
   type EventType,
 } from "../stores";
 
@@ -74,21 +75,21 @@ describe("stores module", () => {
     it("evicts based on config.eventLogCap when configured to a lower value", () => {
       config.eventLogCap = 5;
       for (let i = 0; i < 5; i++) {
-        recordEvent("fill", { i });
+        recordEvent("pair.registered", { i });
       }
       expect(eventLog.length).toBe(5);
-      recordEvent("overflow", { n: 1 });
+      recordEvent("pair.unregistered", { n: 1 });
       expect(eventLog.length).toBe(5);
-      expect(eventLog[eventLog.length - 1].type).toBe("overflow");
+      expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
     });
 
     it("evicts with a cap of 1 (edge case)", () => {
       config.eventLogCap = 1;
-      recordEvent("first", {});
+      recordEvent("pair.registered", {});
       expect(eventLog.length).toBe(1);
-      recordEvent("second", {});
+      recordEvent("pair.unregistered", {});
       expect(eventLog.length).toBe(1);
-      expect(eventLog[0].type).toBe("second");
+      expect(eventLog[0].type).toBe("pair.unregistered");
     });
 
     it("falls back to EVENT_LOG_CAP if config.eventLogCap is zero or invalid", () => {
@@ -123,7 +124,7 @@ describe("stores module", () => {
   describe("trimEventLog", () => {
     it("removes oldest entries to fit within the new cap", () => {
       for (let i = 0; i < 10; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+        eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
       }
       trimEventLog(5);
       expect(eventLog.length).toBe(5);
@@ -134,14 +135,14 @@ describe("stores module", () => {
 
     it("is a no-op when log is already within the cap", () => {
       for (let i = 0; i < 3; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: {} });
+        eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: {} });
       }
       trimEventLog(10);
       expect(eventLog.length).toBe(3);
     });
 
     it("clears the entire log when cap is 0", () => {
-      eventLog.push({ id: "x", ts: 1, type: "fill", payload: {} });
+      eventLog.push({ id: "x", ts: 1, type: "pair.registered" as EventType, payload: {} });
       trimEventLog(0);
       expect(eventLog.length).toBe(0);
     });

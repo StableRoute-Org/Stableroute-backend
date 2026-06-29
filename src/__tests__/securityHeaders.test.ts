@@ -1,4 +1,4 @@
-import request from "supertest";
+import request, { type Response } from "supertest";
 import app from "../index";
 
 const ROUTES = [
@@ -18,10 +18,10 @@ const SECURITY_HEADERS: [string, string | RegExp][] = [
 describe("Security headers on every response", () => {
   for (const { method, path } of ROUTES) {
     describe(`${method.toUpperCase()} ${path}`, () => {
-      let res: Awaited<ReturnType<typeof request>>;
+      let res: Response;
 
       beforeAll(async () => {
-        res = await (request(app) as Record<string, CallableFunction>)[method](path);
+        res = await (request(app) as unknown as Record<string, CallableFunction>)[method](path);
       });
 
       for (const [header, expected] of SECURITY_HEADERS) {

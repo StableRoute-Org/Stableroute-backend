@@ -18,9 +18,12 @@ import {
   pairKey,
   defaultMeta,
   recordEvent,
+  trimEventLog,
   EVENT_LOG_CAP,
   EVENT_LOG_CAP_MAX,
   KNOWN_EVENT_TYPES,
+  HEALTH_PROBE_KEY,
+  RATE_BUCKETS_MAX_IPS,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -326,13 +329,41 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /**
- * Evict stale timestamps from a rate-limit bucket.
+ * Return the in-window timestamp bucket for `ip`, evicting stale entries.
  *
- * Returns the subset of timestamps within the current window (now - windowMs).
+ * - Filters out entries older than `windowMs` from the stored bucket.
+ * - Deletes the map entry for the IP when the resulting bucket is empty.
+ * - When a new (unseen) IP arrives and the map is at {@link RATE_BUCKETS_MAX_IPS},
+ *   the oldest map entry is shed first to cap memory usage.
+ *
+ * The caller is responsible for pushing the current timestamp and
+ * re-writing the bucket back to `rateBuckets`.
+ *
+ * @param ip       - Remote IP string used as map key.
+ * @param now      - Current epoch-ms timestamp.
+ * @param windowMs - Size of the sliding rate-limit window in milliseconds.
+ * @returns        Filtered array of in-window timestamps for `ip`.
  */
-const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+export const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const cutoff = now - windowMs;
+
+  // Enforce IP ceiling: evict the oldest entry before inserting a new one.
+  if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
+    const firstKey = rateBuckets.keys().next().value as string;
+    rateBuckets.delete(firstKey);
+  }
+
   const existing = rateBuckets.get(ip) ?? [];
-  return existing.filter((t) => now - t < windowMs);
+  const filtered = existing.filter((t) => t > cutoff);
+
+  // Remove the key when all timestamps have aged out so the map stays tidy.
+  if (filtered.length === 0) {
+    rateBuckets.delete(ip);
+  } else {
+    rateBuckets.set(ip, filtered);
+  }
+
+  return filtered;
 };
 
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -974,15 +1005,15 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-/** Maximum number of event subscriptions per webhook record. */
+/** Maximum number of event subscriptions per webhook registration. */
 const WEBHOOK_MAX_EVENTS = 20;
 
-/** Maximum length (characters) of a single event-type name. */
+/** Maximum character length of a single event name in a webhook subscription. */
 const WEBHOOK_MAX_EVENT_LENGTH = 128;
 
 /**
- * Event-name prefixes that are reserved for internal use and may not be
- * subscribed to via the public API.
+ * Event name prefixes reserved for internal system events.
+ * User-defined webhook subscriptions may not use these prefixes.
  */
 const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
@@ -1432,8 +1463,6 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   }
   res.json({ config });
 });
-
-// KNOWN_EVENT_TYPES is imported from ./stores — no local redeclaration needed.
 
 /**
  * Escape a Prometheus label value per the exposition format rules:

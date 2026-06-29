@@ -77,6 +77,40 @@ const sendError = (
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
 
+/**
+ * Strict body-key guard.
+ *
+ * Enforces that a JSON request body contains only keys from `allowed`. When the
+ * body carries any extra top-level key, a `400 invalid_request` is sent listing
+ * the offending keys (with the canonical `requestId`) and the function returns
+ * `true` so the caller can `return` immediately.
+ *
+ * An absent or non-object body is treated as having no keys to reject. Own
+ * enumerable keys are read via `Object.keys`, so inherited / prototype-pollution
+ * keys like `__proto__` (which arrive as own enumerable keys when present in the
+ * raw JSON) are surfaced as unknown rather than silently honoured.
+ *
+ * @param req     - The incoming request (used for the body and request id).
+ * @param res     - The response used to emit the canonical error.
+ * @param allowed - The exhaustive set of permitted top-level body keys.
+ * @returns `true` when an error was sent (unknown keys present), else `false`.
+ */
+const rejectUnknownKeys = (req: Request, res: Response, allowed: string[]): boolean => {
+  const body = req.body;
+  if (body === undefined || body === null || typeof body !== "object" || Array.isArray(body)) {
+    return false;
+  }
+  const allow = new Set(allowed);
+  const unknown = Object.keys(body).filter((k) => !allow.has(k));
+  if (unknown.length > 0) {
+    sendError(res, req, 400, "invalid_request", `unknown field(s): ${unknown.join(", ")}`, {
+      unknownKeys: unknown,
+    });
+    return true;
+  }
+  return false;
+};
+
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
 // Only echo the caller's id when it passes the strict charset + length check
@@ -450,6 +484,7 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
 });
 
 app.post("/api/v1/api-keys", (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["label"])) return;
   const { label } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
@@ -476,6 +511,7 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
 });
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
@@ -571,6 +607,7 @@ const makePairMetaPatch = <K extends keyof PairMeta>(
       sendError(res, req, 404, "not_found", "pair not registered");
       return;
     }
+    if (rejectUnknownKeys(req, res, [bodyKey])) return;
     const value = (req.body ?? {})[bodyKey] as unknown;
     if (!validate(value)) {
       sendError(res, req, 400, "invalid_request", errorMessage);
@@ -690,6 +727,7 @@ const BULK_ABSOLUTE_MAX = 10_000;
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
+  if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
       const v = req.body[k];
@@ -891,6 +929,7 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
 app.post("/api/v1/pairs", (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["source", "destination"])) return;
   const { source, destination } = req.body ?? {};
   if (!isAssetCode(source) || !isAssetCode(destination)) {
     return sendError(

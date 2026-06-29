@@ -187,10 +187,15 @@ cross-test bleed. This function is not exposed via any HTTP route.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
-### `GET /api/v1/events` query params
+### Strict request bodies
 
-- `since` — optional, a single non-negative integer (Unix epoch millis). Absent defaults to `0`. Non-numeric, negative, or array-form values are rejected with `400 invalid_request`.
-- `limit` — optional, a single integer clamped to `[1, EVENT_LOG_CAP]`. Absent defaults to `100`. Non-numeric or array-form values are rejected with `400 invalid_request`.
+Create and patch endpoints reject request bodies that contain unknown top-level
+keys with `400 invalid_request` (the response `unknownKeys` array lists the
+offending fields). This covers `POST /api/v1/api-keys`, `POST /api/v1/webhooks`,
+`POST /api/v1/pairs`, the four pair-meta `PATCH` routes, and `PATCH /api/v1/config`.
+A typo'd or unexpected field is reported instead of silently dropped, and keys
+like `__proto__` are surfaced as unknown rather than honoured. An absent or empty
+body has no keys to reject.
 
 ## Contributing
 

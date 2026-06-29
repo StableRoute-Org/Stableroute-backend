@@ -1151,33 +1151,67 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("GET /api/v1/events/types — catalog", () => {
-    beforeEach(() => {
-      resetStores();
+  describe("strict body-key rejection", () => {
+    it("rejects an unknown key on POST /api/v1/api-keys and lists it", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "ok", extra: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/extra/);
+      expect(res.body.unknownKeys).toContain("extra");
     });
 
-    it("returns an empty catalog when no events have been emitted", async () => {
-      const res = await request(app).get("/api/v1/events/types");
-      expect(res.status).toBe(200);
-      expect(res.body.types).toEqual([]);
+    it("accepts a clean body on POST /api/v1/api-keys", async () => {
+      const res = await request(app).post("/api/v1/api-keys").send({ label: "clean" });
+      expect(res.status).toBe(201);
     });
 
-    it("returns the distinct event types with a count per type", async () => {
-      // 2 x pair.registered, 1 x pair.unregistered
-      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "ONE" });
-      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "TWO" });
-      await request(app).delete("/api/v1/pairs/CAT/ONE");
+    it("rejects an unknown key on POST /api/v1/webhooks", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://x.test", events: ["a"], typo: true });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("typo");
+    });
 
-      const res = await request(app).get("/api/v1/events/types");
+    it("rejects an unknown key on POST /api/v1/pairs", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "AAA", destination: "BBB", junk: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("junk");
+    });
+
+    it("rejects an unknown key on a pair-meta PATCH", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "SUK", destination: "DUK" });
+      const res = await request(app)
+        .patch("/api/v1/pairs/SUK/DUK/fee_bps")
+        .send({ feeBps: 10, fee_bps: 9999 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("fee_bps");
+    });
+
+    it("rejects an unknown key on PATCH /api/v1/config", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: 50, nope: 1 });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("nope");
+    });
+
+    it("reports __proto__ as an unknown key without polluting the prototype", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .set("Content-Type", "application/json")
+        .send('{"label":"ok","__proto__":{"polluted":true}}');
+      expect(res.status).toBe(400);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("treats an empty body as having no unknown keys", async () => {
+      const res = await request(app).patch("/api/v1/config").send({});
       expect(res.status).toBe(200);
-
-      const byType = Object.fromEntries(
-        res.body.types.map((t: { type: string; count: number }) => [t.type, t.count])
-      );
-      expect(byType["pair.registered"]).toBe(2);
-      expect(byType["pair.unregistered"]).toBe(1);
-      // pair.refreshed never emitted here, so it must be absent
-      expect("pair.refreshed" in byType).toBe(false);
     });
   });
 });

@@ -469,6 +469,53 @@ const parseIntegerQueryParam = (value: unknown, fallback: number): number | null
   const n = Number(value);
   return Number.isFinite(n) && Number.isInteger(n) ? n : null;
 };
+/**
+ * Decode a base64-encoded cursor string into an integer offset.
+ *
+ * Returns the decoded offset on success, or `"bad"` when the cursor is
+ * present but malformed (non-base64, non-integer, or negative).  Returns
+ * `undefined` when no cursor was supplied so the caller can distinguish
+ * "first page" from an explicit bad value.
+ *
+ * @param raw - The raw `req.query.cursor` value (string, string[], or undefined).
+ * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
+ *          `undefined` when the param is absent.
+ */
+const parseCursor = (raw: unknown): number | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  try {
+    const decoded = Buffer.from(raw, "base64").toString();
+    const n = Number(decoded);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
+    return n;
+  } catch {
+    return "bad";
+  }
+};
+
+/**
+ * Apply limit+cursor pagination to an array of items.
+ *
+ * @param items  - The full (pre-filtered) array.
+ * @param limit  - Number of items per page (already clamped by caller).
+ * @param offset - Starting index decoded from the cursor (0 when absent).
+ * @returns The page slice and a `nextCursor` (base64-encoded next offset,
+ *          or `null` when the collection is exhausted).
+ */
+const paginate = <T>(
+  items: T[],
+  limit: number,
+  offset: number
+): { page: T[]; nextCursor: string | null } => {
+  const page = items.slice(offset, offset + limit);
+  const nextOffset = offset + limit;
+  const nextCursor = nextOffset < items.length
+    ? Buffer.from(String(nextOffset)).toString("base64")
+    : null;
+  return { page, nextCursor };
+};
+
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
@@ -506,11 +553,20 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
     }
   }
 
+  // Parse cursor (base64-encoded offset).
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
   let items = eventLog.filter((e) => e.ts >= since);
   if (typeParam !== undefined) {
     items = items.filter((e) => e.type === (typeParam as EventType));
   }
-  res.json({ items: items.slice(-limit) });
+  const { page, nextCursor } = paginate(items, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 /**
@@ -566,15 +622,30 @@ app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
-  const items = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
+app.get("/api/v1/api-keys", (req: Request, res: Response) => {
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allItems = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
     prefix: k.slice(0, 8),
     label: m.label,
     createdAt: m.createdAt,
     // Surface rotation metadata for predecessor records (omitted when absent).
     ...(m.rotatedAt !== undefined ? { rotatedAt: m.rotatedAt } : {}),
   }));
-  res.json({ items });
+  const { page, nextCursor } = paginate(allItems, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 app.post("/api/v1/api-keys", (req: Request, res: Response) => {
@@ -663,9 +734,24 @@ app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
-  const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
-  res.json({ items });
+app.get("/api/v1/webhooks", (req: Request, res: Response) => {
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allItems = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
+  const { page, nextCursor } = paginate(allItems, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
@@ -1222,7 +1308,26 @@ const pairsEtag = (body: string): string =>
  * Response: { pairs: [{ source, destination }, ...] }
  */
 app.get("/api/v1/pairs", (req: Request, res: Response) => {
-  const body = serializePairs();
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allPairs = Array.from(pairRegistry).map((k) => {
+    const [source, destination] = k.split("::");
+    return { source, destination };
+  });
+  const { page, nextCursor } = paginate(allPairs, limit, offset);
+  const body = JSON.stringify({ pairs: page, nextCursor });
   const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {
     res.status(304).end();

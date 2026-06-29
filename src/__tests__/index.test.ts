@@ -733,4 +733,62 @@ describe("StableRoute Backend", () => {
       expect(res.body.amount).toBe(huge);
     });
   });
+
+  describe("JSON content-negotiation guard (406)", () => {
+    it("returns 406 when Accept is text/csv", async () => {
+      const res = await request(app)
+        .get("/api/v1/pairs")
+        .set("Accept", "text/csv");
+      expect(res.status).toBe(406);
+      expect(res.body.error).toBe("not_acceptable");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 200 when Accept is application/json", async () => {
+      const res = await request(app)
+        .get("/api/v1/pairs")
+        .set("Accept", "application/json");
+      expect(res.status).toBe(200);
+    });
+
+    it("returns 200 when Accept is */*", async () => {
+      const res = await request(app)
+        .get("/api/v1/pairs")
+        .set("Accept", "*/*");
+      expect(res.status).toBe(200);
+    });
+
+    it("returns 200 when Accept is application/*", async () => {
+      const res = await request(app)
+        .get("/api/v1/pairs")
+        .set("Accept", "application/*");
+      expect(res.status).toBe(200);
+    });
+
+    it("returns 200 when Accept header is missing", async () => {
+      const res = await request(app).get("/api/v1/pairs");
+      expect(res.status).toBe(200);
+    });
+
+    it("GET /health is exempt — returns 200 even with Accept: text/plain", async () => {
+      const res = await request(app)
+        .get("/health")
+        .set("Accept", "text/plain");
+      expect(res.status).toBe(200);
+    });
+
+    it("GET /api/v1/metrics is exempt — returns 200 even with Accept: text/csv", async () => {
+      const res = await request(app)
+        .get("/api/v1/metrics")
+        .set("Accept", "text/csv");
+      expect(res.status).toBe(200);
+    });
+
+    it("accepts a multi-value Accept header that includes application/json", async () => {
+      const res = await request(app)
+        .get("/api/v1/pairs")
+        .set("Accept", "text/html, application/json");
+      expect(res.status).toBe(200);
+    });
+  });
 });

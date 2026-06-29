@@ -74,6 +74,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+// Hard ceiling for the bulk-quote item cap. The operator-configurable
+// config.bulkMaxItems value cannot exceed this constant.
+const BULK_ABSOLUTE_MAX = 10_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -123,6 +127,54 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
+
+/**
+ * Paths that are exempt from the JSON content-negotiation guard.
+ *
+ * - `GET /health` — shallow liveness probe (must never require Accept headers).
+ * - `GET /api/v1/metrics` — Prometheus scrape endpoint that serves `text/plain`.
+ *
+ * Both must remain reachable by monitoring systems that send no Accept header
+ * or that explicitly request `text/plain`.
+ */
+const ACCEPT_NEGOTIATION_EXEMPT = new Set(["/health", "/api/v1/metrics"]);
+
+/**
+ * JSON content-negotiation guard.
+ *
+ * Rejects requests whose `Accept` header is present and explicitly excludes
+ * `application/json` (and wildcards `*\/\*` / `application/*`) with a
+ * `406 Not Acceptable` response using the canonical `sendError` envelope.
+ *
+ * Rules:
+ * - A missing `Accept` header is treated as acceptable (defaults to JSON).
+ * - `*\/*` and `application/*` wildcards are accepted.
+ * - Routes in `ACCEPT_NEGOTIATION_EXEMPT` are always passed through.
+ *
+ * Security note: only the Accept header value is examined; the guard does not
+ * re-evaluate pause or rate-limit state, so those middleware layers remain
+ * authoritative for their own concerns.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (ACCEPT_NEGOTIATION_EXEMPT.has(req.path)) return next();
+
+  const accept = req.header("accept");
+  if (!accept) return next();
+
+  // Split on comma to get individual media-range tokens; strip quality params.
+  const types = accept.split(",").map((t) => t.split(";")[0].trim().toLowerCase());
+
+  const acceptable = types.some(
+    (t) => t === "*/*" || t === "application/json" || t === "application/*"
+  );
+
+  if (!acceptable) {
+    sendError(res, req, 406, "not_acceptable", "This endpoint only produces application/json");
+    return;
+  }
+
   next();
 });
 

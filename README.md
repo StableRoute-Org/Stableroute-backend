@@ -12,6 +12,22 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### Webhook event allowlist
+
+`POST /api/v1/webhooks` validates each entry in `events` against the canonical
+allowlist of emitted event types (`KNOWN_EVENT_TYPES` in `src/stores.ts`):
+
+- `pair.registered`
+- `pair.refreshed`
+- `pair.unregistered`
+
+A `"*"` wildcard is also accepted, meaning "all current and future types".
+Any other value is rejected with `400 invalid_request`, and the error message
+lists the offending value(s) — this prevents silent subscriptions to typos like
+`pair.regstered` that would never deliver. `KNOWN_EVENT_TYPES` is the single
+source of truth shared with `recordEvent`, so the allowlist cannot drift from
+the types the system actually emits.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

@@ -1150,4 +1150,42 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("webhook event allowlist", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("accepts a known event type", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/wh", events: ["pair.registered"] });
+      expect(res.status).toBe(201);
+    });
+
+    it("accepts the \"*\" wildcard", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/wh", events: ["*"] });
+      expect(res.status).toBe(201);
+    });
+
+    it("rejects an unknown event type and lists the offending value", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/wh", events: ["pair.regstered"] });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/pair\.regstered/);
+    });
+
+    it("rejects a mixed valid/invalid array, listing only the bad values", async () => {
+      const res = await request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/wh", events: ["pair.registered", "made.up.event"] });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/made\.up\.event/);
+      expect(res.body.message).not.toMatch(/pair\.registered.*unknown/);
+    });
+  });
 });

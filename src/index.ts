@@ -399,6 +399,22 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
     return;
   }
+  // Reject subscriptions to event types the system never emits, so callers
+  // can't silently subscribe to a typo (e.g. "pair.regstered"). The "*"
+  // wildcard opts in to all current and future types.
+  const unknownEvents = (events as string[]).filter(
+    (e) => e !== "*" && !(KNOWN_EVENT_TYPES as ReadonlyArray<string>).includes(e)
+  );
+  if (unknownEvents.length > 0) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `unknown event type(s): ${unknownEvents.join(", ")}. Known types: ${KNOWN_EVENT_TYPES.join(", ")} (or "*")`
+    );
+    return;
+  }
   if (events.length > WEBHOOK_MAX_EVENTS) {
     sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
     return;

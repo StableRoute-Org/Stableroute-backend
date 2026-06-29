@@ -98,8 +98,9 @@ const BULK_ABSOLUTE_MAX = 100_000;
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-/** Hard ceiling for the bulkMaxItems config value — prevents runaway memory use. */
-const BULK_ABSOLUTE_MAX = 1_000;
+
+/** Hard ceiling for the runtime-configurable bulkMaxItems setting. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";

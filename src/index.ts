@@ -1485,15 +1485,18 @@ export const invertFee = (
 };
 
 app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
-  const { source_asset, dest_asset, output } = req.query;
+  const { source_asset, dest_asset, target_amount, output } = req.query;
 
-  if (!source_asset || !dest_asset || !output) {
+  // Accept target_amount (canonical) or output (legacy alias)
+  const targetAmountRaw = target_amount ?? output;
+
+  if (!source_asset || !dest_asset || !targetAmountRaw) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "Missing required query params: source_asset, dest_asset, output"
+      "Missing required query params: source_asset, dest_asset, target_amount"
     );
   }
   if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
@@ -1508,14 +1511,14 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
   if (source_asset === dest_asset) {
     return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
   }
-  const parsedOutput = parseAmount(output);
+  const parsedOutput = parseAmount(targetAmountRaw);
   if (parsedOutput === null) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "output must be a positive integer string with no leading zero"
+      "target_amount must be a positive integer string with no leading zero"
     );
   }
 
@@ -1528,11 +1531,15 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
   res.json({
     source_asset,
     dest_asset,
+    target_amount: parsedOutput.toString(),
+    required_input: requiredInput.toString(),
+    estimated_rate: "1.0",
+    route: [source_asset, dest_asset],
+    // legacy fields kept for backward compatibility
     output: parsedOutput.toString(),
     requiredInput: requiredInput.toString(),
     feeAmount: feeAmount.toString(),
     feeBps,
-    route: [source_asset, dest_asset],
   });
 });
 

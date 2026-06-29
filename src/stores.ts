@@ -11,6 +11,30 @@
 
 import { randomUUID } from "node:crypto";
 
+// ─── Event types ─────────────────────────────────────────────────────────────
+
+/**
+ * Exhaustive list of canonical event type names emitted by the StableRoute
+ * backend. Adding a new event type here automatically widens {@link EventType}
+ * and makes `recordEvent` callers type-checked against the new value.
+ */
+export const KNOWN_EVENT_TYPES = [
+  "pair.registered",
+  "pair.refreshed",
+  "pair.unregistered",
+] as const;
+
+/**
+ * Union of all recognised event type names derived from {@link KNOWN_EVENT_TYPES}.
+ * Using a const-asserted tuple ensures the union stays in sync with the
+ * allowlist without any manual duplication.
+ *
+ * @example
+ * const t: EventType = "pair.registered"; // OK
+ * const bad: EventType = "unknown.event"; // TypeScript error
+ */
+export type EventType = (typeof KNOWN_EVENT_TYPES)[number];
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /** Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity. */
@@ -25,7 +49,8 @@ export type PairMeta = {
 export type AppEvent = {
   id: string;
   ts: number;
-  type: string;
+  /** Canonical event type — always one of the values in {@link KNOWN_EVENT_TYPES}. */
+  type: EventType;
   payload: Record<string, unknown>;
 };
 
@@ -119,43 +144,15 @@ export const pairKey = (source: string, dest: string): string =>
   `${source}::${dest}`;
 
 /**
- * Resolve the effective event-log cap from the live runtime config.
+ * Append an event to the bounded event log, evicting the oldest entry
+ * when the log exceeds {@link EVENT_LOG_CAP}.
  *
- * The config value takes precedence when it is a positive integer within the
- * allowed range. Falls back to {@link EVENT_LOG_CAP} if the config value is
- * absent, non-integer, zero, or above {@link EVENT_LOG_CAP_MAX}.
- */
-export const effectiveEventLogCap = (): number => {
-  const v = config.eventLogCap;
-  if (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= EVENT_LOG_CAP_MAX) {
-    return v;
-  }
-  return EVENT_LOG_CAP;
-};
-
-/**
- * Trim `eventLog` down to `cap` entries, removing the oldest first.
- * No-op when the log is already within the cap.
- */
-export const trimEventLog = (cap: number): void => {
-  const excess = eventLog.length - cap;
-  if (excess > 0) eventLog.splice(0, excess);
-};
-
-/**
- * Append an event to the bounded event log, evicting the oldest entry when
- * the log exceeds the effective cap sourced from `config.eventLogCap`.
- *
- * The effective cap is resolved at write time so that operators who lower
- * `eventLogCap` via PATCH /api/v1/config see the tighter bound applied
- * immediately on the next write. Use {@link trimEventLog} to shrink the
- * existing buffer proactively after a cap change.
- *
- * @param type    - Dot-namespaced event type string (e.g. `"pair.registered"`).
- * @param payload - Arbitrary key/value metadata attached to the event.
+ * @param type - Must be one of the canonical {@link EventType} values; TypeScript
+ *   enforces this at the call site so stray string literals are caught at compile time.
+ * @param payload - Arbitrary structured data attached to the event.
  */
 export const recordEvent = (
-  type: string,
+  type: EventType,
   payload: Record<string, unknown>
 ): void => {
   eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });

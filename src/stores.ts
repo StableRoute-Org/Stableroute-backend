@@ -58,6 +58,17 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /**
+   * Epoch-ms timestamp at which this key was rotated and replaced by a
+   * successor. Absent on keys that have not been rotated.
+   */
+  rotatedAt?: number;
+  /**
+   * Absolute epoch-ms deadline after which a rotated (predecessor) key is
+   * considered invalid. Both predecessor and successor remain valid until
+   * this deadline, giving callers an overlap window. Absent until rotation.
+   */
+  graceExpiresAt?: number;
 };
 
 /** Record stored for each registered webhook. */

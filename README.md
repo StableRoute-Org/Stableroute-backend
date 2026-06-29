@@ -12,6 +12,17 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### API-key rotation
+
+`POST /api/v1/api-keys/:prefix/rotate` rotates a key without downtime. It
+locates the key by its 8-char prefix, mints a new `srk_` successor inheriting
+the predecessor's `label`, and returns the new raw key exactly once (201 — never
+logged). The predecessor is stamped with `rotatedAt` and a `graceExpiresAt`
+deadline (`ROTATION_GRACE_MS`, default 1h) so both keys remain valid during the
+overlap window, letting callers cut over gracefully. `GET /api/v1/api-keys`
+surfaces `rotatedAt` on rotated predecessor records (raw keys are never
+returned). An unknown prefix returns `404 not_found`.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

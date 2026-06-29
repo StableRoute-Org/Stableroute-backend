@@ -1150,4 +1150,46 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("POST /api/v1/api-keys/:prefix/rotate", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("rotates a key: mints a new key inheriting the label and stamps the old one", async () => {
+      const create = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "service-a" });
+      const oldKey = create.body.key;
+      const prefix = oldKey.slice(0, 8);
+
+      const rotate = await request(app).post(`/api/v1/api-keys/${prefix}/rotate`);
+      expect(rotate.status).toBe(201);
+      expect(rotate.body.key).toMatch(/^srk_/);
+      expect(rotate.body.key).not.toBe(oldKey);
+      // Label inheritance and grace field present
+      expect(rotate.body.label).toBe("service-a");
+      expect(typeof rotate.body.graceExpiresAt).toBe("number");
+
+      // Predecessor record now carries rotatedAt in the listing
+      const list = await request(app).get("/api/v1/api-keys");
+      const oldEntry = list.body.items.find((k: { prefix: string }) => k.prefix === prefix);
+      expect(oldEntry).toBeDefined();
+      expect(typeof oldEntry.rotatedAt).toBe("number");
+
+      // Successor is also listed (overlap window)
+      const newEntry = list.body.items.find(
+        (k: { prefix: string }) => k.prefix === rotate.body.key.slice(0, 8)
+      );
+      expect(newEntry).toBeDefined();
+      expect(newEntry.label).toBe("service-a");
+    });
+
+    it("returns 404 for an unknown prefix", async () => {
+      const res = await request(app).post("/api/v1/api-keys/nonexist/rotate");
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+      expect(res.body.requestId).toBeTruthy();
+    });
+  });
 });

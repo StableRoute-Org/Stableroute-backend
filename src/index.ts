@@ -359,6 +359,8 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
     prefix: k.slice(0, 8),
     label: m.label,
     createdAt: m.createdAt,
+    // Surface rotation metadata for predecessor records (omitted when absent).
+    ...(m.rotatedAt !== undefined ? { rotatedAt: m.rotatedAt } : {}),
   }));
   res.json({ items });
 });
@@ -372,6 +374,47 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
   apiKeyStore.set(key, { label, createdAt: Date.now() });
   res.status(201).json({ key, label });
+});
+
+/**
+ * Grace window (ms) during which a rotated predecessor key remains valid
+ * alongside its successor, giving in-flight callers time to cut over without
+ * downtime. Defaults to one hour.
+ */
+const ROTATION_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * Rotate an API key: mint a successor inheriting the predecessor's label and
+ * schedule the predecessor for grace expiry.
+ *
+ * Locates the key by its 8-char prefix, creates a new `srk_` key with the same
+ * `label`, and stamps the predecessor with `rotatedAt` (now) and
+ * `graceExpiresAt` (now + {@link ROTATION_GRACE_MS}) so both keys work during
+ * the overlap. The new raw key is returned exactly once with `201`; it is never
+ * logged. Returns `404 not_found` for an unknown prefix.
+ *
+ * @route POST /api/v1/api-keys/:prefix/rotate
+ */
+app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
+  const { prefix } = req.params;
+  let found: string | undefined;
+  for (const k of apiKeyStore.keys()) if (k.slice(0, 8) === prefix) { found = k; break; }
+  const predecessor = found ? apiKeyStore.get(found) : undefined;
+  if (!found || !predecessor) {
+    sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
+    return;
+  }
+  const now = Date.now();
+  // Stamp the predecessor with rotation metadata; it stays valid until grace expiry.
+  apiKeyStore.set(found, {
+    ...predecessor,
+    rotatedAt: now,
+    graceExpiresAt: now + ROTATION_GRACE_MS,
+  });
+  // Mint the successor, inheriting the label.
+  const newKey = `srk_${randomUUID().replace(/-/g, "")}`;
+  apiKeyStore.set(newKey, { label: predecessor.label, createdAt: now });
+  res.status(201).json({ key: newKey, label: predecessor.label, graceExpiresAt: now + ROTATION_GRACE_MS });
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {

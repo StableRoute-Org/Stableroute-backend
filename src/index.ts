@@ -441,9 +441,29 @@ function resolvePair(
   return { source, destination, key };
 }
 
+/**
+ * Normalize the `:source`/`:destination` route params to their canonical asset
+ * codes via {@link normalizeAsset}. On invalid input a `400 invalid_request` is
+ * sent and `null` is returned so the caller can `return` immediately.
+ */
+const normalizePairParams = (
+  req: Request,
+  res: Response
+): { source: string; destination: string } | null => {
+  const source = normalizeAsset(req.params.source);
+  const destination = normalizeAsset(req.params.destination);
+  if (source === null || destination === null) {
+    sendError(res, req, 400, "invalid_request", "source and destination must be 1-12 alphanumeric characters");
+    return null;
+  }
+  return { source, destination };
+};
+
 /** Aggregate read of every per-pair slot in one round-trip. */
 app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
+  const normalized = normalizePairParams(req, res);
+  if (!normalized) return;
+  const { source, destination } = normalized;
   const k = pairKey(source, destination);
   res.json({
     source,
@@ -479,7 +499,9 @@ const makePairMetaPatch = <K extends keyof PairMeta>(
   errorMessage: string
 ) =>
   (req: Request, res: Response): void => {
-    const { source, destination } = req.params;
+    const normalized = normalizePairParams(req, res);
+    if (!normalized) return;
+    const { source, destination } = normalized;
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(res, req, 404, "not_found", "pair not registered");
@@ -774,14 +796,16 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
 app.post("/api/v1/pairs", (req: Request, res: Response) => {
-  const { source, destination } = req.body ?? {};
-  if (!isAssetCode(source) || !isAssetCode(destination)) {
+  const { source: rawSource, destination: rawDestination } = req.body ?? {};
+  const source = normalizeAsset(rawSource);
+  const destination = normalizeAsset(rawDestination);
+  if (source === null || destination === null) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "source and destination must be 1-12 character strings"
+      "source and destination must be 1-12 alphanumeric characters"
     );
   }
   if (source === destination) {
@@ -808,6 +832,27 @@ const isAssetCode = (v: unknown): v is string =>
   v.length > 0 &&
   v.length <= 12 &&
   !v.startsWith("__health");
+
+/**
+ * Canonicalize an asset code so that casing and surrounding whitespace never
+ * fragment a logical pair.
+ *
+ * The input is trimmed of leading/trailing whitespace and upper-cased. After
+ * normalization the code must be 1–12 characters (Stellar's max alphanumeric
+ * asset code) drawn exclusively from `[A-Z0-9]` — any internal whitespace,
+ * control character, or other non-alphanumeric symbol causes a rejection. The
+ * reserved `__health` probe namespace is also rejected. Because the length is
+ * checked *after* trimming, padding can never be used to bypass the 12-char cap.
+ *
+ * @param v - The raw asset code (from a body field or URL/query param).
+ * @returns The canonical upper-cased code, or `null` when the input is invalid.
+ */
+const normalizeAsset = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const code = v.trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,12}$/.test(code) || code.startsWith("__HEALTH")) return null;
+  return code;
+};
 
 // Quote amount: a base-units integer string. Parsed via BigInt so we
 // never lose precision on amounts above Number.MAX_SAFE_INTEGER.
@@ -850,8 +895,10 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     return;
   }
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
-    const { source_asset, dest_asset, amount } = it ?? {};
-    if (!isAssetCode(source_asset) || !isAssetCode(dest_asset) || parseAmount(amount) === null || source_asset === dest_asset) {
+    const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
+    const source_asset = normalizeAsset(rawSource);
+    const dest_asset = normalizeAsset(rawDest);
+    if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
     return {
@@ -867,9 +914,9 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/quote", (req: Request, res: Response) => {
-  const { source_asset, dest_asset, amount } = req.query;
+  const { source_asset: rawSource, dest_asset: rawDest, amount } = req.query;
 
-  if (!source_asset || !dest_asset || !amount) {
+  if (!rawSource || !rawDest || !amount) {
     return sendError(
       res,
       req,
@@ -878,13 +925,15 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       "Missing required query params: source_asset, dest_asset, amount"
     );
   }
-  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
+  const source_asset = normalizeAsset(rawSource);
+  const dest_asset = normalizeAsset(rawDest);
+  if (source_asset === null || dest_asset === null) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "source_asset and dest_asset must be 1-12 character strings"
+      "source_asset and dest_asset must be 1-12 alphanumeric characters"
     );
   }
   if (source_asset === dest_asset) {

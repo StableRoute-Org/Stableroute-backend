@@ -154,29 +154,29 @@ describe("StableRoute Backend", () => {
 
       const reg = await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "PAIR_A", destination: "PAIR_B" });
+        .send({ source: "PAIRA", destination: "PAIRB" });
       expect(reg.status).toBe(201);
       expect(reg.body).toEqual({
-        source: "PAIR_A",
-        destination: "PAIR_B",
+        source: "PAIRA",
+        destination: "PAIRB",
         registered: true,
       });
 
       const list2 = await request(app).get("/api/v1/pairs");
       expect(list2.body.pairs.length).toBe(initialCount + 1);
       expect(list2.body.pairs).toContainEqual({
-        source: "PAIR_A",
-        destination: "PAIR_B",
+        source: "PAIRA",
+        destination: "PAIRB",
       });
     });
 
     it("is idempotent: re-registering returns 200", async () => {
       await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "IDEM_A", destination: "IDEM_B" });
+        .send({ source: "IDEMA", destination: "IDEMB" });
       const second = await request(app)
         .post("/api/v1/pairs")
-        .send({ source: "IDEM_A", destination: "IDEM_B" });
+        .send({ source: "IDEMA", destination: "IDEMB" });
       expect(second.status).toBe(200);
     });
 
@@ -193,7 +193,7 @@ describe("StableRoute Backend", () => {
         .post("/api/v1/pairs")
         .send({ source: "USDC", destination: "THIRTEENLETTERS" });
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 alphanumeric characters/);
     });
 
     it("rejects asset codes starting with __health (reserved probe namespace) with 400", async () => {
@@ -1022,7 +1022,7 @@ describe("StableRoute Backend", () => {
           amount: "100",
         });
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 alphanumeric characters/);
     });
 
     it("rejects array-form asset params (param pollution)", async () => {
@@ -1031,7 +1031,7 @@ describe("StableRoute Backend", () => {
         .get("/api/v1/quote")
         .query("source_asset=USDC&source_asset=EURC&dest_asset=XLM&amount=10");
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/1-12 character strings/);
+      expect(res.body.message).toMatch(/1-12 alphanumeric characters/);
     });
 
     it.each([
@@ -1148,6 +1148,75 @@ describe("StableRoute Backend", () => {
       // Both event types should be present
       expect(types.has("pair.registered")).toBe(true);
       expect(types.has("pair.unregistered")).toBe(true);
+    });
+  });
+
+  describe("asset-code normalization", () => {
+    it("echoes the canonical upper-cased code when registering a lowercase pair", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "usdc", destination: "eurc" });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.source).toBe("USDC");
+      expect(res.body.destination).toBe("EURC");
+    });
+
+    it("matches a quote for USDC against a pair registered as usdc (same pairKey)", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "usdc", destination: "ngnc" });
+      await request(app)
+        .patch("/api/v1/pairs/USDC/NGNC/fee_bps")
+        .send({ feeBps: 25 });
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "ngnc", amount: "10000" });
+      expect(res.status).toBe(200);
+      expect(res.body.source_asset).toBe("USDC");
+      expect(res.body.dest_asset).toBe("NGNC");
+      // fee set on the canonical pair must apply to the case-folded quote
+      expect(res.body.feeBps).toBe(25);
+    });
+
+    it("trims trailing/leading whitespace before registering", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: " usdc ", destination: "brl" });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.source).toBe("USDC");
+    });
+
+    it("rejects a code with internal whitespace", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "US DC", destination: "EURC" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects a code containing a symbol", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "US$C", destination: "EURC" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects a code with a control character", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "US\u0001C", destination: "EURC" });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects padding that would exceed the 12-char cap after trim", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "THIRTEENLETT", destination: "EURC" });
+      // 12 chars is allowed; verify a 13-char trimmed code is rejected
+      const tooLong = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "  THIRTEENLETTERS  ", destination: "EURC" });
+      expect(res.status === 200 || res.status === 201).toBe(true);
+      expect(tooLong.status).toBe(400);
     });
   });
 });

@@ -1150,4 +1150,65 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("webhook single-read and PATCH", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    const createWebhook = () =>
+      request(app)
+        .post("/api/v1/webhooks")
+        .send({ url: "https://example.com/wh", events: ["pair.registered"] });
+
+    it("reads a single webhook by id", async () => {
+      const create = await createWebhook();
+      const res = await request(app).get(`/api/v1/webhooks/${create.body.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        id: create.body.id,
+        url: "https://example.com/wh",
+        events: ["pair.registered"],
+      });
+      expect(typeof res.body.createdAt).toBe("number");
+    });
+
+    it("returns 404 for reading an unknown webhook id", async () => {
+      const res = await request(app).get("/api/v1/webhooks/wh_doesnotexist");
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("patches a webhook's events in place, leaving the url unchanged", async () => {
+      const create = await createWebhook();
+      const res = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: ["pair.registered", "pair.unregistered", "pair.registered"] });
+      expect(res.status).toBe(200);
+      // Deduplicated, url preserved
+      expect(res.body.events).toEqual(["pair.registered", "pair.unregistered"]);
+      expect(res.body.url).toBe("https://example.com/wh");
+    });
+
+    it("returns 404 when patching an unknown webhook id", async () => {
+      const res = await request(app)
+        .patch("/api/v1/webhooks/wh_doesnotexist")
+        .send({ events: ["pair.registered"] });
+      expect(res.status).toBe(404);
+    });
+
+    it("rejects a PATCH with empty or non-string events", async () => {
+      const create = await createWebhook();
+      const empty = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: [] });
+      expect(empty.status).toBe(400);
+
+      const nonString = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: [123] });
+      expect(nonString.status).toBe(400);
+    });
+  });
 });

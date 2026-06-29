@@ -12,6 +12,15 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### Webhook read and update
+
+`GET /api/v1/webhooks/:id` returns a single webhook as
+`{ id, url, events, createdAt }`, or `404 not_found` for an unknown id.
+`PATCH /api/v1/webhooks/:id` updates a webhook's subscribed `events` in place
+(validated as a non-empty string array and deduplicated) and returns the updated
+record. The `url` is immutable on PATCH — changing the destination must go
+through delete/recreate so the URL's SSRF-validation provenance is preserved.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

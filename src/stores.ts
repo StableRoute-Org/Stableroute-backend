@@ -111,6 +111,7 @@ const defaultConfig = (): Record<string, number> => ({
   rateLimitWindowMs: 60_000,
   bulkMaxItems: 100,
   eventLogCap: EVENT_LOG_CAP,
+  quote_ttl_ms: 30_000,
 });
 
 // ─── Stores ──────────────────────────────────────────────────────────────────

@@ -1000,7 +1000,7 @@ const BULK_ABSOLUTE_MAX = 10_000;
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms"] as const;
   if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
@@ -1371,6 +1371,12 @@ export const applyFee = (
   return { feeAmount, netAmount };
 };
 
+const computeQuoteTimes = (): { quoted_at: number; expires_at: number } => {
+  const ttl = (config.quote_ttl_ms ?? 30000) as number;
+  const quoted_at = Date.now();
+  return { quoted_at, expires_at: quoted_at + ttl };
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -1392,6 +1398,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       dest_asset,
       amount: String(amount),
       estimated_rate: "1.0",
+      ...computeQuoteTimes(),
     };
   });
   res.json({ results });
@@ -1446,6 +1453,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     feeBps: meta.feeBps,
     feeAmount: feeAmount.toString(),
     netAmount: netAmount.toString(),
+    ...computeQuoteTimes(),
   });
 });
 

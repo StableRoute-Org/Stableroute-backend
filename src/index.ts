@@ -373,10 +373,12 @@ app.get("/api/v1/version", (_req: Request, res: Response) => {
 
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
   setPaused(true);
+  recordEvent("admin.paused", {});
   res.json({ paused });
 });
 app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   setPaused(false);
+  recordEvent("admin.unpaused", {});
   res.json({ paused });
 });
 
@@ -491,6 +493,7 @@ app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
     return;
   }
   apiKeyStore.delete(found);
+  recordEvent("apikey.deleted", { prefix });
   res.status(204).send();
 });
 
@@ -532,19 +535,10 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
     grantedScopes = [...new Set(scopes as string[])];
   }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now(), scopes: grantedScopes });
-  res.status(201).json({ key, label, scopes: grantedScopes });
-});
-
-/**
- * Scope-check probe. Returns `{ ok: true }` only for keys carrying the
- * `keys:admin` scope, demonstrating (and exercising) the {@link requireScope}
- * guard that write routes will adopt.
- *
- * @route GET /api/v1/api-keys/whoami
- */
-app.get("/api/v1/api-keys/whoami", requireScope("keys:admin"), (_req: Request, res: Response) => {
-  res.json({ ok: true });
+  apiKeyStore.set(key, { label, createdAt: Date.now() });
+  // Record only the non-sensitive prefix and label — never the raw key.
+  recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
+  res.status(201).json({ key, label });
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
@@ -554,6 +548,7 @@ app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     return;
   }
   webhookStore.delete(id);
+  recordEvent("webhook.deleted", { id });
   res.status(204).send();
 });
 
@@ -611,6 +606,8 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   const deduped = [...new Set(events as string[])];
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
+  // Record id and url only — never any webhook secret material.
+  recordEvent("webhook.created", { id, url });
   res.status(201).json({ id, url, events: deduped });
 });
 
@@ -878,6 +875,12 @@ const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "apikey.created",
+  "apikey.deleted",
+  "webhook.created",
+  "webhook.deleted",
+  "admin.paused",
+  "admin.unpaused",
 ] as const;
 
 /**

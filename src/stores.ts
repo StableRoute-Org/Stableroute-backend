@@ -22,6 +22,12 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "apikey.created",
+  "apikey.deleted",
+  "webhook.created",
+  "webhook.deleted",
+  "admin.paused",
+  "admin.unpaused",
 ] as const;
 
 /**

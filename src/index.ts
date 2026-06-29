@@ -50,7 +50,7 @@ export type ApiErrorCode =
   | "conflict"
   | "method_not_allowed"
   | "read_only_mode"
-  | "pair_disabled";
+  | "pair_not_registered";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -1754,13 +1754,25 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
   }
-  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown; slippage_bps?: unknown }, i: number) => {
-    const { source_asset: rawSource, dest_asset: rawDest, amount, slippage_bps: rawSlippage } = it ?? {};
+  /**
+   * Per-item pair registration check for bulk quotes.
+   *
+   * When `ALLOW_UNREGISTERED_QUOTES` is not set to `"true"`, each item whose
+   * pair is not present in `pairRegistry` returns `ok: false` with
+   * `error: "pair_not_registered"` instead of failing the whole batch.
+   * Shape/validation errors (invalid asset code, same asset, bad amount) are
+   * still returned as `ok: false, error: "invalid_item"` and take precedence.
+   */
+  const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
+    const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
     const source_asset = normalizeAsset(rawSource);
     const dest_asset = normalizeAsset(rawDest);
-    const parsedAmt = parseAmount(amount);
-    if (source_asset === null || dest_asset === null || parsedAmt === null || source_asset === dest_asset) {
-      return { index: i, ok: false, error: "invalid_item" };
+    if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
+      return { index: i, ok: false as const, error: "invalid_item" };
+    }
+    if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+      return { index: i, ok: false as const, error: "pair_not_registered" };
     }
     const bulkKey = pairKey(source_asset, dest_asset);
     const bulkMeta = pairMeta.get(bulkKey) ?? defaultMeta();
@@ -1769,7 +1781,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     }
     return {
       index: i,
-      ok: true,
+      ok: true as const,
       source_asset,
       dest_asset,
       amount: String(amount),
@@ -1818,14 +1830,28 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
-  const quoteKey = pairKey(source_asset, dest_asset);
-  const meta = pairMeta.get(quoteKey) ?? defaultMeta();
-
-  // Gate: registered pairs that have been explicitly disabled return 409.
-  if (pairRegistry.has(quoteKey) && meta.enabled === false) {
-    return sendError(res, req, 409, "pair_disabled", "this trading pair is currently disabled");
+  /**
+   * Pair registration guard.
+   *
+   * Looks up the pair key in `pairRegistry` after all shape/validation checks
+   * pass. When the pair is not registered, responds 404 `pair_not_registered`
+   * with the canonical `{ error, message, requestId }` body and echoes back the
+   * offending `source_asset`/`dest_asset`.
+   *
+   * Set `ALLOW_UNREGISTERED_QUOTES=true` in the environment to bypass this check
+   * (e.g. for demos that quote arbitrary pairs). The flag defaults to off, which
+   * is the safe/production behavior. It can only be set at process startup and
+   * cannot be toggled per-request.
+   */
+  const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+  if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+    return sendError(res, req, 404, "pair_not_registered",
+      `pair ${source_asset}->${dest_asset} is not registered`,
+      { source_asset, dest_asset }
+    );
   }
 
+  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
   const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
   const min_received = applySlippage(netAmount, slippage_bps);
 

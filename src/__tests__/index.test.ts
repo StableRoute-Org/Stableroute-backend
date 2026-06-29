@@ -19,7 +19,8 @@ describe("StableRoute Backend", () => {
     expect(res.body).toMatchObject({ status: "ok", service: "stableroute-backend" });
   });
 
-  it("GET /api/v1/quote with params returns quote", async () => {
+  it("GET /api/v1/quote with params returns quote for a registered pair", async () => {
+    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .get("/api/v1/quote")
       .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
@@ -591,6 +592,8 @@ describe("StableRoute Backend", () => {
       // Save original bulkMaxItems
       const cfg = await request(app).get("/api/v1/config");
       savedBulkMax = cfg.body.config.bulkMaxItems;
+      // Register pair used across bulk tests
+      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
     });
 
     afterEach(async () => {
@@ -674,6 +677,34 @@ describe("StableRoute Backend", () => {
         .patch("/api/v1/config")
         .send({ bulkMaxItems: 10_000 });
       expect(res.status).toBe(200);
+    });
+
+    it("returns pair_not_registered per-item for an unregistered pair", async () => {
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "USDC", dest_asset: "EURC", amount: "100" },
+            { source_asset: "XLM", dest_asset: "EURC", amount: "50" },
+          ],
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0].ok).toBe(true);
+      expect(res.body.results[1].ok).toBe(false);
+      expect(res.body.results[1].error).toBe("pair_not_registered");
+    });
+
+    it("bulk: shape/validation errors take precedence over pair_not_registered", async () => {
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "USDC", dest_asset: "USDC", amount: "100" },
+          ],
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0].ok).toBe(false);
+      expect(res.body.results[0].error).toBe("invalid_item");
     });
   });
 
@@ -1050,11 +1081,70 @@ describe("StableRoute Backend", () => {
     it("accepts a very large positive amount via BigInt parsing", async () => {
       // 10^25 — far above Number.MAX_SAFE_INTEGER (~9.007 * 10^15)
       const huge = "10000000000000000000000000";
+      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
       const res = await request(app)
         .get("/api/v1/quote")
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("GET /api/v1/quote — pair registration requirement", () => {
+    it("returns 404 pair_not_registered for an unregistered pair", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "unreg-pair-test")
+        .query({ source_asset: "NOTREGISTERED", dest_asset: "PAIR", amount: "100" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+      expect(res.body.message).toMatch(/NOTREGISTERED.*PAIR/);
+      expect(res.body.source_asset).toBe("NOTREGISTERED");
+      expect(res.body.dest_asset).toBe("PAIR");
+      expect(res.body.requestId).toBe("unreg-pair-test");
+    });
+
+    it("returns 200 after the pair is registered", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "REGSRC", destination: "REGDST" });
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "REGSRC", dest_asset: "REGDST", amount: "200" });
+      expect(res.status).toBe(200);
+      expect(res.body.source_asset).toBe("REGSRC");
+      expect(res.body.dest_asset).toBe("REGDST");
+      expect(res.body.route).toEqual(["REGSRC", "REGDST"]);
+    });
+
+    it("returns 404 again after a pair is unregistered", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "GONE", destination: "SOON" });
+      await request(app).delete("/api/v1/pairs/GONE/SOON");
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "GONE", dest_asset: "SOON", amount: "1" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+    });
+
+    it("400 validation errors take precedence over 404 pair_not_registered", async () => {
+      // Invalid amount — should be 400, not 404
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "NOTREGX", dest_asset: "NOTREGY", amount: "0" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("pair_not_registered response includes canonical requestId envelope", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "canon-id-123")
+        .query({ source_asset: "AA", dest_asset: "BB", amount: "1" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+      expect(res.body.requestId).toBe("canon-id-123");
+      expect(res.body.message).toBeTruthy();
+      expect(res.body.source_asset).toBe("AA");
+      expect(res.body.dest_asset).toBe("BB");
     });
   });
 

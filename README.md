@@ -207,15 +207,17 @@ unchanged.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
-### Strict request bodies
+## Asset codes
 
-Create and patch endpoints reject request bodies that contain unknown top-level
-keys with `400 invalid_request` (the response `unknownKeys` array lists the
-offending fields). This covers `POST /api/v1/api-keys`, `POST /api/v1/webhooks`,
-`POST /api/v1/pairs`, the four pair-meta `PATCH` routes, and `PATCH /api/v1/config`.
-A typo'd or unexpected field is reported instead of silently dropped, and keys
-like `__proto__` are surfaced as unknown rather than honoured. An absent or empty
-body has no keys to reject.
+Asset codes are canonicalized at every entry point (pair registration, pair-meta
+`PATCH`/`info` routes, `GET /api/v1/quote`, and `POST /api/v1/quote/bulk`): the
+value is trimmed and upper-cased, then validated against `[A-Z0-9]{1,12}`
+(Stellar's max alphanumeric asset code). Any internal whitespace, control
+character, or other non-alphanumeric symbol is rejected with `400 invalid_request`.
+Because the length is checked after trimming, `usdc`, `USDC`, and `USDC ` all map
+to the single canonical code `USDC`, so casing or stray whitespace never splits a
+logical pair. Responses echo the canonical form so clients learn the normalized
+code.
 
 ## Contributing
 

@@ -11,7 +11,10 @@ import {
   defaultMeta,
   recordEvent,
   resetStores,
+  trimEventLog,
+  effectiveEventLogCap,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
 } from "../stores";
 
 describe("stores module", () => {
@@ -57,7 +60,7 @@ describe("stores module", () => {
       expect(typeof evt.ts).toBe("number");
     });
 
-    it("evicts oldest entry beyond EVENT_LOG_CAP", () => {
+    it("evicts oldest entry beyond EVENT_LOG_CAP when config is default", () => {
       // Fill to cap
       for (let i = 0; i < EVENT_LOG_CAP; i++) {
         eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: {} });
@@ -66,6 +69,81 @@ describe("stores module", () => {
       expect(eventLog.length).toBe(EVENT_LOG_CAP);
       expect(eventLog[0].type).toBe("fill"); // oldest of original fill
       expect(eventLog[eventLog.length - 1].type).toBe("overflow");
+    });
+
+    it("evicts based on config.eventLogCap when configured to a lower value", () => {
+      config.eventLogCap = 5;
+      for (let i = 0; i < 5; i++) {
+        recordEvent("fill", { i });
+      }
+      expect(eventLog.length).toBe(5);
+      recordEvent("overflow", { n: 1 });
+      expect(eventLog.length).toBe(5);
+      expect(eventLog[eventLog.length - 1].type).toBe("overflow");
+    });
+
+    it("evicts with a cap of 1 (edge case)", () => {
+      config.eventLogCap = 1;
+      recordEvent("first", {});
+      expect(eventLog.length).toBe(1);
+      recordEvent("second", {});
+      expect(eventLog.length).toBe(1);
+      expect(eventLog[0].type).toBe("second");
+    });
+
+    it("falls back to EVENT_LOG_CAP if config.eventLogCap is zero or invalid", () => {
+      config.eventLogCap = 0;
+      expect(effectiveEventLogCap()).toBe(EVENT_LOG_CAP);
+      config.eventLogCap = -1;
+      expect(effectiveEventLogCap()).toBe(EVENT_LOG_CAP);
+    });
+
+    it("falls back to EVENT_LOG_CAP if config.eventLogCap exceeds EVENT_LOG_CAP_MAX", () => {
+      config.eventLogCap = EVENT_LOG_CAP_MAX + 1;
+      expect(effectiveEventLogCap()).toBe(EVENT_LOG_CAP);
+    });
+  });
+
+  describe("effectiveEventLogCap", () => {
+    it("returns config.eventLogCap when it is a valid positive integer", () => {
+      config.eventLogCap = 500;
+      expect(effectiveEventLogCap()).toBe(500);
+    });
+
+    it("returns EVENT_LOG_CAP when config.eventLogCap is the default", () => {
+      expect(effectiveEventLogCap()).toBe(EVENT_LOG_CAP);
+    });
+
+    it("returns EVENT_LOG_CAP_MAX when config.eventLogCap equals EVENT_LOG_CAP_MAX", () => {
+      config.eventLogCap = EVENT_LOG_CAP_MAX;
+      expect(effectiveEventLogCap()).toBe(EVENT_LOG_CAP_MAX);
+    });
+  });
+
+  describe("trimEventLog", () => {
+    it("removes oldest entries to fit within the new cap", () => {
+      for (let i = 0; i < 10; i++) {
+        eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: { i } });
+      }
+      trimEventLog(5);
+      expect(eventLog.length).toBe(5);
+      // oldest removed; remaining are the 5 newest
+      expect(eventLog[0].payload).toEqual({ i: 5 });
+      expect(eventLog[4].payload).toEqual({ i: 9 });
+    });
+
+    it("is a no-op when log is already within the cap", () => {
+      for (let i = 0; i < 3; i++) {
+        eventLog.push({ id: `e${i}`, ts: i, type: "fill", payload: {} });
+      }
+      trimEventLog(10);
+      expect(eventLog.length).toBe(3);
+    });
+
+    it("clears the entire log when cap is 0", () => {
+      eventLog.push({ id: "x", ts: 1, type: "fill", payload: {} });
+      trimEventLog(0);
+      expect(eventLog.length).toBe(0);
     });
   });
 

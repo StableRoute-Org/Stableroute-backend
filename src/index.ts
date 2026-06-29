@@ -92,10 +92,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 /** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
 const BULK_ABSOLUTE_MAX = 100_000;
 
-// Per-IP sliding-window rate limiter: 60 requests per 60 second window.
-// Disabled in test mode so the test suite can make many requests without
-// hitting the limit.
-const RATE_LIMIT_PER_WINDOW = 60;
+// Per-IP sliding-window rate limiter.
+// Reads config.rateLimitPerWindow and config.rateLimitWindowMs at request time
+// so PATCH /api/v1/config changes take effect immediately.
+// Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** Absolute upper-bound for the `bulkMaxItems` config key. */
@@ -104,15 +104,17 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
-  const bucket = evictRateBuckets(ip, now, RATE_LIMIT_WINDOW_MS);
-  if (bucket.length >= RATE_LIMIT_PER_WINDOW) {
-    res.setHeader("Retry-After", "60");
+  const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
+  const limitPerWindow = config.rateLimitPerWindow ?? 60;
+  const bucket = evictRateBuckets(ip, now, windowMs);
+  if (bucket.length >= limitPerWindow) {
+    res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
     sendError(
       res,
       req,
       429,
       "rate_limited",
-      `more than ${RATE_LIMIT_PER_WINDOW} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s`
+      `more than ${limitPerWindow} requests per ${windowMs / 1000}s`
     );
     return;
   }

@@ -49,7 +49,8 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "conflict"
   | "method_not_allowed"
-  | "read_only_mode";
+  | "read_only_mode"
+  | "pair_not_registered";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -1378,16 +1379,29 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
   }
+  /**
+   * Per-item pair registration check for bulk quotes.
+   *
+   * When `ALLOW_UNREGISTERED_QUOTES` is not set to `"true"`, each item whose
+   * pair is not present in `pairRegistry` returns `ok: false` with
+   * `error: "pair_not_registered"` instead of failing the whole batch.
+   * Shape/validation errors (invalid asset code, same asset, bad amount) are
+   * still returned as `ok: false, error: "invalid_item"` and take precedence.
+   */
+  const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
   const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
     const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
     const source_asset = normalizeAsset(rawSource);
     const dest_asset = normalizeAsset(rawDest);
     if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
-      return { index: i, ok: false, error: "invalid_item" };
+      return { index: i, ok: false as const, error: "invalid_item" };
+    }
+    if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+      return { index: i, ok: false as const, error: "pair_not_registered" };
     }
     return {
       index: i,
-      ok: true,
+      ok: true as const,
       source_asset,
       dest_asset,
       amount: String(amount),
@@ -1431,6 +1445,27 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       400,
       "invalid_request",
       "amount must be a positive integer string with no leading zero"
+    );
+  }
+
+  /**
+   * Pair registration guard.
+   *
+   * Looks up the pair key in `pairRegistry` after all shape/validation checks
+   * pass. When the pair is not registered, responds 404 `pair_not_registered`
+   * with the canonical `{ error, message, requestId }` body and echoes back the
+   * offending `source_asset`/`dest_asset`.
+   *
+   * Set `ALLOW_UNREGISTERED_QUOTES=true` in the environment to bypass this check
+   * (e.g. for demos that quote arbitrary pairs). The flag defaults to off, which
+   * is the safe/production behavior. It can only be set at process startup and
+   * cannot be toggled per-request.
+   */
+  const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+  if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+    return sendError(res, req, 404, "pair_not_registered",
+      `pair ${source_asset}->${dest_asset} is not registered`,
+      { source_asset, dest_asset }
     );
   }
 

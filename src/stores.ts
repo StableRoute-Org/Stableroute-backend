@@ -70,6 +70,11 @@ export type ApiKeyRecord = {
   /** Scopes granted to this key. Absent on legacy keys with no scope restrictions. */
   scopes?: string[];
   /**
+   * Authorization scopes granted to this key. Defaults to an empty array
+   * (read-only access).
+   */
+  scopes?: string[];
+  /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.
    */

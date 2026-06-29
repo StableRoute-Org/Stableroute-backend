@@ -324,6 +324,17 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Evict stale timestamps from a rate-limit bucket.
+ *
+ * Returns the subset of timestamps within the current window (now - windowMs).
+ */
+const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const existing = rateBuckets.get(ip) ?? [];
+  return existing.filter((t) => now - t < windowMs);
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -433,11 +444,10 @@ app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
 });
 
 /**
- * Reserved sentinel key used by the deep readiness probe storage check.
- * The NUL prefix ensures it can never collide with a real pair key because
- * `normalizeAsset` rejects control characters.
+ * Reserved key used by the deep health probe's storage check.
+ * Prefixed with a NUL control character so it can never collide with a real pair key.
  */
-const HEALTH_PROBE_KEY = "\x00health::probe";
+const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 /**
  * Run all health checks for the deep readiness probe.
@@ -964,14 +974,17 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-/** Maximum number of event-type subscriptions a single webhook may carry. */
-const WEBHOOK_MAX_EVENTS = 50;
+/** Maximum number of event subscriptions per webhook record. */
+const WEBHOOK_MAX_EVENTS = 20;
 
-/** Maximum character length for a single event-type string in a webhook subscription. */
-const WEBHOOK_MAX_EVENT_LENGTH = 64;
+/** Maximum length (characters) of a single event-type name. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
 
-/** Event-type name prefixes that are reserved for internal use and may not be subscribed to externally. */
-const WEBHOOK_RESERVED_PREFIXES: string[] = [];
+/**
+ * Event-name prefixes that are reserved for internal use and may not be
+ * subscribed to via the public API.
+ */
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
@@ -1380,6 +1393,15 @@ const BULK_ABSOLUTE_MAX = 100_000;
 const trimEventLog = (newCap: number): void => {
   if (eventLog.length > newCap) {
     eventLog.splice(0, eventLog.length - newCap);
+  }
+};
+
+/**
+ * Trim the event log to at most `cap` entries, retaining the newest entries.
+ */
+const trimEventLog = (cap: number): void => {
+  if (eventLog.length > cap) {
+    eventLog.splice(0, eventLog.length - cap);
   }
 };
 

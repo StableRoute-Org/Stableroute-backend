@@ -49,7 +49,8 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "conflict"
   | "method_not_allowed"
-  | "read_only_mode";
+  | "read_only_mode"
+  | "pair_disabled";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -946,6 +947,36 @@ for (const { suffix, field, bodyKey, validate, errorMessage, crossCheck } of pai
 }
 
 /**
+ * Toggle a pair's enabled flag.
+ *
+ * Accepts `{ enabled: boolean }` and emits a `pair.enabled` or `pair.disabled`
+ * audit event on each toggle. Non-boolean bodies are rejected with 400.
+ *
+ * @route PATCH /api/v1/pairs/:source/:destination/enabled
+ */
+app.patch("/api/v1/pairs/:source/:destination/enabled", (req: Request, res: Response): void => {
+  const normalized = normalizePairParams(req, res);
+  if (!normalized) return;
+  const { source, destination } = normalized;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    sendError(res, req, 404, "not_found", "pair not registered");
+    return;
+  }
+  if (rejectUnknownKeys(req, res, ["enabled"])) return;
+  const { enabled } = req.body ?? {};
+  if (typeof enabled !== "boolean") {
+    sendError(res, req, 400, "invalid_request", "enabled must be a boolean");
+    return;
+  }
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  meta.enabled = enabled;
+  pairMeta.set(k, meta);
+  recordEvent(enabled ? "pair.enabled" : "pair.disabled", { source, destination });
+  res.json({ source, destination, ...meta });
+});
+
+/**
  * Reset a registered pair's metadata to factory defaults.
  *
  * Overwrites the pair's `pairMeta` entry with `defaultMeta()`, emits a
@@ -1385,6 +1416,11 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
+    const bulkKey = pairKey(source_asset, dest_asset);
+    const bulkMeta = pairMeta.get(bulkKey) ?? defaultMeta();
+    if (pairRegistry.has(bulkKey) && bulkMeta.enabled === false) {
+      return { index: i, ok: false as const, error: "pair_disabled" };
+    }
     return {
       index: i,
       ok: true,
@@ -1434,7 +1470,14 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
-  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const quoteKey = pairKey(source_asset, dest_asset);
+  const meta = pairMeta.get(quoteKey) ?? defaultMeta();
+
+  // Gate: registered pairs that have been explicitly disabled return 409.
+  if (pairRegistry.has(quoteKey) && meta.enabled === false) {
+    return sendError(res, req, 409, "pair_disabled", "this trading pair is currently disabled");
+  }
+
   const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
 
   res.json({

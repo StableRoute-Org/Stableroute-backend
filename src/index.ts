@@ -32,6 +32,19 @@ app.use(cors());
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
 
+/** Union of all error codes used in API responses. */
+export type ApiErrorCode =
+  | "not_found"
+  | "invalid_request"
+  | "unauthorized"
+  | "rate_limited"
+  | "service_paused"
+  | "internal_error"
+  | "not_acceptable"
+  | "payload_too_large"
+  | "conflict"
+  | "method_not_allowed";
+
 /**
  * Validates an inbound X-Request-Id value.
  *
@@ -58,7 +71,7 @@ const sendError = (
   res: Response,
   req: Request,
   status: number,
-  error: string,
+  error: ApiErrorCode,
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });

@@ -62,12 +62,14 @@ rationale), a Mermaid request-flow diagram, and the canonical error envelope.
 The backend is configured entirely through environment variables. The
 table below lists every variable the code reads — there are no others.
 
-| Variable   | Purpose                                                                                              | Default       | Example       |
-|------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
-| `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
-| `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
-| `GIT_COMMIT` | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `a1b2c3d`     |
-| `BUILD_TIME` | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `2026-01-01T00:00:00Z` |
+| Variable           | Purpose                                                                                              | Default                        | Example                    |
+|--------------------|------------------------------------------------------------------------------------------------------|--------------------------------|----------------------------|
+| `PORT`             | TCP port the HTTP server binds to.                                                                   | `3001`                         | `8080`                     |
+| `NODE_ENV`         | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_                      | `production`               |
+| `GIT_COMMIT`       | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_                 | `a1b2c3d`                  |
+| `BUILD_TIME`       | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_             | `2026-01-01T00:00:00Z`     |
+| `STORAGE_BACKEND`  | Storage adapter to use. `"memory"` keeps state in-process (lost on restart); `"json-file"` persists state to disk across restarts. | `memory` | `json-file` |
+| `STORAGE_FILE`     | Path to the JSON file used when `STORAGE_BACKEND=json-file`. Ignored for other backends.            | `./stableroute-data.json`      | `/var/data/stableroute.json` |
 
 ### Build/version endpoint
 
@@ -171,6 +173,28 @@ Express router stack, converts each registered `/api/v1/...` route to its
 OpenAPI templated form (`:param` → `{param}`), and asserts every discovered path
 appears as a key in `openApiSpec.paths`. This makes it impossible to ship a new
 endpoint without documenting it.
+
+## Storage adapter
+
+All persistent state is accessed through a pluggable `StorageAdapter` interface
+defined in `src/store/adapter.ts`. The active backend is selected at startup via
+the `STORAGE_BACKEND` environment variable:
+
+| `STORAGE_BACKEND` | Adapter           | Durability                      |
+|-------------------|-------------------|---------------------------------|
+| `memory` (default) | `InMemoryAdapter` | State is lost on process restart. |
+| `json-file`       | `JsonFileAdapter` | State is written to `STORAGE_FILE` (default `./stableroute-data.json`) and reloaded on startup, so the registry survives restarts. |
+
+**Example — durable local dev:**
+
+```bash
+STORAGE_BACKEND=json-file STORAGE_FILE=./data/sr.json npm run dev
+```
+
+The `StorageAdapter` interface covers pairs, pair metadata, API keys, webhooks,
+and events. Adding a new durable backend (e.g. SQLite) only requires
+implementing the interface and registering the backend in the `createAdapter`
+factory.
 
 ## In-memory stores
 

@@ -12,6 +12,9 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+See [docs/events.md](docs/events.md) for the event taxonomy, `AppEvent`
+envelope schema, webhook subscription model, and JSON payload examples.
+
 ## Prerequisites
 
 - Node.js 18+

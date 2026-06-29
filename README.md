@@ -12,13 +12,11 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-## Store model and test contract
+## Pricing concepts
 
-See [docs/stores.md](docs/stores.md) for a description of every in-memory
-store (`pairRegistry`, `pairMeta`, `apiKeyStore`, `webhookStore`, `eventLog`,
-`rateBuckets`, `config`, and the `paused` flag), the `pairKey` encoding, the
-`defaultMeta()` baseline, and the `resetStores()` test contract that prevents
-cross-test bleed.
+See [docs/pricing.md](docs/pricing.md) for a guide explaining base-units
+amounts, `BigInt` precision, basis-point fees, min/max/liquidity bounds,
+and the placeholder rate — including worked numeric examples.
 
 ## Prerequisites
 

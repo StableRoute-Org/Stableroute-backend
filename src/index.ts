@@ -31,6 +31,20 @@ type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
 
 /**
+ * Validates an inbound X-Request-Id value.
+ *
+ * Accepted format: 1–200 characters drawn exclusively from the conservative
+ * token charset `[A-Za-z0-9._-]`. This deliberately excludes control
+ * characters, CR, LF, and other non-token bytes that could be used for
+ * header-injection or log-injection attacks.
+ *
+ * @param value - The raw header value to validate.
+ * @returns `true` when the value is safe to echo; `false` otherwise.
+ */
+export const isValidRequestId = (value: string): boolean =>
+  value.length > 0 && value.length <= 200 && /^[A-Za-z0-9._-]+$/.test(value);
+
+/**
  * Read the request id attached by the correlation middleware.
  */
 const getRequestId = (req: Request): string | undefined => (req as RequestWithId).id;
@@ -49,9 +63,13 @@ const sendError = (
 
 // Attach an X-Request-Id before body parsing so parser errors can still
 // return the canonical error shape with a correlation id.
+// Only echo the caller's id when it passes the strict charset + length check
+// (isValidRequestId); anything that fails — including values with control
+// characters, CR/LF, or other non-token bytes — is silently replaced with a
+// freshly generated UUID v4 to prevent header-injection and log-injection.
 app.use((req: Request, res: Response, next: NextFunction) => {
   const incoming = req.header("x-request-id");
-  const id = incoming && incoming.length <= 200 ? incoming : randomUUID();
+  const id = incoming !== undefined && isValidRequestId(incoming) ? incoming : randomUUID();
   (req as RequestWithId).id = id;
   res.setHeader("X-Request-Id", id);
   next();
@@ -74,6 +92,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+// Hard ceiling for the bulk-quote item cap. The operator-configurable
+// config.bulkMaxItems value cannot exceed this constant.
+const BULK_ABSOLUTE_MAX = 10_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";

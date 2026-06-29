@@ -12,21 +12,19 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-### Webhook event allowlist
+### API-key scopes
 
-`POST /api/v1/webhooks` validates each entry in `events` against the canonical
-allowlist of emitted event types (`KNOWN_EVENT_TYPES` in `src/stores.ts`):
+`POST /api/v1/api-keys` accepts an optional `scopes` array drawn from a fixed
+catalog: `pairs:write`, `webhooks:write`, `keys:admin`. Unknown scopes are
+rejected with `400 invalid_request`. When `scopes` is omitted the key defaults
+to a least-privilege, read-only set (no write scope). `GET /api/v1/api-keys`
+surfaces each key's `scopes` (never the raw key).
 
-- `pair.registered`
-- `pair.refreshed`
-- `pair.unregistered`
-
-A `"*"` wildcard is also accepted, meaning "all current and future types".
-Any other value is rejected with `400 invalid_request`, and the error message
-lists the offending value(s) — this prevents silent subscriptions to typos like
-`pair.regstered` that would never deliver. `KNOWN_EVENT_TYPES` is the single
-source of truth shared with `recordEvent`, so the allowlist cannot drift from
-the types the system actually emits.
+The `requireScope(scope)` factory returns Express middleware that resolves the
+key from the `Authorization: Bearer <srk_...>` header and asserts it carries the
+required scope, responding `401 unauthorized` when no valid key is supplied and
+`403 forbidden` when the key lacks the scope. Write routes can adopt it directly;
+`GET /api/v1/api-keys/whoami` is a small probe guarded by `requireScope("keys:admin")`.
 
 ## Architecture & request lifecycle
 

@@ -58,6 +58,12 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /**
+   * Authorization scopes granted to this key. Defaults to a least-privilege
+   * read-only set at creation when the caller omits `scopes`. Used by the
+   * `requireScope` guard to authorize write routes.
+   */
+  scopes: string[];
 };
 
 /** Record stored for each registered webhook. */

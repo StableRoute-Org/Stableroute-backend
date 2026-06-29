@@ -136,21 +136,22 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
-## Metrics
+## Read-only maintenance mode
 
-`GET /api/v1/metrics` exposes Prometheus text exposition format
-(`text/plain; version=0.0.4`). Alongside `stableroute_pairs_total` and
-`stableroute_paused`, it emits label-free, constant-cardinality store-size and
-config gauges:
+In addition to the full `paused` kill-switch, the backend supports a softer
+**read-only** mode that keeps reads and quotes flowing while freezing other
+mutations — useful during a migration.
 
-| Metric                              | Source                          |
-| ----------------------------------- | ------------------------------- |
-| `stableroute_api_keys_total`        | Number of stored API keys.      |
-| `stableroute_webhooks_total`        | Number of registered webhooks.  |
-| `stableroute_event_log_size`        | Current event-log depth.        |
-| `stableroute_rate_limit_per_window` | Configured requests per window. |
+- `POST /api/v1/admin/read-only` — enable read-only mode.
+- `POST /api/v1/admin/read-write` — disable it (always reachable, so operators
+  can never be locked out).
+- `GET /api/v1/admin/status` returns `{ paused, readOnly }`.
 
-These carry no labels and never include raw secrets or URLs.
+While read-only is on (and not paused), `GET`/`HEAD`/`OPTIONS` and the quote
+endpoints (`/api/v1/quote`, `/api/v1/quote/reverse`, `/api/v1/quote/bulk`)
+succeed; every other mutating write is rejected with `503 read_only_mode` using
+the canonical error body. `paused` is strictly stronger: when the service is
+paused, the existing pause behavior (`503 service_paused`) wins.
 
 ## OpenAPI spec
 

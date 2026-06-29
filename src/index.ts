@@ -12,7 +12,9 @@ import {
   eventLog,
   rateBuckets,
   config,
+  readOnly,
   setPaused,
+  setReadOnly,
   pairKey,
   defaultMeta,
   recordEvent,
@@ -45,7 +47,8 @@ export type ApiErrorCode =
   | "not_acceptable"
   | "payload_too_large"
   | "conflict"
-  | "method_not_allowed";
+  | "method_not_allowed"
+  | "read_only_mode";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -136,6 +139,38 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
   if (req.path === "/api/v1/admin/unpause") return next();
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
+});
+
+/**
+ * Read-only maintenance guard.
+ *
+ * When `readOnly` is enabled (and the service is not paused — `paused` is
+ * strictly stronger and its guard runs first), this middleware keeps reads and
+ * quotes flowing while rejecting other mutating writes with
+ * `503 read_only_mode`.
+ *
+ * Allowed while read-only:
+ * - idempotent methods `GET` / `HEAD` / `OPTIONS`;
+ * - the quote endpoints (`/api/v1/quote`, `/api/v1/quote/reverse`,
+ *   `/api/v1/quote/bulk`), including the POST bulk-quote;
+ * - `POST /api/v1/admin/read-write`, so an operator can always recover
+ *   (mirroring the unpause carve-out).
+ *
+ * All other mutating requests receive the canonical `503 read_only_mode` body.
+ */
+const QUOTE_PATHS = new Set([
+  "/api/v1/quote",
+  "/api/v1/quote/reverse",
+  "/api/v1/quote/bulk",
+]);
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!readOnly) return next();
+  const m = req.method.toUpperCase();
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
+  if (QUOTE_PATHS.has(req.path)) return next();
+  // Recovery path must always be reachable, like /admin/unpause.
+  if (req.path === "/api/v1/admin/read-write") return next();
+  sendError(res, req, 503, "read_only_mode", "StableRoute backend is in read-only mode");
 });
 
 /** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
@@ -380,6 +415,14 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   setPaused(false);
   recordEvent("admin.unpaused", {});
   res.json({ paused });
+});
+app.post("/api/v1/admin/read-only", (_req: Request, res: Response) => {
+  setReadOnly(true);
+  res.json({ readOnly });
+});
+app.post("/api/v1/admin/read-write", (_req: Request, res: Response) => {
+  setReadOnly(false);
+  res.json({ readOnly });
 });
 
 /**
@@ -874,7 +917,7 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
-  res.json({ paused });
+  res.json({ paused, readOnly });
 });
 
 /** Absolute upper bound on the bulkMaxItems config field. */

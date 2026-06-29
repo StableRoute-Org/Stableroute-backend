@@ -22,6 +22,8 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "pair.enabled",
+  "pair.disabled",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",
@@ -49,7 +51,8 @@ export type PairMeta = {
   minAmount: string;
   maxAmount: string;
   liquidity: string;
-  rate: string;
+  /** Whether this pair is enabled for quoting. Default true. */
+  enabled: boolean;
 };
 
 /** Structured event appended to the in-memory event log. */
@@ -108,7 +111,7 @@ export const defaultMeta = (): PairMeta => ({
   minAmount: "0",
   maxAmount: "0",
   liquidity: "0",
-  rate: "1.0",
+  enabled: true,
 });
 
 /** Canonical config shape used by GET/PATCH /api/v1/config. */

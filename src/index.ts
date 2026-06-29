@@ -19,6 +19,7 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
   KNOWN_EVENT_TYPES,
   type PairMeta,
   type AppEvent,
@@ -174,17 +175,22 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "read_only_mode", "StableRoute backend is in read-only mode");
 });
 
-/** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
-const BULK_ABSOLUTE_MAX = 100_000;
-
 // Per-IP sliding-window rate limiter.
 // Reads config.rateLimitPerWindow and config.rateLimitWindowMs at request time
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Absolute upper-bound for the `bulkMaxItems` config key. */
-const BULK_ABSOLUTE_MAX = 100_000;
+/**
+ * Evict stale timestamps from a rate-limit bucket.
+ *
+ * Returns the subset of timestamps within the current window (now - windowMs).
+ */
+const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const existing = rateBuckets.get(ip) ?? [];
+  return existing.filter((t) => now - t < windowMs);
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -292,6 +298,12 @@ app.get("/health", (_req: Request, res: Response) => {
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.json(openApiSpec);
 });
+
+/**
+ * Reserved key used by the deep health probe's storage check.
+ * Prefixed with a NUL control character so it can never collide with a real pair key.
+ */
+const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 /**
  * Run all health checks for the deep readiness probe.
@@ -642,6 +654,18 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
   const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
   res.json({ items });
 });
+
+/** Maximum number of event subscriptions per webhook record. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum length (characters) of a single event-type name. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/**
+ * Event-name prefixes that are reserved for internal use and may not be
+ * subscribed to via the public API.
+ */
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
@@ -998,6 +1022,15 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 /** Absolute upper bound on the bulkMaxItems config field. */
 const BULK_ABSOLUTE_MAX = 10_000;
 
+/**
+ * Trim the event log to at most `cap` entries, retaining the newest entries.
+ */
+const trimEventLog = (cap: number): void => {
+  if (eventLog.length > cap) {
+    eventLog.splice(0, eventLog.length - cap);
+  }
+};
+
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
@@ -1026,22 +1059,7 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   res.json({ config });
 });
 
-/**
- * Canonical set of known event types emitted by the gateway.
- * Kept here so the metrics series set is stable across scrapes even when
- * the event log is empty.
- */
-const KNOWN_EVENT_TYPES = [
-  "pair.registered",
-  "pair.refreshed",
-  "pair.unregistered",
-  "apikey.created",
-  "apikey.deleted",
-  "webhook.created",
-  "webhook.deleted",
-  "admin.paused",
-  "admin.unpaused",
-] as const;
+// KNOWN_EVENT_TYPES is imported from ./stores — no local redeclaration needed.
 
 /**
  * Escape a Prometheus label value per the exposition format rules:

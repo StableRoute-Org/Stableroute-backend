@@ -22,6 +22,7 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "pair.meta.reset",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",
@@ -64,6 +65,11 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /**
+   * Authorization scopes granted to this key. Defaults to an empty array
+   * (read-only access).
+   */
+  scopes?: string[];
   /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.

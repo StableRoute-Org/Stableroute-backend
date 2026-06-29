@@ -329,8 +329,19 @@ Resume the service. Always allowed even while paused.
 
 Prometheus exposition format.
 
-- **Response 200:** `text/plain; version=0.0.4` body with
-  `stableroute_pairs_total` and `stableroute_paused` gauges.
+- **Response 200:** `text/plain; version=0.0.4` body with the following gauges:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `stableroute_pairs_total` | gauge | Number of currently registered pairs. |
+| `stableroute_paused` | gauge | `1` if the service is paused, `0` otherwise. |
+| `stableroute_events_total` | gauge | Current size of the in-memory audit event log. |
+| `stableroute_events_by_type{type="…"}` | gauge | Count of events in the audit log for each known event type (`pair.registered`, `pair.refreshed`, `pair.unregistered`). |
+
+Label values in `stableroute_events_by_type` are escaped per the Prometheus
+text-exposition rules (backslash, double-quote, and newline characters are
+escaped). The series set is stable across scrapes — all known types are always
+emitted even when their count is zero.
 
 ### `GET /api/v1/events`
 

@@ -74,6 +74,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+/** Hard upper bound for the bulkMaxItems config key. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -469,7 +471,49 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   res.json({ config });
 });
 
+/**
+ * Canonical set of known event types emitted by the gateway.
+ * Kept here so the metrics series set is stable across scrapes even when
+ * the event log is empty.
+ */
+const KNOWN_EVENT_TYPES = [
+  "pair.registered",
+  "pair.refreshed",
+  "pair.unregistered",
+] as const;
+
+/**
+ * Escape a Prometheus label value per the exposition format rules:
+ * backslash → \\, double-quote → \", newline → \n.
+ *
+ * @param value - Raw label value string.
+ * @returns Escaped string safe for use inside double-quoted label values.
+ */
+const escapeLabelValue = (value: string): string =>
+  value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+
+/**
+ * Aggregate event counts from the in-memory event log.
+ *
+ * Returns a Map from event type to count.  Only types present in
+ * {@link KNOWN_EVENT_TYPES} are included so the series set is stable.
+ *
+ * @param log - The current event log array.
+ * @returns Map of event type → count for each known type.
+ */
+const aggregateEventCounts = (log: AppEvent[]): Map<string, number> => {
+  const counts = new Map<string, number>(KNOWN_EVENT_TYPES.map((t) => [t, 0]));
+  for (const event of log) {
+    if (counts.has(event.type)) {
+      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+    }
+  }
+  return counts;
+};
+
 app.get("/api/v1/metrics", (_req: Request, res: Response) => {
+  const eventCounts = aggregateEventCounts(eventLog);
+
   const lines = [
     "# HELP stableroute_pairs_total Number of registered pairs.",
     "# TYPE stableroute_pairs_total gauge",
@@ -477,6 +521,15 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
     "# HELP stableroute_paused 1 if paused, 0 otherwise.",
     "# TYPE stableroute_paused gauge",
     `stableroute_paused ${paused ? 1 : 0}`,
+    "# HELP stableroute_events_total Total number of events in the audit log.",
+    "# TYPE stableroute_events_total gauge",
+    `stableroute_events_total ${eventLog.length}`,
+    "# HELP stableroute_events_by_type Count of events in the audit log per type.",
+    "# TYPE stableroute_events_by_type gauge",
+    ...Array.from(eventCounts.entries()).map(
+      ([type, count]) =>
+        `stableroute_events_by_type{type="${escapeLabelValue(type)}"} ${count}`
+    ),
   ];
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(lines.join("\n") + "\n");

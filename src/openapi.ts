@@ -22,6 +22,7 @@ export const openApiSpec = {
     },
     "/api/v1/pairs": {
       get: { summary: "List pairs" },
+      head: { summary: "Pairs list ETag (no body)" },
       post: { summary: "Register pair" },
     },
     "/api/v1/pairs/{source}/{destination}": {

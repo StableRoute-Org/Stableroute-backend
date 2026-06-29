@@ -817,7 +817,8 @@ const makePairMetaPatch = <K extends keyof PairMeta>(
   field: K,
   bodyKey: string,
   validate: (v: unknown) => boolean,
-  errorMessage: string
+  errorMessage: string,
+  crossCheck?: (value: unknown, meta: PairMeta) => string | null
 ) =>
   (req: Request, res: Response): void => {
     const normalized = normalizePairParams(req, res);
@@ -835,10 +836,58 @@ const makePairMetaPatch = <K extends keyof PairMeta>(
       return;
     }
     const meta = pairMeta.get(k) ?? defaultMeta();
+    // Optional cross-field invariant (e.g. min <= max). Runs after the
+    // per-field format check so `value` is already known to be a valid
+    // integer string; comparisons stay in BigInt space (see crossCheck impls).
+    if (crossCheck) {
+      const crossError = crossCheck(value, meta);
+      if (crossError !== null) {
+        sendError(res, req, 400, "invalid_request", crossError);
+        return;
+      }
+    }
     (meta as Record<string, unknown>)[field] = value;
     pairMeta.set(k, meta);
     res.json({ source, destination, ...meta });
   };
+
+/**
+ * Cross-field guard for `PATCH .../min`.
+ *
+ * Rejects a new `minAmount` that would exceed the pair's existing **non-zero**
+ * `maxAmount` (a `maxAmount` of `"0"` is treated as "unset" and never triggers
+ * the check). Both values are compared as `BigInt` to preserve precision on
+ * amounts above `Number.MAX_SAFE_INTEGER`; the input is never coerced through
+ * `Number`.
+ *
+ * @returns An error message naming both bounds when inconsistent, else `null`.
+ */
+const checkMinAgainstMax = (value: unknown, meta: PairMeta): string | null => {
+  const newMin = BigInt(value as string);
+  const existingMax = BigInt(meta.maxAmount);
+  if (existingMax !== 0n && newMin > existingMax) {
+    return `minAmount (${newMin}) must not exceed the current maxAmount (${existingMax})`;
+  }
+  return null;
+};
+
+/**
+ * Cross-field guard for `PATCH .../max`.
+ *
+ * Rejects a new `maxAmount` that would fall below the pair's existing
+ * **non-zero** `minAmount` (a `minAmount` of `"0"` is treated as "unset").
+ * Comparisons are performed entirely in `BigInt` space.
+ *
+ * @returns An error message naming both bounds when inconsistent, else `null`.
+ */
+const checkMaxAgainstMin = (value: unknown, meta: PairMeta): string | null => {
+  const newMax = BigInt(value as string);
+  const existingMin = BigInt(meta.minAmount);
+  if (existingMin !== 0n && newMax < existingMin) {
+    return `maxAmount (${newMax}) must not be below the current minAmount (${existingMin})`;
+  }
+  return null;
+};
 
 /**
  * Descriptor table driving the four per-pair PATCH routes.
@@ -852,6 +901,7 @@ const pairMetaPatchDescriptors: Array<{
   bodyKey: string;
   validate: (v: unknown) => boolean;
   errorMessage: string;
+  crossCheck?: (value: unknown, meta: PairMeta) => string | null;
 }> = [
   {
     suffix: "liquidity",
@@ -866,6 +916,7 @@ const pairMetaPatchDescriptors: Array<{
     bodyKey: "maxAmount",
     validate: (v) => typeof v === "string" && /^[1-9][0-9]{0,38}$/.test(v),
     errorMessage: "maxAmount must be a positive integer string",
+    crossCheck: checkMaxAgainstMin,
   },
   {
     suffix: "min",
@@ -873,6 +924,7 @@ const pairMetaPatchDescriptors: Array<{
     bodyKey: "minAmount",
     validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
+    crossCheck: checkMinAgainstMax,
   },
   {
     suffix: "fee_bps",
@@ -885,10 +937,10 @@ const pairMetaPatchDescriptors: Array<{
 ];
 
 // Register each descriptor as a PATCH route.
-for (const { suffix, field, bodyKey, validate, errorMessage } of pairMetaPatchDescriptors) {
+for (const { suffix, field, bodyKey, validate, errorMessage, crossCheck } of pairMetaPatchDescriptors) {
   app.patch(
     `/api/v1/pairs/:source/:destination/${suffix}`,
-    makePairMetaPatch(field, bodyKey, validate, errorMessage)
+    makePairMetaPatch(field, bodyKey, validate, errorMessage, crossCheck)
   );
 }
 

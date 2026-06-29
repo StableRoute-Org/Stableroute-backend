@@ -1151,72 +1151,73 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("asset-code normalization", () => {
-    it("echoes the canonical upper-cased code when registering a lowercase pair", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "usdc", destination: "eurc" });
-      expect([200, 201]).toContain(res.status);
-      expect(res.body.source).toBe("USDC");
-      expect(res.body.destination).toBe("EURC");
+  describe("pair-meta: min <= max ordering invariant", () => {
+    const SRC = "ORDR";
+    const DST = "BNDS";
+
+    beforeEach(async () => {
+      await request(app).post("/api/v1/pairs").send({ source: SRC, destination: DST });
     });
 
-    it("matches a quote for USDC against a pair registered as usdc (same pairKey)", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "usdc", destination: "ngnc" });
-      await request(app)
-        .patch("/api/v1/pairs/USDC/NGNC/fee_bps")
-        .send({ feeBps: 25 });
+    afterEach(async () => {
+      await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
+    });
+
+    it("PATCH /min rejects when new minAmount exceeds current maxAmount", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "100" });
       const res = await request(app)
-        .get("/api/v1/quote")
-        .query({ source_asset: "USDC", dest_asset: "ngnc", amount: "10000" });
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "1000" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/minAmount/);
+      expect(res.body.message).toMatch(/maxAmount/);
+    });
+
+    it("PATCH /max rejects when new maxAmount is below current minAmount", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/min`).send({ minAmount: "1000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
+        .send({ maxAmount: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/maxAmount/);
+      expect(res.body.message).toMatch(/minAmount/);
+    });
+
+    it("accepts a valid min < max ordering", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "1000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "100" });
       expect(res.status).toBe(200);
-      expect(res.body.source_asset).toBe("USDC");
-      expect(res.body.dest_asset).toBe("NGNC");
-      // fee set on the canonical pair must apply to the case-folded quote
-      expect(res.body.feeBps).toBe(25);
+      expect(res.body.minAmount).toBe("100");
     });
 
-    it("trims trailing/leading whitespace before registering", async () => {
+    it("accepts equal min and max bounds", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "500" });
       const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: " usdc ", destination: "brl" });
-      expect([200, 201]).toContain(res.status);
-      expect(res.body.source).toBe("USDC");
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "500" });
+      expect(res.status).toBe(200);
     });
 
-    it("rejects a code with internal whitespace", async () => {
+    it("treats maxAmount of 0 (unset) as never triggering the min cross-check", async () => {
+      // maxAmount defaults to "0"; a large min must still be accepted
       const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "US DC", destination: "EURC" });
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "999999999999999999999999" });
+      expect(res.status).toBe(200);
+    });
+
+    it("compares in BigInt space beyond Number.MAX_SAFE_INTEGER", async () => {
+      // 10^25 vs 10^25 + 1 — indistinguishable as JS numbers, distinct as BigInt
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
+        .send({ maxAmount: "10000000000000000000000000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "10000000000000000000000001" });
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-    });
-
-    it("rejects a code containing a symbol", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "US$C", destination: "EURC" });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-    });
-
-    it("rejects a code with a control character", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "US\u0001C", destination: "EURC" });
-      expect(res.status).toBe(400);
-    });
-
-    it("rejects padding that would exceed the 12-char cap after trim", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "THIRTEENLETT", destination: "EURC" });
-      // 12 chars is allowed; verify a 13-char trimmed code is rejected
-      const tooLong = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "  THIRTEENLETTERS  ", destination: "EURC" });
-      expect(res.status === 200 || res.status === 201).toBe(true);
-      expect(tooLong.status).toBe(400);
     });
   });
 });

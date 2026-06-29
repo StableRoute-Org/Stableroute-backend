@@ -207,17 +207,15 @@ unchanged.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
-## Asset codes
+## Per-pair amount bounds
 
-Asset codes are canonicalized at every entry point (pair registration, pair-meta
-`PATCH`/`info` routes, `GET /api/v1/quote`, and `POST /api/v1/quote/bulk`): the
-value is trimmed and upper-cased, then validated against `[A-Z0-9]{1,12}`
-(Stellar's max alphanumeric asset code). Any internal whitespace, control
-character, or other non-alphanumeric symbol is rejected with `400 invalid_request`.
-Because the length is checked after trimming, `usdc`, `USDC`, and `USDC ` all map
-to the single canonical code `USDC`, so casing or stray whitespace never splits a
-logical pair. Responses echo the canonical form so clients learn the normalized
-code.
+The `minAmount` and `maxAmount` slots on a pair must satisfy the invariant
+`minAmount <= maxAmount`. `PATCH .../min` is rejected with `400 invalid_request`
+when the new `minAmount` would exceed the existing non-zero `maxAmount`, and
+`PATCH .../max` is rejected when the new `maxAmount` would fall below the existing
+non-zero `minAmount`. A bound of `0` is treated as "unset" and never triggers the
+cross-check, and all comparisons are performed in `BigInt` space to preserve
+precision.
 
 ## Contributing
 

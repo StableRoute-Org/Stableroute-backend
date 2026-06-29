@@ -98,54 +98,8 @@ const BULK_ABSOLUTE_MAX = 10_000;
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Absolute upper bound on the bulk-quote item count, regardless of config. */
+/** Absolute ceiling for bulkMaxItems to prevent runaway memory usage. */
 const BULK_ABSOLUTE_MAX = 100_000;
-
-/**
- * Evict idle and overflow entries from {@link rateBuckets} to bound memory.
- *
- * Two eviction passes are applied in order:
- * 1. **Idle eviction** — if `ip` already has a bucket and after pruning
- *    stale timestamps it is empty, delete the key entirely instead of
- *    writing back an empty array.
- * 2. **Ceiling eviction** — if adding a new IP would push the map beyond
- *    {@link RATE_BUCKETS_MAX_IPS}, delete the least-recently-active entry
- *    (the first key in insertion order, which is the oldest) before
- *    inserting the new one.
- *
- * This function is exported so unit tests can exercise eviction logic
- * independently of the Express middleware (which is disabled under
- * `NODE_ENV=test`).
- *
- * @param ip        - The source IP address being processed.
- * @param now       - Current epoch timestamp in milliseconds.
- * @param windowMs  - Length of the sliding window in milliseconds.
- * @returns The pruned in-window timestamp array for `ip` (may be empty).
- */
-export const evictRateBuckets = (
-  ip: string,
-  now: number,
-  windowMs: number
-): number[] => {
-  const existing = rateBuckets.get(ip);
-  const pruned = (existing ?? []).filter((t) => now - t < windowMs);
-
-  // Idle eviction: remove the key if no in-window timestamps remain and
-  // the IP already had an entry (i.e. we are not about to add it fresh).
-  if (existing !== undefined && pruned.length === 0) {
-    rateBuckets.delete(ip);
-    return pruned;
-  }
-
-  // Ceiling eviction: shed the oldest tracked IP before inserting a new one.
-  if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
-    const oldestKey = rateBuckets.keys().next().value;
-    if (oldestKey !== undefined) rateBuckets.delete(oldestKey);
-  }
-
-  return pruned;
-};
-
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -765,6 +719,27 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Compute the fee breakdown for a given amount and fee rate.
+ *
+ * Arithmetic is performed entirely with `BigInt` to preserve precision on
+ * amounts above `Number.MAX_SAFE_INTEGER`. Fees are rounded **down** (in
+ * the gateway's favour) via integer division. The resulting `netAmount` is
+ * always non-negative: `netAmount = amount - feeAmount`.
+ *
+ * @param amount  - The gross amount in base units (must be > 0n).
+ * @param feeBps  - Fee rate in basis points (0–1000, where 10000 bps = 100 %).
+ * @returns An object with `feeAmount` and `netAmount` as `bigint` values.
+ */
+export const applyFee = (
+  amount: bigint,
+  feeBps: number
+): { feeAmount: bigint; netAmount: bigint } => {
+  const feeAmount = (amount * BigInt(feeBps)) / 10_000n;
+  const netAmount = amount - feeAmount;
+  return { feeAmount, netAmount };
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -824,12 +799,18 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
+  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
+
   res.json({
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
     estimated_rate: "1.0",
     route: [source_asset, dest_asset],
+    feeBps: meta.feeBps,
+    feeAmount: feeAmount.toString(),
+    netAmount: netAmount.toString(),
   });
 });
 

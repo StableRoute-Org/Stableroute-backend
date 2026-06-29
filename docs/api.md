@@ -336,39 +336,55 @@ Get a single route quote. All three params are query-string params.
   {
     "source_asset": "USDC",
     "dest_asset": "EURC",
-    "amount": "100",
+    "amount": "10000",
     "estimated_rate": "1.0",
-    "route": ["USDC", "EURC"]
+    "route": ["USDC", "EURC"],
+    "feeBps": 30,
+    "feeAmount": "30",
+    "netAmount": "9970"
   }
   ```
 - **Errors:** `400 invalid_request` if any param is missing, if assets are
   not 1–12 char strings, if `source_asset === dest_asset`, or if `amount`
   is not a valid positive integer string.
 
-### `GET /api/v1/quote/reverse`
+#### Fee breakdown fields
 
-Reverse quote: given a target `output` amount the recipient should receive,
-returns the gross `requiredInput` the sender must provide (after the pair's
-fee is deducted). The required input is rounded **up** so the recipient is
-never short-changed.
+| Field        | Type   | Description                                                                                           |
+|--------------|--------|-------------------------------------------------------------------------------------------------------|
+| `feeBps`     | number | The fee rate applied in basis points (100 bps = 1 %). Sourced from the registered pair's metadata; defaults to `0` if no metadata exists. |
+| `feeAmount`  | string | Absolute fee in base units as an integer string. Computed as `floor(amount × feeBps / 10000)`. Fees are rounded **down** (in the gateway's favour). |
+| `netAmount`  | string | Amount the destination side receives after fees: `amount - feeAmount`. Always ≥ `0`. |
 
-- **Query:** `source_asset` (1–12 chars), `dest_asset` (1–12 chars),
-  `output` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
-- **Response 200:**
-  ```json
-  {
-    "source_asset": "USDC",
-    "dest_asset": "EURC",
-    "output": "10000",
-    "requiredInput": "10031",
-    "feeAmount": "31",
-    "feeBps": 30,
-    "route": ["USDC", "EURC"]
-  }
-  ```
-- **Errors:** `400 invalid_request` if any param is missing, if assets are
-  not 1–12 char strings, if `source_asset === dest_asset`, or if `output`
-  is not a valid positive integer string.
+All fee arithmetic uses `BigInt` internally, so precision is preserved for
+amounts above `Number.MAX_SAFE_INTEGER` (`~9 × 10¹⁵`).
+
+##### Worked example
+
+Pair `USDC→EURC` has `feeBps: 30` (0.3 %). Quoting `amount = "10000"`:
+
+```
+feeAmount = floor(10000 × 30 / 10000) = floor(3) = 3
+netAmount = 10000 − 3 = 9997
+```
+
+Response:
+```json
+{
+  "source_asset": "USDC",
+  "dest_asset":   "EURC",
+  "amount":       "10000",
+  "estimated_rate": "1.0",
+  "route":        ["USDC", "EURC"],
+  "feeBps":       30,
+  "feeAmount":    "3",
+  "netAmount":    "9997"
+}
+```
+
+> **Note:** `amount`, `estimated_rate`, and `route` are unchanged for
+> backward compatibility. New integrations should use `netAmount` as the
+> authoritative receivable figure.
 
 ### `POST /api/v1/quote/bulk`
 

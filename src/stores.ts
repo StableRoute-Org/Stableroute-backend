@@ -13,12 +13,13 @@ import { randomUUID } from "node:crypto";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/** Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity. */
+/** Per-pair metadata mirroring DataKey::PairFeeBps / Min / Max / Liquidity / Rate. */
 export type PairMeta = {
   feeBps: number;
   minAmount: string;
   maxAmount: string;
   liquidity: string;
+  rate: string;
 };
 
 /** Structured event appended to the in-memory event log. */
@@ -55,6 +56,7 @@ export const defaultMeta = (): PairMeta => ({
   minAmount: "0",
   maxAmount: "0",
   liquidity: "0",
+  rate: "1.0",
 });
 
 /** Canonical config shape used by GET/PATCH /api/v1/config. */
@@ -75,7 +77,7 @@ const defaultConfig = (): Record<string, number> => ({
  */
 export const pairRegistry = new Set<string>();
 
-/** Per-pair fee / amount / liquidity metadata keyed by {@link pairKey}. */
+/** Per-pair fee / amount / liquidity / rate metadata keyed by {@link pairKey}. */
 export const pairMeta = new Map<string, PairMeta>();
 
 /** Generated API key records keyed by full key string. */

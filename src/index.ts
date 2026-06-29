@@ -88,7 +88,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
-// Absolute ceiling for the bulkMaxItems config knob.
+// Absolute ceiling for the bulk-quote item count. Operators may raise the
+// runtime cap (config.bulkMaxItems) up to this value but never beyond it.
 const BULK_ABSOLUTE_MAX = 10_000;
 
 // Per-IP sliding-window rate limiter: 60 requests per 60 second window.
@@ -538,6 +539,29 @@ for (const { suffix, field, bodyKey, validate, errorMessage } of pairMetaPatchDe
     makePairMetaPatch(field, bodyKey, validate, errorMessage)
   );
 }
+
+/**
+ * Reset a registered pair's metadata to factory defaults.
+ *
+ * Overwrites the pair's `pairMeta` entry with `defaultMeta()`, emits a
+ * `pair.meta.reset` audit event, and returns the fresh metadata. Blocked
+ * while the service is paused (non-idempotent POST). Returns 404 when the
+ * pair is not registered.
+ *
+ * @route POST /api/v1/pairs/:source/:destination/reset
+ */
+app.post("/api/v1/pairs/:source/:destination/reset", (req: Request, res: Response) => {
+  const { source, destination } = req.params;
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
+    sendError(res, req, 404, "not_found", "pair not registered");
+    return;
+  }
+  const meta = defaultMeta();
+  pairMeta.set(k, meta);
+  recordEvent("pair.meta.reset", { source, destination });
+  res.json({ source, destination, ...meta });
+});
 
 /** Unregister a pair. */
 app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {

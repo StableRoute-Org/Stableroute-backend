@@ -512,19 +512,33 @@ const DEFAULT_SCOPES: readonly string[] = [];
  * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
  * @returns An Express request handler enforcing the scope.
  */
+const isKeyValid = (record: ApiKeyRecord): boolean => {
+  if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
+  if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
+    return Date.now() <= record.graceExpiresAt;
+  }
+  return true;
+};
+
 const requireScope = (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
-    const record = match ? apiKeyStore.get(match[1]) : undefined;
+    const rawKey = match ? match[1] : undefined;
+    const record = rawKey ? apiKeyStore.get(rawKey) : undefined;
     if (!record) {
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
+      return;
+    }
+    if (!isKeyValid(record)) {
+      sendError(res, req, 401, "unauthorized", "API key has expired");
       return;
     }
     if (!record.scopes.includes(scope)) {
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
+    apiKeyStore.set(rawKey!, { ...record, lastUsedAt: Date.now() });
     next();
   };
 
@@ -548,12 +562,14 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
     createdAt: m.createdAt,
     // Surface rotation metadata for predecessor records (omitted when absent).
     ...(m.rotatedAt !== undefined ? { rotatedAt: m.rotatedAt } : {}),
+    ...(m.expiresAt !== undefined ? { expiresAt: m.expiresAt } : {}),
+    ...(m.lastUsedAt !== undefined ? { lastUsedAt: m.lastUsedAt } : {}),
   }));
   res.json({ items });
 });
 
 app.post("/api/v1/api-keys", (req: Request, res: Response) => {
-  const { label, scopes } = req.body ?? {};
+  const { label, scopes, expiresInSeconds } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
     return;
@@ -579,11 +595,24 @@ app.post("/api/v1/api-keys", (req: Request, res: Response) => {
     }
     grantedScopes = [...new Set(scopes as string[])];
   }
+  let expiresAt: number | undefined;
+  if (expiresInSeconds !== undefined) {
+    if (
+      typeof expiresInSeconds !== "number" ||
+      !Number.isInteger(expiresInSeconds) ||
+      expiresInSeconds <= 0 ||
+      expiresInSeconds > 31_536_000
+    ) {
+      sendError(res, req, 400, "invalid_request", "expiresInSeconds must be a positive integer no greater than 31536000");
+      return;
+    }
+    expiresAt = Date.now() + expiresInSeconds * 1000;
+  }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now() });
+  apiKeyStore.set(key, { label, createdAt: Date.now(), ...(expiresAt !== undefined ? { expiresAt } : {}) });
   // Record only the non-sensitive prefix and label — never the raw key.
   recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
-  res.status(201).json({ key, label });
+  res.status(201).json({ key, label, ...(expiresAt !== undefined ? { expiresAt } : {}) });
 });
 
 /**

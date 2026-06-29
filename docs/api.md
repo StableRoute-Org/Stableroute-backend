@@ -168,7 +168,8 @@ Set the minimum amount.
 
 - **Body:** `{ "minAmount": "100" }` — non-negative integer string (`/^[0-9]{1,39}$/`).
 - **Response 200:** the updated metadata object.
-- **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value).
+- **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value, or
+  `minAmount` exceeds the pair's current `liquidity` — see cross-field invariant below).
 
 ### `PATCH /api/v1/pairs/:source/:destination/max`
 
@@ -184,7 +185,32 @@ Set available liquidity.
 
 - **Body:** `{ "liquidity": "500000" }` — non-negative integer string (`/^[0-9]{1,39}$/`).
 - **Response 200:** the updated metadata object.
-- **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value).
+- **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value, or
+  `liquidity` would fall below the pair's current `minAmount` — see cross-field invariant below).
+
+#### Cross-field invariant: `minAmount <= liquidity`
+
+The backend enforces that a pair's `minAmount` never exceeds its `liquidity`.
+Setting a minimum trade size larger than the available liquidity would produce a
+pair that advertises a minimum it can never fill.
+
+The invariant is checked using `BigInt` so that 39-digit base-unit strings (common
+in stablecoin protocols) are compared exactly without `Number` precision loss.
+
+**Rule:** `minAmount > liquidity` is rejected with `400 invalid_request` on both
+`PATCH .../liquidity` and `PATCH .../min`.
+
+**Unset carve-out:** a `liquidity` of `"0"` means "not yet configured / unbounded".
+Pairs that have never had their liquidity set are **not** retroactively invalidated
+against their `minAmount`. The invariant is only enforced when `liquidity` is a
+non-zero value.
+
+| Scenario | `liquidity` | `minAmount` | Accepted? |
+|---|---|---|---|
+| Normal | `"5000"` | `"100"` | Yes — min < liquidity |
+| Equal | `"500"` | `"500"` | Yes — min == liquidity |
+| Violation | `"100"` | `"999"` | No — `400` returned |
+| Unset liquidity | `"0"` | `"999"` | Yes — liquidity is unset |
 
 ---
 

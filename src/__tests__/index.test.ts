@@ -666,6 +666,147 @@ describe("StableRoute Backend", () => {
 
 
 
+  describe("pair-meta: minAmount vs liquidity cross-field invariant", () => {
+    const SRC = "INVS";
+    const DST = "CHCK";
+
+    beforeEach(async () => {
+      await request(app).post("/api/v1/pairs").send({ source: SRC, destination: DST });
+    });
+
+    afterEach(async () => {
+      await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
+    });
+
+    it("PATCH /liquidity rejects when new liquidity < current minAmount", async () => {
+      // Set minAmount to 1000 first
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "1000" });
+
+      // Attempt to set liquidity to 500 — must be rejected
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "500" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/liquidity/);
+      expect(res.body.message).toMatch(/minAmount/);
+    });
+
+    it("PATCH /liquidity accepts when new liquidity equals current minAmount", async () => {
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "1000" });
+
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "1000" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.liquidity).toBe("1000");
+    });
+
+    it("PATCH /liquidity accepts when new liquidity > current minAmount", async () => {
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "100" });
+
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "5000" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.liquidity).toBe("5000");
+    });
+
+    it("PATCH /liquidity with '0' is accepted even if minAmount > 0 (unset carve-out)", async () => {
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "999" });
+
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "0" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.liquidity).toBe("0");
+    });
+
+    it("PATCH /min rejects when new minAmount > current liquidity", async () => {
+      // Reset minAmount to "0" so the next liquidity patch is accepted
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "0" });
+
+      // Set liquidity to 500
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "500" });
+
+      // Attempt to set minAmount to 1000 — must be rejected since 1000 > 500
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "1000" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/minAmount/);
+      expect(res.body.message).toMatch(/liquidity/);
+    });
+
+    it("PATCH /min accepts when new minAmount equals current liquidity", async () => {
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "500" });
+
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "500" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.minAmount).toBe("500");
+    });
+
+    it("PATCH /min accepts when liquidity is '0' (unset) regardless of minAmount", async () => {
+      // Explicitly reset liquidity to "0" (unset) before testing the carve-out.
+      // First reset minAmount so the liquidity patch is accepted.
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "0" });
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: "0" });
+
+      // With liquidity "0" (unset), minAmount can freely exceed it
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "999999" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.minAmount).toBe("999999");
+    });
+
+    it("correctly compares 39-digit base-unit strings without Number precision loss", async () => {
+      // These large values are above Number.MAX_SAFE_INTEGER; BigInt must be used
+      const bigLiquidity = "100000000000000000000000000000000000000"; // 10^38
+      const bigMin      = "100000000000000000000000000000000000001"; // 10^38 + 1
+
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
+        .send({ liquidity: bigLiquidity });
+
+      // minAmount one unit above liquidity — must be rejected
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: bigMin });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+  });
+
   describe("GET /api/v1/pairs with ETag", () => {
     it("returns 304 when If-None-Match matches", async () => {
       const first = await request(app).get("/api/v1/pairs");

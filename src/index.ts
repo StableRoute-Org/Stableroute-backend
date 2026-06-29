@@ -305,6 +305,26 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
   });
 });
 
+/**
+ * Compare two base-unit integer strings using BigInt arithmetic so that
+ * 39-digit values (common in stablecoin protocols) are compared exactly
+ * without Number precision loss.
+ *
+ * A `liquidity` value of `"0"` is treated as "unset / unbounded": pairs
+ * that have never had their liquidity configured should not be retroactively
+ * invalidated against their `minAmount`, so this function returns `false`
+ * (i.e. no violation) whenever `liquidityStr` is `"0"`.
+ *
+ * @param minStr       - The pair's `minAmount` as a decimal string.
+ * @param liquidityStr - The pair's `liquidity` as a decimal string.
+ * @returns `true` when `minAmount > liquidity` AND `liquidity` is non-zero,
+ *          meaning the invariant is violated.
+ */
+const minExceedsLiquidity = (minStr: string, liquidityStr: string): boolean => {
+  if (liquidityStr === "0") return false; // "0" means unset/unbounded — skip check
+  return BigInt(minStr) > BigInt(liquidityStr);
+};
+
 app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   const k = pairKey(source, destination);
@@ -318,6 +338,17 @@ app.patch("/api/v1/pairs/:source/:destination/liquidity", (req: Request, res: Re
     return;
   }
   const meta = pairMeta.get(k) ?? defaultMeta();
+  // Cross-field invariant: minAmount must not exceed liquidity (unless liquidity is "0" = unset).
+  if (minExceedsLiquidity(meta.minAmount, liquidity)) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `liquidity (${liquidity}) must not be less than the pair's current minAmount (${meta.minAmount})`
+    );
+    return;
+  }
   meta.liquidity = liquidity;
   pairMeta.set(k, meta);
   res.json({ source, destination, ...meta });
@@ -354,6 +385,17 @@ app.patch("/api/v1/pairs/:source/:destination/min", (req: Request, res: Response
     return;
   }
   const meta = pairMeta.get(k) ?? defaultMeta();
+  // Cross-field invariant: minAmount must not exceed the pair's current liquidity (unless liquidity is "0" = unset).
+  if (minExceedsLiquidity(minAmount, meta.liquidity)) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `minAmount (${minAmount}) must not exceed the pair's current liquidity (${meta.liquidity})`
+    );
+    return;
+  }
   meta.minAmount = minAmount;
   pairMeta.set(k, meta);
   res.json({ source, destination, ...meta });
@@ -403,6 +445,9 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
 app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused });
 });
+
+/** Absolute upper bound on the bulkMaxItems config field. */
+const BULK_ABSOLUTE_MAX = 10_000;
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {

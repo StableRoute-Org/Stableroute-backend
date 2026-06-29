@@ -411,6 +411,23 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   res.status(201).json({ id, url, events: deduped });
 });
 
+/**
+ * Resolve the source/destination route params and the computed pair key.
+ * Returns null and sends a 404 if the pair is not registered.
+ */
+function resolvePair(
+  req: Request,
+  res: Response
+): { source: string; destination: string; key: string } | null {
+  const { source, destination } = req.params;
+  const key = pairKey(source, destination);
+  if (!pairRegistry.has(key)) {
+    sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
+    return null;
+  }
+  return { source, destination, key };
+}
+
 /** Aggregate read of every per-pair slot in one round-trip. */
 app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response) => {
   const { source, destination } = req.params;

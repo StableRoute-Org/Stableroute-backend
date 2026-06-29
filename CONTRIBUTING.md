@@ -63,6 +63,8 @@ Do not commit secrets, private keys, access tokens, `.env` files, or production 
 
 If a change touches routing, pricing, authentication, or request handling, include a short security note in the pull request that describes the relevant risk and how the change handles it.
 
+To report a vulnerability privately or to understand the gateway threat model, see [SECURITY.md](SECURITY.md).
+
 ## Community and Campaign
 
 StableRoute is part of a GrantFox OSS / Official Campaign. For questions, reviews, and faster feedback, join the StableRoute community on Discord:

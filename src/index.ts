@@ -778,10 +778,41 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
   res.send(lines.join("\n") + "\n");
 });
 
+/**
+ * Derive per-pair aggregates from the registry and metadata maps.
+ *
+ * Computes, in a single O(n) pass over the registered pairs:
+ * - `pairsWithFee`   — count of pairs whose stored `feeBps > 0`.
+ * - `distinctAssets` — number of unique asset codes appearing as either the
+ *   source or destination of any registered pair.
+ *
+ * Side-effect free: reads only the existing in-memory stores and allocates no
+ * new persistent state.
+ *
+ * @returns `{ pairsWithFee, distinctAssets }`.
+ */
+const aggregatePairStats = (): { pairsWithFee: number; distinctAssets: number } => {
+  let pairsWithFee = 0;
+  const assets = new Set<string>();
+  for (const k of pairRegistry) {
+    const [source, destination] = k.split("::");
+    assets.add(source);
+    assets.add(destination);
+    if ((pairMeta.get(k)?.feeBps ?? 0) > 0) pairsWithFee += 1;
+  }
+  return { pairsWithFee, distinctAssets: assets.size };
+};
+
 app.get("/api/v1/stats", (_req: Request, res: Response) => {
+  const { pairsWithFee, distinctAssets } = aggregatePairStats();
   res.json({
     totalPairs: pairRegistry.size,
     paused,
+    totalApiKeys: apiKeyStore.size,
+    totalWebhooks: webhookStore.size,
+    totalEvents: eventLog.length,
+    pairsWithFee,
+    distinctAssets,
   });
 });
 

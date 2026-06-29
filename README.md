@@ -12,19 +12,16 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-### API-key scopes
+### API-key rotation
 
-`POST /api/v1/api-keys` accepts an optional `scopes` array drawn from a fixed
-catalog: `pairs:write`, `webhooks:write`, `keys:admin`. Unknown scopes are
-rejected with `400 invalid_request`. When `scopes` is omitted the key defaults
-to a least-privilege, read-only set (no write scope). `GET /api/v1/api-keys`
-surfaces each key's `scopes` (never the raw key).
-
-The `requireScope(scope)` factory returns Express middleware that resolves the
-key from the `Authorization: Bearer <srk_...>` header and asserts it carries the
-required scope, responding `401 unauthorized` when no valid key is supplied and
-`403 forbidden` when the key lacks the scope. Write routes can adopt it directly;
-`GET /api/v1/api-keys/whoami` is a small probe guarded by `requireScope("keys:admin")`.
+`POST /api/v1/api-keys/:prefix/rotate` rotates a key without downtime. It
+locates the key by its 8-char prefix, mints a new `srk_` successor inheriting
+the predecessor's `label`, and returns the new raw key exactly once (201 — never
+logged). The predecessor is stamped with `rotatedAt` and a `graceExpiresAt`
+deadline (`ROTATION_GRACE_MS`, default 1h) so both keys remain valid during the
+overlap window, letting callers cut over gracefully. `GET /api/v1/api-keys`
+surfaces `rotatedAt` on rotated predecessor records (raw keys are never
+returned). An unknown prefix returns `404 not_found`.
 
 ## Architecture & request lifecycle
 

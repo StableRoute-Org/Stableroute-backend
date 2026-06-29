@@ -1494,15 +1494,10 @@ export const applyFee = (
   return { feeAmount, netAmount };
 };
 
-/**
- * Compute the minimum received amount after applying slippage tolerance.
- * @param amount - The gross output amount in base units.
- * @param slippageBps - Slippage tolerance in basis points (0-1000).
- * @returns The minimum guaranteed received amount.
- */
-const applySlippage = (amount: bigint, slippageBps: number): bigint => {
-  const slippageAmount = (amount * BigInt(slippageBps)) / 10_000n;
-  return amount - slippageAmount;
+const computeQuoteTimes = (): { quoted_at: number; expires_at: number } => {
+  const ttl = (config.quote_ttl_ms ?? 30000) as number;
+  const quoted_at = Date.now();
+  return { quoted_at, expires_at: quoted_at + ttl };
 };
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
@@ -1536,8 +1531,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       dest_asset,
       amount: String(amount),
       estimated_rate: "1.0",
-      slippage_bps,
-      min_received: min_received.toString(),
+      ...computeQuoteTimes(),
     };
   });
   res.json({ results });
@@ -1592,6 +1586,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     feeBps: meta.feeBps,
     feeAmount: feeAmount.toString(),
     netAmount: netAmount.toString(),
+    ...computeQuoteTimes(),
   });
 });
 

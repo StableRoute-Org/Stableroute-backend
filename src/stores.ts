@@ -47,6 +47,13 @@ export type WebhookRecord = {
 /** Hard cap on event-log size; oldest entries are evicted beyond this. */
 export const EVENT_LOG_CAP = 10_000;
 
+/**
+ * Hard ceiling on the number of distinct IPs tracked in {@link rateBuckets}.
+ * When the map would grow beyond this limit the least-recently-active entry
+ * is evicted first, bounding memory regardless of source-IP cardinality.
+ */
+export const RATE_BUCKETS_MAX_IPS = 50_000;
+
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 /** Fresh pair-meta with all fields zeroed. */

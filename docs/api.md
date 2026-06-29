@@ -43,7 +43,7 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 | `invalid_request`   | 400  | Request validation failed (missing/invalid params or body).                        |
 | `not_found`         | 404  | Resource does not exist, or no route matches the method + path.                    |
 | `payload_too_large` | 413  | Request body exceeds the 100 KiB JSON limit.                                        |
-| `rate_limited`      | 429  | More than 60 requests per 60 s from one IP. Sets `Retry-After: 60`. Disabled when `NODE_ENV=test`. |
+| `rate_limited`      | 429  | More than 60 requests per 60 s from one IP. Sets `Retry-After: 60`. Disabled when `NODE_ENV=test`. See [Rate-limiter memory bounding](#rate-limiter-memory-bounding) for eviction behaviour. |
 | `service_paused`    | 503  | Service is paused and a non-idempotent request was made (see Admin / pause).        |
 | `internal_error`    | 500  | Unhandled exception; `message` carries the error text plus `method`/`path`.         |
 
@@ -56,6 +56,33 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 Every response sets `X-Content-Type-Options: nosniff`,
 `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and
 `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
+
+### Rate-limiter memory bounding
+
+The per-IP sliding-window rate limiter stores request timestamps in the
+`rateBuckets` map (`src/stores.ts`). Without eviction every distinct
+source IP that ever makes a request keeps a map entry forever, enabling a
+slow memory-exhaustion attack via rotating or spoofed addresses.
+
+Two eviction strategies bound the map's memory footprint:
+
+1. **Idle eviction** — after each request the limiter prunes stale
+   timestamps from the IP's bucket. If the bucket is now empty (all
+   timestamps have aged out of the 60 s window) the map key is deleted
+   entirely rather than writing back an empty array.
+
+2. **IP-ceiling eviction** — the map is hard-capped at
+   `RATE_BUCKETS_MAX_IPS` (50 000) tracked IPs. When a new IP would
+   exceed the ceiling, the least-recently-active entry (insertion-order
+   oldest) is evicted before the new key is inserted.
+
+Both passes are implemented in the exported `evictRateBuckets` helper
+(`src/index.ts`) so unit tests can exercise eviction logic directly,
+independent of the Express middleware (which is disabled under
+`NODE_ENV=test`).
+
+Active clients are not affected: the 60-req / 60-s window and the
+`429 rate_limited` + `Retry-After: 60` response are unchanged.
 
 ---
 

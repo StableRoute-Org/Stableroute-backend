@@ -15,6 +15,7 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  RATE_BUCKETS_MAX_IPS,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -74,13 +75,60 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Absolute upper bound on the bulk-quote item count, regardless of config. */
+const BULK_ABSOLUTE_MAX = 100_000;
+
+/**
+ * Evict idle and overflow entries from {@link rateBuckets} to bound memory.
+ *
+ * Two eviction passes are applied in order:
+ * 1. **Idle eviction** — if `ip` already has a bucket and after pruning
+ *    stale timestamps it is empty, delete the key entirely instead of
+ *    writing back an empty array.
+ * 2. **Ceiling eviction** — if adding a new IP would push the map beyond
+ *    {@link RATE_BUCKETS_MAX_IPS}, delete the least-recently-active entry
+ *    (the first key in insertion order, which is the oldest) before
+ *    inserting the new one.
+ *
+ * This function is exported so unit tests can exercise eviction logic
+ * independently of the Express middleware (which is disabled under
+ * `NODE_ENV=test`).
+ *
+ * @param ip        - The source IP address being processed.
+ * @param now       - Current epoch timestamp in milliseconds.
+ * @param windowMs  - Length of the sliding window in milliseconds.
+ * @returns The pruned in-window timestamp array for `ip` (may be empty).
+ */
+export const evictRateBuckets = (
+  ip: string,
+  now: number,
+  windowMs: number
+): number[] => {
+  const existing = rateBuckets.get(ip);
+  const pruned = (existing ?? []).filter((t) => now - t < windowMs);
+
+  // Idle eviction: remove the key if no in-window timestamps remain and
+  // the IP already had an entry (i.e. we are not about to add it fresh).
+  if (existing !== undefined && pruned.length === 0) {
+    rateBuckets.delete(ip);
+    return pruned;
+  }
+
+  // Ceiling eviction: shed the oldest tracked IP before inserting a new one.
+  if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
+    const oldestKey = rateBuckets.keys().next().value;
+    if (oldestKey !== undefined) rateBuckets.delete(oldestKey);
+  }
+
+  return pruned;
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
-  const bucket = (rateBuckets.get(ip) ?? []).filter(
-    (t) => now - t < RATE_LIMIT_WINDOW_MS
-  );
+  const bucket = evictRateBuckets(ip, now, RATE_LIMIT_WINDOW_MS);
   if (bucket.length >= RATE_LIMIT_PER_WINDOW) {
     res.setHeader("Retry-After", "60");
     sendError(

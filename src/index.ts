@@ -19,6 +19,7 @@ import {
   defaultMeta,
   recordEvent,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
   KNOWN_EVENT_TYPES,
   type PairMeta,
   type AppEvent,
@@ -288,17 +289,26 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "read_only_mode", "StableRoute backend is in read-only mode");
 });
 
-/** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
-const BULK_ABSOLUTE_MAX = 100_000;
-
 // Per-IP sliding-window rate limiter.
 // Reads config.rateLimitPerWindow and config.rateLimitWindowMs at request time
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Absolute upper-bound for the `bulkMaxItems` config key. */
-const BULK_ABSOLUTE_MAX = 100_000;
+/**
+ * Evict stale timestamps from a rate-limit bucket and return the live ones.
+ * A timestamp is stale when it falls outside the current sliding window.
+ *
+ * @param ip       - Client IP used to look up the bucket in {@link rateBuckets}.
+ * @param now      - Current epoch-ms timestamp.
+ * @param windowMs - Length of the sliding window in milliseconds.
+ * @returns The pruned array of timestamps still within the window.
+ */
+const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const bucket = rateBuckets.get(ip) ?? [];
+  return bucket.filter((ts) => now - ts < windowMs);
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -406,6 +416,13 @@ app.get("/health", (_req: Request, res: Response) => {
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.json(openApiSpec);
 });
+
+/**
+ * Reserved sentinel key used by the deep readiness probe storage check.
+ * The NUL prefix ensures it can never collide with a real pair key because
+ * `normalizeAsset` rejects control characters.
+ */
+const HEALTH_PROBE_KEY = "\x00health::probe";
 
 /**
  * Run all health checks for the deep readiness probe.
@@ -764,11 +781,7 @@ const requireScope = (scope: string) =>
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
-    if (!isKeyValid(record)) {
-      sendError(res, req, 401, "unauthorized", "API key has expired");
-      return;
-    }
-    if (!record.scopes.includes(scope)) {
+    if (!(record.scopes ?? []).includes(scope)) {
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
@@ -936,7 +949,16 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
+/** Maximum number of event-type subscriptions a single webhook may carry. */
+const WEBHOOK_MAX_EVENTS = 50;
+
+/** Maximum character length for a single event-type string in a webhook subscription. */
+const WEBHOOK_MAX_EVENT_LENGTH = 64;
+
+/** Event-type name prefixes that are reserved for internal use and may not be subscribed to externally. */
+const WEBHOOK_RESERVED_PREFIXES: string[] = [];
+
+app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
@@ -1333,6 +1355,19 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 /** Absolute upper bound on the bulkMaxItems config field. */
 const BULK_ABSOLUTE_MAX = 10_000;
 
+/**
+ * Trim the event log in place to at most `newCap` entries, discarding the
+ * oldest events first. Called immediately when PATCH /api/v1/config lowers
+ * the `eventLogCap` so the buffer stays within the new bound.
+ *
+ * @param newCap - The new maximum number of entries to retain.
+ */
+const trimEventLog = (newCap: number): void => {
+  if (eventLog.length > newCap) {
+    eventLog.splice(0, eventLog.length - newCap);
+  }
+};
+
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
   const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms"] as const;
@@ -1361,22 +1396,7 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   res.json({ config });
 });
 
-/**
- * Canonical set of known event types emitted by the gateway.
- * Kept here so the metrics series set is stable across scrapes even when
- * the event log is empty.
- */
-const KNOWN_EVENT_TYPES = [
-  "pair.registered",
-  "pair.refreshed",
-  "pair.unregistered",
-  "apikey.created",
-  "apikey.deleted",
-  "webhook.created",
-  "webhook.deleted",
-  "admin.paused",
-  "admin.unpaused",
-] as const;
+// KNOWN_EVENT_TYPES is imported from ./stores — no local redeclaration needed.
 
 /**
  * Escape a Prometheus label value per the exposition format rules:

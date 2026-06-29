@@ -985,8 +985,15 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     sendError(res, req, 413, "payload_too_large", "request body exceeds the 100 KiB limit");
     return;
   }
-  const message =
-    err instanceof Error ? err.message : "Unexpected server error";
+  const isProduction = process.env.NODE_ENV === "production";
+  if (!isProduction && err instanceof Error) {
+    console.error(err);
+  }
+  const message = isProduction
+    ? "An unexpected error occurred"
+    : err instanceof Error
+      ? err.message
+      : "Unexpected server error";
   sendError(res, req, 500, "internal_error", message, {
     method: req.method,
     path: req.path,

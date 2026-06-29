@@ -111,6 +111,21 @@ List every registered pair. Supports conditional GET via a **weak ETag**.
 - **Response 304:** empty body, when the request's `If-None-Match` header
   matches the current ETag.
 
+### `HEAD /api/v1/pairs`
+
+Returns the same `ETag`, `Content-Type`, and `Content-Length` headers as
+`GET /api/v1/pairs` but with **no response body**. A well-behaved HTTP
+cache can issue this request to learn the current ETag and body size
+without transferring the full pairs list.
+
+The ETag is computed from the same serialized body as the `GET` handler
+via a shared helper, so the two values are always byte-identical.
+
+- **Response 200:** empty body. Headers set: `ETag`, `Content-Type: application/json`,
+  `Content-Length` (byte length of the equivalent GET body).
+- **Response 304:** empty body, when the request's `If-None-Match` header
+  matches the current ETag.
+
 ### `POST /api/v1/pairs`
 
 Register (or refresh) a pair.

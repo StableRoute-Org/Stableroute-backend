@@ -74,6 +74,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+/** Hard ceiling for the bulkMaxItems config value — prevents runaway memory use. */
+const BULK_ABSOLUTE_MAX = 1_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -454,22 +456,63 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 // Process restart resets the map; persistence lands with the database
 // adapter.
 /**
- * List every registered (source, destination) pair.
- * Response: { pairs: [{ source, destination }, ...] }
+ * Serialize the current pair registry to a JSON string.
+ * Shared between the GET and HEAD handlers so the two always produce
+ * byte-identical output and therefore byte-identical ETags.
  */
-app.get("/api/v1/pairs", (req: Request, res: Response) => {
+const serializePairs = (): string => {
   const pairs = Array.from(pairRegistry).map((k) => {
     const [source, destination] = k.split("::");
     return { source, destination };
   });
-  const body = JSON.stringify({ pairs });
-  const etag = `W/"${createHash("sha1").update(body).digest("base64").slice(0, 16)}"`;
+  return JSON.stringify({ pairs });
+};
+
+/**
+ * Compute the weak ETag for the pairs list body.
+ * Uses a base64-truncated SHA-1 digest, identical to the original GET handler.
+ *
+ * @param body - the already-serialized JSON string returned by serializePairs()
+ */
+const pairsEtag = (body: string): string =>
+  `W/"${createHash("sha1").update(body).digest("base64").slice(0, 16)}"`;
+
+/**
+ * List every registered (source, destination) pair.
+ * Response: { pairs: [{ source, destination }, ...] }
+ */
+app.get("/api/v1/pairs", (req: Request, res: Response) => {
+  const body = serializePairs();
+  const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {
     res.status(304).end();
     return;
   }
   res.setHeader("ETag", etag);
   res.type("application/json").send(body);
+});
+
+/**
+ * HEAD /api/v1/pairs
+ *
+ * Returns the same ETag, Content-Type, and Content-Length as GET but with
+ * no body. A well-behaved cache can use this to learn the current ETag and
+ * body size without transferring the full pairs list.
+ *
+ * Honors If-None-Match: responds 304 when the client's cached ETag matches,
+ * and 200 (empty body) otherwise. Respects the pause guard identically to GET.
+ */
+app.head("/api/v1/pairs", (req: Request, res: Response) => {
+  const body = serializePairs();
+  const etag = pairsEtag(body);
+  if (req.header("if-none-match") === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.setHeader("ETag", etag);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Length", Buffer.byteLength(body).toString());
+  res.status(200).end();
 });
 
 /**

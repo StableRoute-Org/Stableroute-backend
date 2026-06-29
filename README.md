@@ -109,10 +109,15 @@ before starting the server.
 On every push/PR to `main`, GitHub Actions runs:
 
 - `npm ci`
+- `npm run lint` — ESLint 9 flat config (`eslint.config.mjs`) targeting `src/**/*.ts`
 - `npm run build`
 - `npm test`
 
-Ensure these pass locally before pushing.
+Ensure these all pass locally before pushing. To run lint locally:
+
+```bash
+npm run lint
+```
 
 ## Deep readiness probe
 

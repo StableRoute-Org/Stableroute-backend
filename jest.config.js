@@ -6,6 +6,11 @@ module.exports = {
   testMatch: ["**/__tests__/**/*.test.ts"],
   moduleFileExtensions: ["ts", "js", "json"],
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts"],
+  globals: {
+    "ts-jest": {
+      diagnostics: false,
+    },
+  },
   // Coverage thresholds enforced in CI.
   // server.ts is now refactored into side-effect-free, exported functions
   // (createServer / registerSignalHandlers / start) and the actual listen is

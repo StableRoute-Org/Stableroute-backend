@@ -1150,4 +1150,34 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("GET /api/v1/events/types — catalog", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("returns an empty catalog when no events have been emitted", async () => {
+      const res = await request(app).get("/api/v1/events/types");
+      expect(res.status).toBe(200);
+      expect(res.body.types).toEqual([]);
+    });
+
+    it("returns the distinct event types with a count per type", async () => {
+      // 2 x pair.registered, 1 x pair.unregistered
+      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "ONE" });
+      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "TWO" });
+      await request(app).delete("/api/v1/pairs/CAT/ONE");
+
+      const res = await request(app).get("/api/v1/events/types");
+      expect(res.status).toBe(200);
+
+      const byType = Object.fromEntries(
+        res.body.types.map((t: { type: string; count: number }) => [t.type, t.count])
+      );
+      expect(byType["pair.registered"]).toBe(2);
+      expect(byType["pair.unregistered"]).toBe(1);
+      // pair.refreshed never emitted here, so it must be absent
+      expect("pair.refreshed" in byType).toBe(false);
+    });
+  });
 });

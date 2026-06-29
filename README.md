@@ -12,6 +12,16 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### Event log: type filter and catalog
+
+`GET /api/v1/events` accepts an optional `type` query param that restricts the
+result to events of that type (applied before the `since` / `limit` slicing).
+The value must be one of the known event types; otherwise a
+`400 invalid_request` is returned. `GET /api/v1/events/types` returns
+`{ types: [{ type, count }, ...] }` — the distinct event types currently present
+in the log with a per-type count — so consumers can discover which types the
+system emits without downloading the full log.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

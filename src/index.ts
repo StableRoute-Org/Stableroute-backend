@@ -49,7 +49,9 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "conflict"
   | "method_not_allowed"
-  | "read_only_mode";
+  | "read_only_mode"
+  | "idempotency_conflict"
+  | "request_timeout";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -131,6 +133,47 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(express.json({ limit: "100kb" }));
+
+/**
+ * Per-request timeout guard.
+ *
+ * Arms a timer for every incoming request. If the response has not finished
+ * within REQUEST_TIMEOUT_MS milliseconds the handler sends a 503
+ * `request_timeout` response. The timer is always cleared on res "finish" and
+ * "close" events to prevent leaks.
+ *
+ * The guard is skipped when REQUEST_TIMEOUT_MS is not set in the environment
+ * so that the existing test suite — which does not configure a timeout — is
+ * unaffected.
+ */
+const REQUEST_TIMEOUT_MS = process.env.REQUEST_TIMEOUT_MS
+  ? parseInt(process.env.REQUEST_TIMEOUT_MS, 10)
+  : undefined;
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (REQUEST_TIMEOUT_MS === undefined) return next();
+
+  const timer = setTimeout(() => {
+    if (res.headersSent) {
+      console.warn(
+        JSON.stringify({
+          requestId: getRequestId(req),
+          warning: "request_timeout_after_headers_sent",
+          method: req.method,
+          path: req.path,
+        })
+      );
+      return;
+    }
+    sendError(res, req, 503, "request_timeout", "Request timed out");
+  }, REQUEST_TIMEOUT_MS);
+
+  const clear = () => clearTimeout(timer);
+  res.on("finish", clear);
+  res.on("close", clear);
+
+  next();
+});
 
 // Pause guard: refuses non-idempotent methods with 503 except
 // /admin/unpause, so an operator can always recover.
@@ -445,6 +488,53 @@ const parseIntegerQueryParam = (value: unknown, fallback: number): number | null
   return Number.isFinite(n) && Number.isInteger(n) ? n : null;
 };
 
+/**
+ * Decode a base64-encoded cursor string into an integer offset.
+ *
+ * Returns the decoded offset on success, or `"bad"` when the cursor is
+ * present but malformed (non-base64, non-integer, or negative).  Returns
+ * `undefined` when no cursor was supplied so the caller can distinguish
+ * "first page" from an explicit bad value.
+ *
+ * @param raw - The raw `req.query.cursor` value (string, string[], or undefined).
+ * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
+ *          `undefined` when the param is absent.
+ */
+const parseCursor = (raw: unknown): number | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  try {
+    const decoded = Buffer.from(raw, "base64").toString();
+    const n = Number(decoded);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
+    return n;
+  } catch {
+    return "bad";
+  }
+};
+
+/**
+ * Apply limit+cursor pagination to an array of items.
+ *
+ * @param items  - The full (pre-filtered) array.
+ * @param limit  - Number of items per page (already clamped by caller).
+ * @param offset - Starting index decoded from the cursor (0 when absent).
+ * @returns The page slice and a `nextCursor` (base64-encoded next offset,
+ *          or `null` when the collection is exhausted).
+ */
+const paginate = <T>(
+  items: T[],
+  limit: number,
+  offset: number
+): { page: T[]; nextCursor: string | null } => {
+  const page = items.slice(offset, offset + limit);
+  const nextOffset = offset + limit;
+  const nextCursor = nextOffset < items.length
+    ? Buffer.from(String(nextOffset)).toString("base64")
+    : null;
+  return { page, nextCursor };
+};
+
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
   // values are rejected rather than coerced to NaN (which would silently
@@ -481,11 +571,20 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
     }
   }
 
+  // Parse cursor (base64-encoded offset).
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
   let items = eventLog.filter((e) => e.ts >= since);
   if (typeParam !== undefined) {
     items = items.filter((e) => e.type === (typeParam as EventType));
   }
-  res.json({ items: items.slice(-limit) });
+  const { page, nextCursor } = paginate(items, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 /**
@@ -499,6 +598,23 @@ const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
  * explicit `scopes` array. Read-only: it grants no write scope.
  */
 const DEFAULT_SCOPES: readonly string[] = [];
+
+/**
+ * Returns `true` when the API key record should be accepted for
+ * authentication, `false` when it should be rejected.
+ *
+ * A key is considered invalid when:
+ * - Its explicit `expiresAt` deadline has passed (hard expiry set at creation).
+ * - It is a rotated predecessor whose grace window has expired.
+ */
+const isKeyValid = (record: ApiKeyRecord): boolean => {
+  if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
+  if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
+    // Rotated predecessor: still valid until grace window expires
+    return Date.now() <= record.graceExpiresAt;
+  }
+  return true;
+};
 
 /**
  * Express middleware factory asserting that the authenticated API key carries
@@ -516,15 +632,22 @@ const requireScope = (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
-    const record = match ? apiKeyStore.get(match[1]) : undefined;
+    const rawKey = match ? match[1] : undefined;
+    const record = rawKey ? apiKeyStore.get(rawKey) : undefined;
     if (!record) {
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
+      return;
+    }
+    if (!isKeyValid(record)) {
+      sendError(res, req, 401, "unauthorized", "API key has expired");
       return;
     }
     if (!record.scopes.includes(scope)) {
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
+    // Stamp last-used time on successful authentication.
+    apiKeyStore.set(rawKey!, { ...record, lastUsedAt: Date.now() });
     next();
   };
 
@@ -1000,7 +1123,7 @@ const BULK_ABSOLUTE_MAX = 10_000;
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap"] as const;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms"] as const;
   if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
@@ -1371,6 +1494,17 @@ export const applyFee = (
   return { feeAmount, netAmount };
 };
 
+/**
+ * Compute the minimum received amount after applying slippage tolerance.
+ * @param amount - The gross output amount in base units.
+ * @param slippageBps - Slippage tolerance in basis points (0-1000).
+ * @returns The minimum guaranteed received amount.
+ */
+const applySlippage = (amount: bigint, slippageBps: number): bigint => {
+  const slippageAmount = (amount * BigInt(slippageBps)) / 10_000n;
+  return amount - slippageAmount;
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -1378,13 +1512,23 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
     return;
   }
-  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
-    const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
+  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown; slippage_bps?: unknown }, i: number) => {
+    const { source_asset: rawSource, dest_asset: rawDest, amount, slippage_bps: rawSlippageBps } = it ?? {};
     const source_asset = normalizeAsset(rawSource);
     const dest_asset = normalizeAsset(rawDest);
-    if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
+    const parsedAmount = parseAmount(amount);
+    if (source_asset === null || dest_asset === null || parsedAmount === null || source_asset === dest_asset) {
       return { index: i, ok: false, error: "invalid_item" };
     }
+    let slippage_bps = 0;
+    if (rawSlippageBps !== undefined) {
+      const parsed = Number(rawSlippageBps);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1000) {
+        return { index: i, ok: false, error: "invalid_slippage_bps" };
+      }
+      slippage_bps = parsed;
+    }
+    const min_received = applySlippage(parsedAmount, slippage_bps);
     return {
       index: i,
       ok: true,
@@ -1392,6 +1536,8 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       dest_asset,
       amount: String(amount),
       estimated_rate: "1.0",
+      slippage_bps,
+      min_received: min_received.toString(),
     };
   });
   res.json({ results });

@@ -12,15 +12,14 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-### Event log: type filter and catalog
+### Webhook read and update
 
-`GET /api/v1/events` accepts an optional `type` query param that restricts the
-result to events of that type (applied before the `since` / `limit` slicing).
-The value must be one of the known event types; otherwise a
-`400 invalid_request` is returned. `GET /api/v1/events/types` returns
-`{ types: [{ type, count }, ...] }` — the distinct event types currently present
-in the log with a per-type count — so consumers can discover which types the
-system emits without downloading the full log.
+`GET /api/v1/webhooks/:id` returns a single webhook as
+`{ id, url, events, createdAt }`, or `404 not_found` for an unknown id.
+`PATCH /api/v1/webhooks/:id` updates a webhook's subscribed `events` in place
+(validated as a non-empty string array and deduplicated) and returns the updated
+record. The `url` is immutable on PATCH — changing the destination must go
+through delete/recreate so the URL's SSRF-validation provenance is preserved.
 
 ## Architecture & request lifecycle
 

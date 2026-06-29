@@ -547,6 +547,55 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
 });
 
 /**
+ * Read a single registered webhook by id.
+ *
+ * Returns `{ id, url, events, createdAt }` for a known id, or
+ * `404 not_found` (with the canonical `requestId` envelope) otherwise.
+ *
+ * @route GET /api/v1/webhooks/:id
+ */
+app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
+  const { id } = req.params;
+  const record = webhookStore.get(id);
+  if (!record) {
+    sendError(res, req, 404, "not_found", `webhook ${id} not found`);
+    return;
+  }
+  res.json({ id, ...record });
+});
+
+/**
+ * Update a registered webhook's subscribed `events` in place.
+ *
+ * The `url` is intentionally immutable on PATCH: changing the destination
+ * should go through delete/recreate so the SSRF-validation provenance of the
+ * URL is preserved. The new `events` value is validated with the same
+ * non-empty-string-array rule used by the create handler and deduplicated
+ * before being stored. Returns the updated webhook, or `404 not_found` when
+ * the id is unknown.
+ *
+ * @route PATCH /api/v1/webhooks/:id
+ */
+app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
+  const { id } = req.params;
+  const record = webhookStore.get(id);
+  if (!record) {
+    sendError(res, req, 404, "not_found", `webhook ${id} not found`);
+    return;
+  }
+  const { events } = req.body ?? {};
+  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
+    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
+    return;
+  }
+  const deduped = [...new Set(events as string[])];
+  // url is preserved; only events are mutated.
+  const updated = { ...record, events: deduped };
+  webhookStore.set(id, updated);
+  res.json({ id, ...updated });
+});
+
+/**
  * Resolve the source/destination route params and the computed pair key.
  * Returns null and sends a 404 if the pair is not registered.
  */

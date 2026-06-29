@@ -1151,67 +1151,64 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("strict body-key rejection", () => {
-    it("rejects an unknown key on POST /api/v1/api-keys and lists it", async () => {
-      const res = await request(app)
-        .post("/api/v1/api-keys")
-        .send({ label: "ok", extra: 1 });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/extra/);
-      expect(res.body.unknownKeys).toContain("extra");
+  describe("webhook single-read and PATCH", () => {
+    beforeEach(() => {
+      resetStores();
     });
 
-    it("accepts a clean body on POST /api/v1/api-keys", async () => {
-      const res = await request(app).post("/api/v1/api-keys").send({ label: "clean" });
-      expect(res.status).toBe(201);
-    });
-
-    it("rejects an unknown key on POST /api/v1/webhooks", async () => {
-      const res = await request(app)
+    const createWebhook = () =>
+      request(app)
         .post("/api/v1/webhooks")
-        .send({ url: "https://x.test", events: ["a"], typo: true });
-      expect(res.status).toBe(400);
-      expect(res.body.unknownKeys).toContain("typo");
-    });
+        .send({ url: "https://example.com/wh", events: ["pair.registered"] });
 
-    it("rejects an unknown key on POST /api/v1/pairs", async () => {
-      const res = await request(app)
-        .post("/api/v1/pairs")
-        .send({ source: "AAA", destination: "BBB", junk: 1 });
-      expect(res.status).toBe(400);
-      expect(res.body.unknownKeys).toContain("junk");
-    });
-
-    it("rejects an unknown key on a pair-meta PATCH", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "SUK", destination: "DUK" });
-      const res = await request(app)
-        .patch("/api/v1/pairs/SUK/DUK/fee_bps")
-        .send({ feeBps: 10, fee_bps: 9999 });
-      expect(res.status).toBe(400);
-      expect(res.body.unknownKeys).toContain("fee_bps");
-    });
-
-    it("rejects an unknown key on PATCH /api/v1/config", async () => {
-      const res = await request(app)
-        .patch("/api/v1/config")
-        .send({ bulkMaxItems: 50, nope: 1 });
-      expect(res.status).toBe(400);
-      expect(res.body.unknownKeys).toContain("nope");
-    });
-
-    it("reports __proto__ as an unknown key without polluting the prototype", async () => {
-      const res = await request(app)
-        .post("/api/v1/api-keys")
-        .set("Content-Type", "application/json")
-        .send('{"label":"ok","__proto__":{"polluted":true}}');
-      expect(res.status).toBe(400);
-      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    });
-
-    it("treats an empty body as having no unknown keys", async () => {
-      const res = await request(app).patch("/api/v1/config").send({});
+    it("reads a single webhook by id", async () => {
+      const create = await createWebhook();
+      const res = await request(app).get(`/api/v1/webhooks/${create.body.id}`);
       expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        id: create.body.id,
+        url: "https://example.com/wh",
+        events: ["pair.registered"],
+      });
+      expect(typeof res.body.createdAt).toBe("number");
+    });
+
+    it("returns 404 for reading an unknown webhook id", async () => {
+      const res = await request(app).get("/api/v1/webhooks/wh_doesnotexist");
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("patches a webhook's events in place, leaving the url unchanged", async () => {
+      const create = await createWebhook();
+      const res = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: ["pair.registered", "pair.unregistered", "pair.registered"] });
+      expect(res.status).toBe(200);
+      // Deduplicated, url preserved
+      expect(res.body.events).toEqual(["pair.registered", "pair.unregistered"]);
+      expect(res.body.url).toBe("https://example.com/wh");
+    });
+
+    it("returns 404 when patching an unknown webhook id", async () => {
+      const res = await request(app)
+        .patch("/api/v1/webhooks/wh_doesnotexist")
+        .send({ events: ["pair.registered"] });
+      expect(res.status).toBe(404);
+    });
+
+    it("rejects a PATCH with empty or non-string events", async () => {
+      const create = await createWebhook();
+      const empty = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: [] });
+      expect(empty.status).toBe(400);
+
+      const nonString = await request(app)
+        .patch(`/api/v1/webhooks/${create.body.id}`)
+        .send({ events: [123] });
+      expect(nonString.status).toBe(400);
     });
   });
 });

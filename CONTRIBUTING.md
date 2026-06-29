@@ -57,6 +57,14 @@ Feature requests should include:
 - The proposed behavior.
 - Any API or security considerations.
 
+## Architecture
+
+Before touching any mutable state, read [docs/stores.md](docs/stores.md). It
+explains every exported store, the `pairKey` encoding, the `defaultMeta()`
+baseline, and — critically — the `resetStores()` test contract. Omitting
+`resetStores()` from a `beforeEach` hook causes non-deterministic cross-test
+bleed that is difficult to diagnose.
+
 ## Security
 
 Do not commit secrets, private keys, access tokens, `.env` files, or production credentials. Use local environment variables or the deployment platform's secret store.

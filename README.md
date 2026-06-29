@@ -12,6 +12,12 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+## Architecture & request lifecycle
+
+See [docs/architecture.md](docs/architecture.md) for the in-memory store model,
+the Express middleware chain in execution order (with each layer's purpose and
+rationale), a Mermaid request-flow diagram, and the canonical error envelope.
+
 ## Prerequisites
 
 - Node.js 18+

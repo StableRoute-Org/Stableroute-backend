@@ -49,7 +49,9 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "conflict"
   | "method_not_allowed"
-  | "read_only_mode";
+  | "read_only_mode"
+  | "unsupported_media_type"
+  | "request_timeout";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -131,6 +133,29 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(express.json({ limit: "100kb" }));
+
+// Content-Type guard: POST/PATCH/PUT requests with a body must declare
+// Content-Type: application/json. Requests with no body (no Content-Length
+// and no Transfer-Encoding) are passed through unchanged.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "DELETE" || method === "OPTIONS") {
+    return next();
+  }
+  const hasBody =
+    req.headers["content-length"] !== undefined ||
+    req.headers["transfer-encoding"] !== undefined;
+  if (!hasBody) return next();
+  const contentType = (req.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.includes("application/json")) return next();
+  return sendError(
+    res,
+    req,
+    415,
+    "unsupported_media_type",
+    "Content-Type must be application/json"
+  );
+});
 
 // Pause guard: refuses non-idempotent methods with 503 except
 // /admin/unpause, so an operator can always recover.

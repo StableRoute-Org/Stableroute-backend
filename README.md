@@ -102,6 +102,7 @@ before starting the server.
 | `npm run start` | Run production server (`dist/index.js`) |
 | `npm run dev` | Run with ts-node-dev (watch) |
 | `npm test` | Run Jest tests |
+| `npm run test:coverage` | Run Jest with coverage (`coverage/` output) |
 | `npm run lint` | Run ESLint |
 
 ## CI/CD
@@ -111,6 +112,7 @@ On every push/PR to `main`, GitHub Actions runs:
 - `npm ci`
 - `npm run build`
 - `npm test`
+- `npm run test:coverage` — enforces Jest coverage thresholds (≥ 90 % statements/lines, ≥ 88 % functions, ≥ 80 % branches) and uploads the HTML + lcov report as a CI artifact (`coverage-report`, retained 14 days).
 
 Ensure these pass locally before pushing.
 

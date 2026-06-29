@@ -110,11 +110,16 @@ before starting the server.
 On every push/PR to `main`, GitHub Actions runs:
 
 - `npm ci`
+- `npm run lint` — ESLint 9 flat config (`eslint.config.mjs`) targeting `src/**/*.ts`
 - `npm run build`
 - `npm test`
 - `npm run test:coverage` — enforces Jest coverage thresholds (≥ 90 % statements/lines, ≥ 88 % functions, ≥ 80 % branches) and uploads the HTML + lcov report as a CI artifact (`coverage-report`, retained 14 days).
 
-Ensure these pass locally before pushing.
+Ensure these all pass locally before pushing. To run lint locally:
+
+```bash
+npm run lint
+```
 
 ## Deep readiness probe
 

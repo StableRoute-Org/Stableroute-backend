@@ -72,6 +72,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "service_paused", "StableRoute backend is paused");
 });
 
+// Absolute ceiling for the bulkMaxItems config knob.
+const BULK_ABSOLUTE_MAX = 10_000;
+
 // Per-IP sliding-window rate limiter: 60 requests per 60 second window.
 // Disabled in test mode so the test suite can make many requests without
 // hitting the limit.

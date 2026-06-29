@@ -151,6 +151,33 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/1-12 character strings/);
     });
+
+    it("rejects asset codes starting with __health (reserved probe namespace) with 400", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "__health1", destination: "USDC" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects destination asset code starting with __health with 400", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "__health1" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects __health prefix approximations that could collide with probe namespace", async () => {
+      const offending = ["__health", "__healthX", "__health_"];
+      for (const code of offending) {
+        const res = await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: code, destination: "USDC" });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      }
+    });
   });
 
   it("serves an OpenAPI 3.0 spec with the expected paths", async () => {

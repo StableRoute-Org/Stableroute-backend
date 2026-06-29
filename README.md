@@ -141,22 +141,21 @@ When any required check fails, the endpoint returns **503** with
 Checks are time-bounded (5s timeout via `AbortController`) so the probe
 never hangs.
 
-## Stats snapshot
+## Metrics
 
-`GET /api/v1/stats` is an unauthenticated, side-effect-free snapshot of system
-shape, derived in O(n) from the in-memory stores. It returns:
+`GET /api/v1/metrics` exposes Prometheus text exposition format
+(`text/plain; version=0.0.4`). Alongside `stableroute_pairs_total` and
+`stableroute_paused`, it emits label-free, constant-cardinality store-size and
+config gauges:
 
-| Field            | Meaning                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| `totalPairs`     | Number of registered pairs (kept for backward compatibility).  |
-| `paused`         | Service pause flag (kept for backward compatibility).          |
-| `totalApiKeys`   | Number of stored API keys.                                     |
-| `totalWebhooks`  | Number of registered webhooks.                                 |
-| `totalEvents`    | Number of entries in the audit event log.                      |
-| `pairsWithFee`   | Pairs whose `feeBps > 0`.                                      |
-| `distinctAssets` | Unique asset codes across all registered pairs.                |
+| Metric                              | Source                          |
+| ----------------------------------- | ------------------------------- |
+| `stableroute_api_keys_total`        | Number of stored API keys.      |
+| `stableroute_webhooks_total`        | Number of registered webhooks.  |
+| `stableroute_event_log_size`        | Current event-log depth.        |
+| `stableroute_rate_limit_per_window` | Configured requests per window. |
 
-No raw keys, webhook URLs, or event payloads appear in the response.
+These carry no labels and never include raw secrets or URLs.
 
 ## OpenAPI spec
 

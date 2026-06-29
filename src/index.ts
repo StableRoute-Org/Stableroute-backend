@@ -857,6 +857,32 @@ const aggregateEventCounts = (log: AppEvent[]): Map<string, number> => {
   return counts;
 };
 
+/**
+ * Build the label-free store-size and config gauges exposed in `/metrics`.
+ *
+ * Each metric is a bounded, constant-cardinality gauge derived from an
+ * in-memory store size or the active `config`, emitted with its `# HELP` and
+ * `# TYPE` comment lines in Prometheus text exposition format. No labels are
+ * used, so scrape cardinality stays constant, and no raw secrets or URLs are
+ * ever included — only counts and the configured rate limit.
+ *
+ * @returns Array of exposition lines (HELP/TYPE/value triples) ready to join.
+ */
+const buildStoreGaugeLines = (): string[] => [
+  "# HELP stableroute_api_keys_total Number of stored API keys.",
+  "# TYPE stableroute_api_keys_total gauge",
+  `stableroute_api_keys_total ${apiKeyStore.size}`,
+  "# HELP stableroute_webhooks_total Number of registered webhooks.",
+  "# TYPE stableroute_webhooks_total gauge",
+  `stableroute_webhooks_total ${webhookStore.size}`,
+  "# HELP stableroute_event_log_size Current number of entries in the event log.",
+  "# TYPE stableroute_event_log_size gauge",
+  `stableroute_event_log_size ${eventLog.length}`,
+  "# HELP stableroute_rate_limit_per_window Configured request limit per rate-limit window.",
+  "# TYPE stableroute_rate_limit_per_window gauge",
+  `stableroute_rate_limit_per_window ${config.rateLimitPerWindow ?? 0}`,
+];
+
 app.get("/api/v1/metrics", (_req: Request, res: Response) => {
   const eventCounts = aggregateEventCounts(eventLog);
 
@@ -876,6 +902,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
       ([type, count]) =>
         `stableroute_events_by_type{type="${escapeLabelValue(type)}"} ${count}`
     ),
+    ...buildStoreGaugeLines(),
   ];
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(lines.join("\n") + "\n");

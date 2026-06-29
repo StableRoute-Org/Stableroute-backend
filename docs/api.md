@@ -144,6 +144,30 @@ Returns a minimal OpenAPI 3.0.3 document describing the available paths.
 
 - **Response 200:** OpenAPI document (`{ openapi, info, paths }`).
 
+### `GET /api/v1/version`
+
+Lightweight build/version metadata. Unauthenticated and cheap — runs no health
+checks and exposes only build identity.
+
+- **Response 200:**
+  ```json
+  {
+    "name": "stableroute-backend",
+    "version": "0.1.0",
+    "commit": "a1b2c3d",
+    "buildTime": "2026-01-01T00:00:00Z",
+    "node": "v20.0.0"
+  }
+  ```
+
+`name`/`version` come from `package.json`; `commit`/`buildTime` come from the
+`GIT_COMMIT`/`BUILD_TIME` env vars (each falling back to `"unknown"`); `node` is
+`process.version`. No secrets are exposed.
+
+```bash
+curl http://localhost:3001/api/v1/version
+```
+
 ### `GET /api/v1/health/deep`
 
 Deep readiness probe. Runs synchronous `storage` and `clock` checks.
@@ -312,6 +336,26 @@ non-zero value.
 | Violation | `"100"` | `"999"` | No — `400` returned |
 | Unset liquidity | `"0"` | `"999"` | Yes — liquidity is unset |
 
+### `POST /api/v1/pairs/bulk`
+
+Register many pairs in a single request. Each item is validated independently;
+one bad item never fails the whole batch.
+
+- **Body:** `{ "pairs": [ { "source": "USDC", "destination": "EURC" }, … ] }`
+  — 1 to `config.bulkMaxItems` entries (default 100).
+- **Response 200:** `{ "results": [ … ] }` where each result is either:
+  - success: `{ "index": 0, "ok": true, "source": "USDC", "destination": "EURC", "registered": true }`
+  - failure: `{ "index": 1, "ok": false, "error": "invalid_asset_code" | "same_asset" }`
+- **Errors:** `400 invalid_request` if the `pairs` array is missing, empty, or
+  exceeds `config.bulkMaxItems`.
+- **Audit:** emits `pair.registered` or `pair.refreshed` for each successful item.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/pairs/bulk \
+  -H 'Content-Type: application/json' \
+  -d '{"pairs":[{"source":"USDC","destination":"EURC"},{"source":"EURC","destination":"XLM"}]}'
+```
+
 ### `POST /api/v1/pairs/:source/:destination/reset`
 
 Reset all metadata for a registered pair back to factory defaults
@@ -401,17 +445,62 @@ Response:
 > backward compatibility. New integrations should use `netAmount` as the
 > authoritative receivable figure.
 
+### `GET /api/v1/quote/reverse`
+
+Reverse quote: given a desired output amount, compute the gross input needed
+so the recipient receives exactly `output` base units after fees are deducted.
+
+- **Query:** `source_asset` (1–12 chars), `dest_asset` (1–12 chars),
+  `output` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
+- **Response 200:**
+  ```json
+  {
+    "source_asset": "USDC",
+    "dest_asset": "EURC",
+    "output": "9970",
+    "requiredInput": "10000",
+    "feeAmount": "30",
+    "feeBps": 30,
+    "route": ["USDC", "EURC"]
+  }
+  ```
+- **Errors:** `400 invalid_request` if any param is missing, if assets are invalid
+  or equal, or if `output` is not a valid positive integer string.
+
+#### Reverse fee formula
+
+The forward fee formula is `fee = floor(gross × feeBps / 10000)`, so
+`output = gross - fee`. Inverting:
+
+```
+requiredInput = ceil(output × 10000 / (10000 − feeBps))
+feeAmount     = requiredInput − output
+```
+
+Ceiling division ensures the recipient always receives at least `output` base
+units. A `feeBps` of `10000` (100%) is rejected with a `RangeError`.
+
+```bash
+curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&output=9970'
+```
+
 ### `POST /api/v1/quote/bulk`
 
 Quote up to 100 items in one request. Invalid items are reported
 per-item rather than failing the whole request.
 
 - **Body:** `{ "items": [ { "source_asset": "USDC", "dest_asset": "EURC", "amount": "100" }, … ] }`
-  (1–100 items).
+  (1–`config.bulkMaxItems` items).
 - **Response 200:** `{ "results": [ … ] }` where each result is either
   `{ index, ok: true, source_asset, dest_asset, amount, estimated_rate }`
   or `{ index, ok: false, error: "invalid_item" }`.
-- **Errors:** `400 invalid_request` if `items` is not an array of 1–100 entries.
+- **Errors:** `400 invalid_request` if `items` is not an array of 1–`config.bulkMaxItems` entries.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/quote/bulk \
+  -H 'Content-Type: application/json' \
+  -d '{"items":[{"source_asset":"USDC","dest_asset":"EURC","amount":"1000"}]}'
+```
 
 ---
 
@@ -423,14 +512,44 @@ characters (the prefix).
 
 ### `POST /api/v1/api-keys`
 
-- **Body:** `{ "label": "ci-runner" }` — 1–64 chars.
-- **Response 201:** `{ "key": "srk_<hex>", "label": "ci-runner" }`.
-- **Errors:** `400 invalid_request` if `label` is missing or not 1–64 chars.
+Create a new API key. The raw key is returned **once** at creation and never
+again — store it securely.
+
+- **Body:** `{ "label": "ci-runner", "scopes": ["pairs:write"] }`
+  - `label` — required, 1–64 chars.
+  - `scopes` — optional string array. Known scopes: `pairs:write`, `webhooks:write`,
+    `keys:admin`. Omit `scopes` to create a read-only key (empty scope set).
+- **Response 201:**
+  ```json
+  { "key": "srk_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", "label": "ci-runner" }
+  ```
+- **Errors:** `400 invalid_request` if `label` is missing or not 1–64 chars, or
+  if `scopes` contains unknown values.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/api-keys \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"ci-runner","scopes":["pairs:write"]}'
+```
 
 ### `GET /api/v1/api-keys`
 
-- **Response 200:** `{ "items": [ { "prefix": "srk_abcd", "label": "…", "createdAt": 1700000000000 } ] }`.
-  The raw `key` is **never** returned here.
+List all API keys. The raw key value is **never** returned.
+
+- **Response 200:**
+  ```json
+  {
+    "items": [
+      { "prefix": "srk_a1b2", "label": "ci-runner", "createdAt": 1700000000000 },
+      { "prefix": "srk_c3d4", "label": "old-key", "createdAt": 1699000000000, "rotatedAt": 1700000000000 }
+    ]
+  }
+  ```
+  Rotated predecessor records include a `rotatedAt` field.
+
+```bash
+curl http://localhost:3001/api/v1/api-keys
+```
 
 ### `DELETE /api/v1/api-keys/:prefix`
 
@@ -438,6 +557,33 @@ Delete by the 8-character key prefix.
 
 - **Response 204:** empty body on success.
 - **Errors:** `404 not_found` if no key matches the prefix.
+
+```bash
+curl -X DELETE http://localhost:3001/api/v1/api-keys/srk_a1b2
+```
+
+### `POST /api/v1/api-keys/:prefix/rotate`
+
+Rotate an API key without downtime. Mints a new `srk_` successor key inheriting
+the predecessor's `label`. The predecessor remains valid for a grace window
+(`ROTATION_GRACE_MS`, default 1 hour) so callers can cut over without downtime.
+
+- **Path param:** `:prefix` — the 8-character prefix of the key to rotate.
+- **Response 201:**
+  ```json
+  {
+    "key": "srk_newkeyvalue0000000000000000000",
+    "label": "ci-runner",
+    "graceExpiresAt": 1700003600000
+  }
+  ```
+  The new raw key is returned exactly once. `graceExpiresAt` is the epoch-ms
+  deadline after which the predecessor key will stop working.
+- **Errors:** `404 not_found` if no key matches the prefix.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/api-keys/srk_a1b2/rotate
+```
 
 ---
 
@@ -462,12 +608,74 @@ Delete by the 8-character key prefix.
 
 ### `GET /api/v1/webhooks`
 
-- **Response 200:** `{ "items": [ { "id", "url", "events", "createdAt" } ] }`.
+List all registered webhooks.
+
+- **Response 200:**
+  ```json
+  {
+    "items": [
+      {
+        "id": "wh_a1b2c3d4e5f6a7b8",
+        "url": "https://example.com/hook",
+        "events": ["pair.registered"],
+        "createdAt": 1700000000000
+      }
+    ]
+  }
+  ```
+
+```bash
+curl http://localhost:3001/api/v1/webhooks
+```
+
+### `GET /api/v1/webhooks/:id`
+
+Read a single registered webhook by id.
+
+- **Response 200:**
+  ```json
+  {
+    "id": "wh_a1b2c3d4e5f6a7b8",
+    "url": "https://example.com/hook",
+    "events": ["pair.registered"],
+    "createdAt": 1700000000000
+  }
+  ```
+- **Errors:** `404 not_found` if no webhook has that id.
+
+```bash
+curl http://localhost:3001/api/v1/webhooks/wh_a1b2c3d4e5f6a7b8
+```
+
+### `PATCH /api/v1/webhooks/:id`
+
+Update the subscribed `events` list for an existing webhook in place.
+
+The `url` is immutable on PATCH — to change the destination, delete and
+recreate the webhook.
+
+- **Body:** `{ "events": ["pair.registered", "pair.unregistered"] }` — non-empty
+  string array; duplicates are deduplicated before storage.
+- **Response 200:** the updated webhook object (`{ id, url, events, createdAt }`).
+- **Errors:** `404 not_found` if the webhook does not exist; `400 invalid_request`
+  if `events` is missing, empty, or contains non-string values.
+
+```bash
+curl -X PATCH http://localhost:3001/api/v1/webhooks/wh_a1b2c3d4e5f6a7b8 \
+  -H 'Content-Type: application/json' \
+  -d '{"events":["pair.registered","pair.unregistered"]}'
+```
 
 ### `DELETE /api/v1/webhooks/:id`
 
+Delete a registered webhook.
+
 - **Response 204:** empty body on success.
 - **Errors:** `404 not_found` if no webhook has that id.
+
+```bash
+curl -X DELETE http://localhost:3001/api/v1/webhooks/wh_a1b2c3d4e5f6a7b8
+```
 
 ---
 
@@ -475,20 +683,67 @@ Delete by the 8-character key prefix.
 
 ### `POST /api/v1/admin/pause`
 
-Pause the service. While paused, non-idempotent requests return
-`503 service_paused` (except unpause).
+Pause the service. While paused, all non-idempotent (`GET`/`HEAD`/`OPTIONS`)
+requests return `503 service_paused`, except `POST /api/v1/admin/unpause` which
+is always reachable so an operator can recover.
 
 - **Response 200:** `{ "paused": true }`.
+- **Audit:** emits an `admin.paused` event.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/pause
+```
 
 ### `POST /api/v1/admin/unpause`
 
-Resume the service. Always allowed even while paused.
+Resume the service. Always reachable even while paused.
 
 - **Response 200:** `{ "paused": false }`.
+- **Audit:** emits an `admin.unpaused` event.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/unpause
+```
+
+### `POST /api/v1/admin/read-only`
+
+Enable read-only maintenance mode. Keeps reads and quotes flowing while
+freezing all other mutations. Weaker than `paused` — if the service is also
+paused, the pause guard (`503 service_paused`) takes precedence.
+
+While read-only is active, allowed requests are:
+- All `GET`/`HEAD`/`OPTIONS` requests.
+- `POST /api/v1/quote`, `POST /api/v1/quote/reverse`, `POST /api/v1/quote/bulk`.
+- `POST /api/v1/admin/read-write` (recovery path, always reachable).
+
+All other mutating requests return `503 read_only_mode`.
+
+- **Response 200:** `{ "readOnly": true }`.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/read-only
+```
+
+### `POST /api/v1/admin/read-write`
+
+Disable read-only maintenance mode. Always reachable even while read-only is
+active, so operators can never be locked out.
+
+- **Response 200:** `{ "readOnly": false }`.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/read-write
+```
 
 ### `GET /api/v1/admin/status`
 
-- **Response 200:** `{ "paused": false }`.
+Returns the current operational flags.
+
+- **Response 200:** `{ "paused": false, "readOnly": false }`.
+
+```bash
+curl http://localhost:3001/api/v1/admin/status
+```
 
 ---
 
@@ -496,7 +751,34 @@ Resume the service. Always allowed even while paused.
 
 ### `GET /api/v1/stats`
 
-- **Response 200:** `{ "totalPairs": 0, "paused": false }`.
+Aggregate statistics about the current service state.
+
+- **Response 200:**
+  ```json
+  {
+    "totalPairs": 5,
+    "paused": false,
+    "totalApiKeys": 2,
+    "totalWebhooks": 1,
+    "totalEvents": 42,
+    "pairsWithFee": 3,
+    "distinctAssets": 4
+  }
+  ```
+
+| Field            | Description                                                           |
+|------------------|-----------------------------------------------------------------------|
+| `totalPairs`     | Number of currently registered pairs.                                 |
+| `paused`         | Whether the service is currently paused.                              |
+| `totalApiKeys`   | Number of API keys in the store (including rotated predecessors).     |
+| `totalWebhooks`  | Number of registered webhooks.                                        |
+| `totalEvents`    | Current number of entries in the audit event log.                     |
+| `pairsWithFee`   | Count of pairs whose stored `feeBps > 0`.                             |
+| `distinctAssets` | Number of unique asset codes appearing in any registered pair.        |
+
+```bash
+curl http://localhost:3001/api/v1/stats
+```
 
 ### `GET /api/v1/metrics`
 
@@ -624,4 +906,37 @@ Register a webhook:
 curl -X POST http://localhost:3001/api/v1/webhooks \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com/hook","events":["pair.registered"]}'
+```
+
+Get a reverse quote (what input is needed to deliver exactly 9970 output units):
+
+```bash
+curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&output=9970'
+```
+
+Bulk register pairs:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/pairs/bulk \
+  -H 'Content-Type: application/json' \
+  -d '{"pairs":[{"source":"USDC","destination":"EURC"},{"source":"EURC","destination":"XLM"}]}'
+```
+
+Rotate an API key (use the 8-char prefix from `GET /api/v1/api-keys`):
+
+```bash
+curl -X POST http://localhost:3001/api/v1/api-keys/srk_a1b2/rotate
+```
+
+Enable read-only mode and then re-enable writes:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/read-only
+curl -X POST http://localhost:3001/api/v1/admin/read-write
+```
+
+Check service operational status:
+
+```bash
+curl http://localhost:3001/api/v1/admin/status
 ```

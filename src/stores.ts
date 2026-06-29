@@ -48,19 +48,11 @@ export type WebhookRecord = {
 export const EVENT_LOG_CAP = 10_000;
 
 /**
- * Reserved prefix for the deep-probe storage scratch key.
- *
- * The deep readiness probe (`runHealthChecks`) writes a throwaway entry to
- * `pairMeta` under this key to verify the store can round-trip, then
- * immediately deletes it. Using a control-character sentinel (`\x00`) that
- * is structurally impossible in a valid asset code (which must be a 1–12
- * character alphanumeric string) guarantees the probe's scratch key can
- * never collide with a real operator pair key.
- *
- * **This namespace is probe-only.** No handler, migration, or external
- * caller should write keys that begin with this prefix.
+ * Hard ceiling on the number of distinct IPs tracked in {@link rateBuckets}.
+ * When the map would grow beyond this limit the least-recently-active entry
+ * is evicted first, bounding memory regardless of source-IP cardinality.
  */
-export const HEALTH_PROBE_KEY = "\x00__health_probe__";
+export const RATE_BUCKETS_MAX_IPS = 50_000;
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 

@@ -145,6 +145,13 @@ cross-test bleed. This function is not exposed via any HTTP route.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+A request body that is not valid JSON is treated as a client error: the final
+error handler maps the body-parser parse failure (`entity.parse.failed` /
+`SyntaxError`) to `400 invalid_json` with a fixed, non-leaking message
+(`request body is not valid JSON`) — the raw parser text and any stack trace are
+never echoed. The `413 payload_too_large` mapping still takes precedence, and
+genuinely unexpected errors continue to fall through to `500 internal_error`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

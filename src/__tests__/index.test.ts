@@ -127,14 +127,13 @@ describe("StableRoute Backend", () => {
     expect(tooLarge.status).toBe(413);
     expectCanonicalError(tooLarge.body, "err-413", "payload_too_large");
 
-    const serverError = await request(app)
+    const badJson = await request(app)
       .post("/api/v1/pairs")
       .set("Content-Type", "application/json")
-      .set("X-Request-Id", "err-500")
+      .set("X-Request-Id", "err-400-json")
       .send("{");
-    expect(serverError.status).toBe(500);
-    expectCanonicalError(serverError.body, "err-500", "internal_error");
-    expect(serverError.body).toMatchObject({ method: "POST", path: "/api/v1/pairs" });
+    expect(badJson.status).toBe(400);
+    expectCanonicalError(badJson.body, "err-400-json", "invalid_json");
 
     await request(app).post("/api/v1/admin/pause");
     const paused = await request(app)
@@ -1148,6 +1147,39 @@ describe("StableRoute Backend", () => {
       // Both event types should be present
       expect(types.has("pair.registered")).toBe(true);
       expect(types.has("pair.unregistered")).toBe(true);
+    });
+  });
+
+  describe("malformed JSON handling", () => {
+    it("returns 400 invalid_json for a malformed body without leaking the raw fragment", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .send("{not json");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_json");
+      expect(res.body.message).toBe("request body is not valid JSON");
+      expect(res.body.requestId).toBeTruthy();
+      // The fixed message must not echo the offending input or a stack trace.
+      expect(res.body.message).not.toMatch(/not json/);
+      expect(res.body.stack).toBeUndefined();
+      expect(JSON.stringify(res.body)).not.toMatch(/SyntaxError|at Object|node_modules/);
+    });
+
+    it("still accepts a valid JSON body", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .send(JSON.stringify({ source: "JSN", destination: "OKAY" }));
+      expect([200, 201]).toContain(res.status);
+    });
+
+    it("keeps the 413 payload_too_large mapping ahead of the 400 branch", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .send({ payload: "x".repeat(110_000) });
+      expect(res.status).toBe(413);
+      expect(res.body.error).toBe("payload_too_large");
     });
   });
 });

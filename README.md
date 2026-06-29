@@ -141,6 +141,25 @@ accessors and a `resetStores()` helper for test isolation:
 Call `resetStores()` in test `beforeEach` / `afterEach` hooks to prevent
 cross-test bleed. This function is not exposed via any HTTP route.
 
+## Audit events
+
+`GET /api/v1/events` returns the in-memory audit log. In addition to the pair
+lifecycle events (`pair.registered`, `pair.refreshed`, `pair.unregistered`),
+the following security-relevant mutations are recorded:
+
+| Event             | Payload (no secrets)        |
+| ----------------- | --------------------------- |
+| `apikey.created`  | `{ prefix, label }`         |
+| `apikey.deleted`  | `{ prefix }`                |
+| `webhook.created` | `{ id, url }`               |
+| `webhook.deleted` | `{ id }`                    |
+| `admin.paused`    | `{}`                        |
+| `admin.unpaused`  | `{}`                        |
+
+Payloads never include secret material — the raw API key and any webhook
+secret are deliberately excluded. The existing `EVENT_LOG_CAP` eviction applies
+unchanged.
+
 ## Error responses
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.

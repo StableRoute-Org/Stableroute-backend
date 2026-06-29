@@ -12,14 +12,21 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-### Webhook read and update
+### Webhook event allowlist
 
-`GET /api/v1/webhooks/:id` returns a single webhook as
-`{ id, url, events, createdAt }`, or `404 not_found` for an unknown id.
-`PATCH /api/v1/webhooks/:id` updates a webhook's subscribed `events` in place
-(validated as a non-empty string array and deduplicated) and returns the updated
-record. The `url` is immutable on PATCH — changing the destination must go
-through delete/recreate so the URL's SSRF-validation provenance is preserved.
+`POST /api/v1/webhooks` validates each entry in `events` against the canonical
+allowlist of emitted event types (`KNOWN_EVENT_TYPES` in `src/stores.ts`):
+
+- `pair.registered`
+- `pair.refreshed`
+- `pair.unregistered`
+
+A `"*"` wildcard is also accepted, meaning "all current and future types".
+Any other value is rejected with `400 invalid_request`, and the error message
+lists the offending value(s) — this prevents silent subscriptions to typos like
+`pair.regstered` that would never deliver. `KNOWN_EVENT_TYPES` is the single
+source of truth shared with `recordEvent`, so the allowlist cannot drift from
+the types the system actually emits.
 
 ## Architecture & request lifecycle
 

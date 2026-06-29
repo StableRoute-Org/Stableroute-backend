@@ -53,17 +53,47 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 | `rate_limited`      | 429  | More than 60 requests per 60 s from one IP. Sets `Retry-After: 60`. Disabled when `NODE_ENV=test`. |
 | `service_paused`    | 503  | Service is paused and a non-idempotent request was made (see Admin / pause).        |
 | `internal_error`    | 500  | Unhandled exception; `message` carries the error text plus `method`/`path`.         |
+| `not_acceptable`    | 406  | `Accept` header is present and excludes `application/json` (see Content negotiation). |
 
 > **Pause behaviour:** while paused, all non-`GET`/`HEAD`/`OPTIONS`
 > requests return `503 service_paused`, **except** `POST /api/v1/admin/unpause`,
 > so an operator can always recover.
 
-> **CORS preflight under pause:** `OPTIONS` requests (browser CORS preflights)
-> are explicitly allowed through the pause guard.  This means `cors()` can
-> still respond with `Access-Control-Allow-Origin` / `Access-Control-Allow-Methods`
-> headers while the service is paused, preventing browser clients from being
-> locked out by a failed preflight.  This guarantee is covered by
-> `src/__tests__/cors.test.ts`.
+### Content negotiation
+
+All versioned JSON API endpoints enforce HTTP content negotiation. If a
+request carries an `Accept` header that neither includes `application/json`
+nor any matching wildcard (`*/*` or `application/*`), the server responds with:
+
+```
+HTTP/1.1 406 Not Acceptable
+Content-Type: application/json
+
+{
+  "error": "not_acceptable",
+  "message": "This endpoint only produces application/json",
+  "requestId": "…"
+}
+```
+
+**Exempt routes** — the following paths bypass the guard because they serve
+non-JSON content:
+
+| Path | Content-Type |
+|------|--------------|
+| `GET /health` | `application/json` (monitoring-friendly, no restriction) |
+| `GET /api/v1/metrics` | `text/plain` (Prometheus exposition format) |
+
+**Accepted `Accept` values:**
+
+| Value | Accepted? |
+|-------|-----------|
+| *(absent)* | Yes — defaults to JSON |
+| `application/json` | Yes |
+| `*/*` | Yes |
+| `application/*` | Yes |
+| `text/html` | No → `406` |
+| `text/csv` | No → `406` |
 
 ### Security headers
 

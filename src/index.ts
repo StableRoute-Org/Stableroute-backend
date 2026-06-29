@@ -154,6 +154,54 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+/**
+ * Paths that are exempt from the JSON content-negotiation guard.
+ *
+ * - `GET /health` — shallow liveness probe (must never require Accept headers).
+ * - `GET /api/v1/metrics` — Prometheus scrape endpoint that serves `text/plain`.
+ *
+ * Both must remain reachable by monitoring systems that send no Accept header
+ * or that explicitly request `text/plain`.
+ */
+const ACCEPT_NEGOTIATION_EXEMPT = new Set(["/health", "/api/v1/metrics"]);
+
+/**
+ * JSON content-negotiation guard.
+ *
+ * Rejects requests whose `Accept` header is present and explicitly excludes
+ * `application/json` (and wildcards `*\/\*` / `application/*`) with a
+ * `406 Not Acceptable` response using the canonical `sendError` envelope.
+ *
+ * Rules:
+ * - A missing `Accept` header is treated as acceptable (defaults to JSON).
+ * - `*\/*` and `application/*` wildcards are accepted.
+ * - Routes in `ACCEPT_NEGOTIATION_EXEMPT` are always passed through.
+ *
+ * Security note: only the Accept header value is examined; the guard does not
+ * re-evaluate pause or rate-limit state, so those middleware layers remain
+ * authoritative for their own concerns.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (ACCEPT_NEGOTIATION_EXEMPT.has(req.path)) return next();
+
+  const accept = req.header("accept");
+  if (!accept) return next();
+
+  // Split on comma to get individual media-range tokens; strip quality params.
+  const types = accept.split(",").map((t) => t.split(";")[0].trim().toLowerCase());
+
+  const acceptable = types.some(
+    (t) => t === "*/*" || t === "application/json" || t === "application/*"
+  );
+
+  if (!acceptable) {
+    sendError(res, req, 406, "not_acceptable", "This endpoint only produces application/json");
+    return;
+  }
+
+  next();
+});
+
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", service: "stableroute-backend" });
 });

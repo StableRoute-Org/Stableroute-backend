@@ -50,7 +50,8 @@ export type ApiErrorCode =
   | "conflict"
   | "method_not_allowed"
   | "read_only_mode"
-  | "idempotency_conflict";
+  | "unsupported_media_type"
+  | "request_timeout";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -223,45 +224,27 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: "100kb" }));
 
-/**
- * Per-request timeout guard.
- *
- * Arms a timer for every incoming request. If the response has not finished
- * within REQUEST_TIMEOUT_MS milliseconds the handler sends a 503
- * `request_timeout` response. The timer is always cleared on res "finish" and
- * "close" events to prevent leaks.
- *
- * The guard is skipped when REQUEST_TIMEOUT_MS is not set in the environment
- * so that the existing test suite — which does not configure a timeout — is
- * unaffected.
- */
-const REQUEST_TIMEOUT_MS = process.env.REQUEST_TIMEOUT_MS
-  ? parseInt(process.env.REQUEST_TIMEOUT_MS, 10)
-  : undefined;
-
+// Content-Type guard: POST/PATCH/PUT requests with a body must declare
+// Content-Type: application/json. Requests with no body (no Content-Length
+// and no Transfer-Encoding) are passed through unchanged.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (REQUEST_TIMEOUT_MS === undefined) return next();
-
-  const timer = setTimeout(() => {
-    if (res.headersSent) {
-      console.warn(
-        JSON.stringify({
-          requestId: getRequestId(req),
-          warning: "request_timeout_after_headers_sent",
-          method: req.method,
-          path: req.path,
-        })
-      );
-      return;
-    }
-    sendError(res, req, 503, "request_timeout", "Request timed out");
-  }, REQUEST_TIMEOUT_MS);
-
-  const clear = () => clearTimeout(timer);
-  res.on("finish", clear);
-  res.on("close", clear);
-
-  next();
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "DELETE" || method === "OPTIONS") {
+    return next();
+  }
+  const hasBody =
+    req.headers["content-length"] !== undefined ||
+    req.headers["transfer-encoding"] !== undefined;
+  if (!hasBody) return next();
+  const contentType = (req.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.includes("application/json")) return next();
+  return sendError(
+    res,
+    req,
+    415,
+    "unsupported_media_type",
+    "Content-Type must be application/json"
+  );
 });
 
 // Pause guard: refuses non-idempotent methods with 503 except
@@ -576,6 +559,53 @@ const parseIntegerQueryParam = (value: unknown, fallback: number): number | null
   const n = Number(value);
   return Number.isFinite(n) && Number.isInteger(n) ? n : null;
 };
+/**
+ * Decode a base64-encoded cursor string into an integer offset.
+ *
+ * Returns the decoded offset on success, or `"bad"` when the cursor is
+ * present but malformed (non-base64, non-integer, or negative).  Returns
+ * `undefined` when no cursor was supplied so the caller can distinguish
+ * "first page" from an explicit bad value.
+ *
+ * @param raw - The raw `req.query.cursor` value (string, string[], or undefined).
+ * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
+ *          `undefined` when the param is absent.
+ */
+const parseCursor = (raw: unknown): number | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  try {
+    const decoded = Buffer.from(raw, "base64").toString();
+    const n = Number(decoded);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
+    return n;
+  } catch {
+    return "bad";
+  }
+};
+
+/**
+ * Apply limit+cursor pagination to an array of items.
+ *
+ * @param items  - The full (pre-filtered) array.
+ * @param limit  - Number of items per page (already clamped by caller).
+ * @param offset - Starting index decoded from the cursor (0 when absent).
+ * @returns The page slice and a `nextCursor` (base64-encoded next offset,
+ *          or `null` when the collection is exhausted).
+ */
+const paginate = <T>(
+  items: T[],
+  limit: number,
+  offset: number
+): { page: T[]; nextCursor: string | null } => {
+  const page = items.slice(offset, offset + limit);
+  const nextOffset = offset + limit;
+  const nextCursor = nextOffset < items.length
+    ? Buffer.from(String(nextOffset)).toString("base64")
+    : null;
+  return { page, nextCursor };
+};
+
 
 /**
  * Decode a base64-encoded cursor string into an integer offset.
@@ -753,15 +783,30 @@ app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
-  const items = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
+app.get("/api/v1/api-keys", (req: Request, res: Response) => {
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allItems = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
     prefix: k.slice(0, 8),
     label: m.label,
     createdAt: m.createdAt,
     // Surface rotation metadata for predecessor records (omitted when absent).
     ...(m.rotatedAt !== undefined ? { rotatedAt: m.rotatedAt } : {}),
   }));
-  res.json({ items });
+  const { page, nextCursor } = paginate(allItems, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => {
@@ -850,9 +895,24 @@ app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
-  const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
-  res.json({ items });
+app.get("/api/v1/webhooks", (req: Request, res: Response) => {
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allItems = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
+  const { page, nextCursor } = paginate(allItems, limit, offset);
+  res.json({ items: page, nextCursor });
 });
 
 app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
@@ -1409,7 +1469,26 @@ const pairsEtag = (body: string): string =>
  * Response: { pairs: [{ source, destination }, ...] }
  */
 app.get("/api/v1/pairs", (req: Request, res: Response) => {
-  const body = serializePairs();
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allPairs = Array.from(pairRegistry).map((k) => {
+    const [source, destination] = k.split("::");
+    return { source, destination };
+  });
+  const { page, nextCursor } = paginate(allPairs, limit, offset);
+  const body = JSON.stringify({ pairs: page, nextCursor });
   const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {
     res.status(304).end();

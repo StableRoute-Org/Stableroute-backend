@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import { openApiSpec } from "./openapi";
 import {
+  paused,
   pairRegistry,
   pairMeta,
   apiKeyStore,
@@ -22,7 +23,6 @@ import {
   type WebhookRecord,
   type EventType,
 } from "./stores";
-import { paused } from "./stores";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;

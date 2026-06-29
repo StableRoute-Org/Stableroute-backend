@@ -186,6 +186,30 @@ Set available liquidity.
 - **Response 200:** the updated metadata object.
 - **Errors:** `404 not_found` (unregistered); `400 invalid_request` (bad value).
 
+### `POST /api/v1/pairs/:source/:destination/reset`
+
+Reset all metadata for a registered pair back to factory defaults
+(`feeBps: 0`, `minAmount: "0"`, `maxAmount: "0"`, `liquidity: "0"`).
+Use this to undo a misconfigured `feeBps`, `maxAmount`, or other field
+without unregistering the pair (which would emit spurious lifecycle
+events).
+
+- **Body:** none required.
+- **Response 200:**
+  ```json
+  {
+    "source": "USDC",
+    "destination": "EURC",
+    "feeBps": 0,
+    "minAmount": "0",
+    "maxAmount": "0",
+    "liquidity": "0"
+  }
+  ```
+- **Errors:** `404 not_found` if the pair is not registered;
+  `503 service_paused` if the service is currently paused.
+- **Audit:** emits a `pair.meta.reset` event in the event log.
+
 ---
 
 ## Quotes

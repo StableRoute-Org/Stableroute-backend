@@ -733,4 +733,114 @@ describe("StableRoute Backend", () => {
       expect(res.body.amount).toBe(huge);
     });
   });
+
+  describe("POST /api/v1/pairs/:source/:destination/reset", () => {
+    beforeEach(async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "RST", destination: "TST" });
+    });
+
+    afterEach(async () => {
+      await request(app).delete("/api/v1/pairs/RST/TST");
+    });
+
+    it("returns 200 with default metadata after reset", async () => {
+      // First patch to non-default values
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/fee_bps")
+        .send({ feeBps: 200 });
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/min")
+        .send({ minAmount: "500" });
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/max")
+        .send({ maxAmount: "9999" });
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/liquidity")
+        .send({ liquidity: "100000" });
+
+      // Verify values were set
+      const info = await request(app).get("/api/v1/pairs/RST/TST/info");
+      expect(info.body.feeBps).toBe(200);
+
+      // Reset
+      const res = await request(app).post("/api/v1/pairs/RST/TST/reset");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        source: "RST",
+        destination: "TST",
+        feeBps: 0,
+        minAmount: "0",
+        maxAmount: "0",
+        liquidity: "0",
+      });
+    });
+
+    it("clears all prior PATCH values back to defaults", async () => {
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/fee_bps")
+        .send({ feeBps: 300 });
+      await request(app)
+        .patch("/api/v1/pairs/RST/TST/liquidity")
+        .send({ liquidity: "777" });
+
+      await request(app).post("/api/v1/pairs/RST/TST/reset");
+
+      const info = await request(app).get("/api/v1/pairs/RST/TST/info");
+      expect(info.status).toBe(200);
+      expect(info.body.feeBps).toBe(0);
+      expect(info.body.liquidity).toBe("0");
+      expect(info.body.minAmount).toBe("0");
+      expect(info.body.maxAmount).toBe("0");
+    });
+
+    it("returns 404 for an unregistered pair", async () => {
+      const res = await request(app).post("/api/v1/pairs/NO/PAIR/reset");
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("not_found");
+    });
+
+    it("emits a pair.meta.reset event", async () => {
+      await request(app).post("/api/v1/pairs/RST/TST/reset");
+
+      const events = await request(app).get("/api/v1/events?limit=50");
+      expect(events.status).toBe(200);
+      expect(
+        events.body.items.some(
+          (e: { type: string; payload: { source: string; destination: string } }) =>
+            e.type === "pair.meta.reset" &&
+            e.payload.source === "RST" &&
+            e.payload.destination === "TST"
+        )
+      ).toBe(true);
+    });
+
+    it("is blocked while paused (503)", async () => {
+      await request(app).post("/api/v1/admin/pause");
+      const res = await request(app).post("/api/v1/pairs/RST/TST/reset");
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe("service_paused");
+      await request(app).post("/api/v1/admin/unpause");
+    });
+
+    it("reset only affects the targeted pair and not others", async () => {
+      // Register a second pair and set custom values
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OTHER", destination: "PAIR" });
+      await request(app)
+        .patch("/api/v1/pairs/OTHER/PAIR/fee_bps")
+        .send({ feeBps: 50 });
+
+      // Reset only RST/TST
+      await request(app).post("/api/v1/pairs/RST/TST/reset");
+
+      // OTHER/PAIR should be untouched
+      const otherInfo = await request(app).get("/api/v1/pairs/OTHER/PAIR/info");
+      expect(otherInfo.body.feeBps).toBe(50);
+
+      await request(app).delete("/api/v1/pairs/OTHER/PAIR");
+    });
+  });
 });

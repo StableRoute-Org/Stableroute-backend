@@ -145,6 +145,16 @@ cross-test bleed. This function is not exposed via any HTTP route.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+## Per-pair amount bounds
+
+The `minAmount` and `maxAmount` slots on a pair must satisfy the invariant
+`minAmount <= maxAmount`. `PATCH .../min` is rejected with `400 invalid_request`
+when the new `minAmount` would exceed the existing non-zero `maxAmount`, and
+`PATCH .../max` is rejected when the new `maxAmount` would fall below the existing
+non-zero `minAmount`. A bound of `0` is treated as "unset" and never triggers the
+cross-check, and all comparisons are performed in `BigInt` space to preserve
+precision.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

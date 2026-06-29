@@ -1150,4 +1150,74 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("pair-meta: min <= max ordering invariant", () => {
+    const SRC = "ORDR";
+    const DST = "BNDS";
+
+    beforeEach(async () => {
+      await request(app).post("/api/v1/pairs").send({ source: SRC, destination: DST });
+    });
+
+    afterEach(async () => {
+      await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
+    });
+
+    it("PATCH /min rejects when new minAmount exceeds current maxAmount", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "100" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "1000" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/minAmount/);
+      expect(res.body.message).toMatch(/maxAmount/);
+    });
+
+    it("PATCH /max rejects when new maxAmount is below current minAmount", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/min`).send({ minAmount: "1000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
+        .send({ maxAmount: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/maxAmount/);
+      expect(res.body.message).toMatch(/minAmount/);
+    });
+
+    it("accepts a valid min < max ordering", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "1000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "100" });
+      expect(res.status).toBe(200);
+      expect(res.body.minAmount).toBe("100");
+    });
+
+    it("accepts equal min and max bounds", async () => {
+      await request(app).patch(`/api/v1/pairs/${SRC}/${DST}/max`).send({ maxAmount: "500" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "500" });
+      expect(res.status).toBe(200);
+    });
+
+    it("treats maxAmount of 0 (unset) as never triggering the min cross-check", async () => {
+      // maxAmount defaults to "0"; a large min must still be accepted
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "999999999999999999999999" });
+      expect(res.status).toBe(200);
+    });
+
+    it("compares in BigInt space beyond Number.MAX_SAFE_INTEGER", async () => {
+      // 10^25 vs 10^25 + 1 — indistinguishable as JS numbers, distinct as BigInt
+      await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/max`)
+        .send({ maxAmount: "10000000000000000000000000" });
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
+        .send({ minAmount: "10000000000000000000000001" });
+      expect(res.status).toBe(400);
+    });
+  });
 });

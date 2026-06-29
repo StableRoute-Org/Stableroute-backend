@@ -76,6 +76,10 @@ export type ApiKeyRecord = {
    * this deadline, giving callers an overlap window. Absent until rotation.
    */
   graceExpiresAt?: number;
+  /** Epoch-ms when key expires; absent = never expires. */
+  expiresAt?: number;
+  /** Epoch-ms of last successful authentication; absent until first use. */
+  lastUsedAt?: number;
 };
 
 /** Record stored for each registered webhook. */

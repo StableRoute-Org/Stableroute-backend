@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { openApiSpec } from "./openapi";
@@ -304,6 +305,37 @@ app.get("/api/v1/health/deep", (req: Request, res: Response) => {
     res.json(body);
   }
 });
+/**
+ * Build/identity metadata read once at module load.
+ *
+ * `name` and `version` come from `package.json` (resolved at runtime so the
+ * value is never hard-coded), while `commit` and `buildTime` are injected by
+ * the deploy pipeline through the `GIT_COMMIT` / `BUILD_TIME` env vars. Any
+ * missing env var degrades gracefully to `"unknown"` rather than throwing.
+ */
+const pkg = createRequire(__filename)("../package.json") as {
+  name?: string;
+  version?: string;
+};
+
+/**
+ * GET /api/v1/version — lightweight build/version metadata.
+ *
+ * Unauthenticated and cheap: runs no health checks and exposes only build
+ * identity (`name`, `version`, `commit`, `buildTime`, `node`) — never secrets,
+ * paths, or internal config. Missing `GIT_COMMIT` / `BUILD_TIME` env vars fall
+ * back to `"unknown"`.
+ */
+app.get("/api/v1/version", (_req: Request, res: Response) => {
+  res.json({
+    name: pkg.name ?? "unknown",
+    version: pkg.version ?? "unknown",
+    commit: process.env.GIT_COMMIT ?? "unknown",
+    buildTime: process.env.BUILD_TIME ?? "unknown",
+    node: process.version,
+  });
+});
+
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
   setPaused(true);
   res.json({ paused });

@@ -55,6 +55,21 @@ table below lists every variable the code reads — there are no others.
 |------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
 | `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
 | `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
+| `GIT_COMMIT` | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `a1b2c3d`     |
+| `BUILD_TIME` | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `2026-01-01T00:00:00Z` |
+
+### Build/version endpoint
+
+`GET /api/v1/version` returns lightweight, unauthenticated build identity so
+operators can confirm which build is live during an incident:
+
+```json
+{ "name": "stableroute-backend", "version": "0.1.0", "commit": "a1b2c3d", "buildTime": "2026-01-01T00:00:00Z", "node": "v20.0.0" }
+```
+
+`name`/`version` come from `package.json`; `commit`/`buildTime` come from the
+`GIT_COMMIT`/`BUILD_TIME` env vars (each falling back to `"unknown"`); `node`
+is `process.version`. No health checks run and no secrets are exposed.
 
 `.env.example` is the template for these variables. Copy it to `.env`
 and edit the values for local development:

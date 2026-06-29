@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { loadPausedState, savePausedState } from "./pauseState";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ export const KNOWN_EVENT_TYPES = [
   "pair.registered",
   "pair.refreshed",
   "pair.unregistered",
+  "pair.meta.reset",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",
@@ -64,6 +66,8 @@ export type AppEvent = {
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
+  /** Scopes granted to this key. Absent on keys created before scopes were introduced. */
+  scopes?: string[];
   /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.
@@ -88,6 +92,20 @@ export type WebhookRecord = {
 
 /** Hard cap on event-log size; oldest entries are evicted beyond this. */
 export const EVENT_LOG_CAP = 10_000;
+
+/**
+ * Maximum number of distinct IPs tracked in the rate-limit bucket map.
+ * When this ceiling is reached, the oldest entry is evicted before a new
+ * IP is added so the map never grows without bound.
+ */
+export const RATE_BUCKETS_MAX_IPS = 10_000;
+
+/**
+ * Reserved key used by the deep-health storage probe.
+ * Prefixed with a NUL control character so it can never collide with
+ * a real pair key (which is validated to contain only alphanumeric chars).
+ */
+export const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 /**
  * Absolute maximum value accepted for `eventLogCap` in PATCH /api/v1/config.
@@ -147,8 +165,13 @@ export const config: Record<string, number> = defaultConfig();
 /**
  * Service-level pause flag. When `true` the pause-guard middleware rejects
  * non-idempotent requests with 503.
+ *
+ * Initialised from durable storage at module load so that the state
+ * survives process restarts. In the `test` environment the flag always
+ * starts as `false` so individual test files remain isolated. Mutate
+ * exclusively via {@link setPaused}.
  */
-export let paused = false;
+export let paused = process.env.NODE_ENV === "test" ? false : loadPausedState();
 
 /**
  * Read-only maintenance flag. When `true` (and not {@link paused}), the
@@ -169,6 +192,31 @@ export const pairKey = (source: string, dest: string): string =>
   `${source}::${dest}`;
 
 /**
+ * Return the currently active event-log cap.
+ *
+ * Reads `config.eventLogCap` when it is a valid positive integer that does
+ * not exceed {@link EVENT_LOG_CAP_MAX}; otherwise falls back to the static
+ * {@link EVENT_LOG_CAP} so the log never grows unbounded.
+ *
+ * @returns Effective cap to use when appending or trimming the event log.
+ */
+export const effectiveEventLogCap = (): number => {
+  const v = config.eventLogCap;
+  if (typeof v === "number" && v > 0 && v <= EVENT_LOG_CAP_MAX) return v;
+  return EVENT_LOG_CAP;
+};
+
+/**
+ * Trim the event log to `cap` entries by removing the oldest events.
+ * Call this after lowering `config.eventLogCap` to enforce the new bound.
+ *
+ * @param cap - The maximum number of events to retain.
+ */
+export const trimEventLog = (cap: number): void => {
+  while (eventLog.length > cap) eventLog.shift();
+};
+
+/**
  * Append an event to the bounded event log, evicting the oldest entry
  * when the log exceeds {@link EVENT_LOG_CAP}.
  *
@@ -186,12 +234,20 @@ export const recordEvent = (
 };
 
 /**
- * Set the paused flag. Exported as a function so index.ts can mutate it
- * without reassigning the binding (which would require `export let` in
- * the caller).
+ * Set the paused flag and persist it to durable storage so the state
+ * survives process restarts.
+ *
+ * Exported as a function so `index.ts` can mutate the module-level
+ * binding without a direct reassignment (which would be a TS error on
+ * an imported `let`). The persistence write is best-effort: I/O
+ * failures are logged but never propagated, so in-process state always
+ * takes effect even when the filesystem is unavailable.
+ *
+ * @param value - The new pause state to apply and persist.
  */
 export const setPaused = (value: boolean): void => {
   paused = value;
+  savePausedState(value);
 };
 
 /**
@@ -224,4 +280,6 @@ export const resetStores = (): void => {
   Object.assign(config, defs);
   paused = false;
   readOnly = false;
+  // Clean up any persisted pause-state file so test isolation is complete.
+  savePausedState(false);
 };

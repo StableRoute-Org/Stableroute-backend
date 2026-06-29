@@ -18,8 +18,12 @@ import {
   pairKey,
   defaultMeta,
   recordEvent,
+  trimEventLog,
   EVENT_LOG_CAP,
+  EVENT_LOG_CAP_MAX,
   KNOWN_EVENT_TYPES,
+  HEALTH_PROBE_KEY,
+  RATE_BUCKETS_MAX_IPS,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -174,17 +178,50 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   sendError(res, req, 503, "read_only_mode", "StableRoute backend is in read-only mode");
 });
 
-/** Absolute maximum value accepted for `bulkMaxItems` in PATCH /api/v1/config. */
-const BULK_ABSOLUTE_MAX = 100_000;
-
 // Per-IP sliding-window rate limiter.
 // Reads config.rateLimitPerWindow and config.rateLimitWindowMs at request time
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Absolute upper-bound for the `bulkMaxItems` config key. */
-const BULK_ABSOLUTE_MAX = 100_000;
+/**
+ * Return the in-window timestamp bucket for `ip`, evicting stale entries.
+ *
+ * - Filters out entries older than `windowMs` from the stored bucket.
+ * - Deletes the map entry for the IP when the resulting bucket is empty.
+ * - When a new (unseen) IP arrives and the map is at {@link RATE_BUCKETS_MAX_IPS},
+ *   the oldest map entry is shed first to cap memory usage.
+ *
+ * The caller is responsible for pushing the current timestamp and
+ * re-writing the bucket back to `rateBuckets`.
+ *
+ * @param ip       - Remote IP string used as map key.
+ * @param now      - Current epoch-ms timestamp.
+ * @param windowMs - Size of the sliding rate-limit window in milliseconds.
+ * @returns        Filtered array of in-window timestamps for `ip`.
+ */
+export const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const cutoff = now - windowMs;
+
+  // Enforce IP ceiling: evict the oldest entry before inserting a new one.
+  if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
+    const firstKey = rateBuckets.keys().next().value as string;
+    rateBuckets.delete(firstKey);
+  }
+
+  const existing = rateBuckets.get(ip) ?? [];
+  const filtered = existing.filter((t) => t > cutoff);
+
+  // Remove the key when all timestamps have aged out so the map stays tidy.
+  if (filtered.length === 0) {
+    rateBuckets.delete(ip);
+  } else {
+    rateBuckets.set(ip, filtered);
+  }
+
+  return filtered;
+};
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -521,7 +558,7 @@ const requireScope = (scope: string) =>
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
-    if (!record.scopes.includes(scope)) {
+    if (!(record.scopes ?? []).includes(scope)) {
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
@@ -642,6 +679,18 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
   const items = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
   res.json({ items });
 });
+
+/** Maximum number of event subscriptions per webhook registration. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum character length of a single event name in a webhook subscription. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/**
+ * Event name prefixes reserved for internal system events.
+ * User-defined webhook subscriptions may not use these prefixes.
+ */
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
@@ -1025,23 +1074,6 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
   }
   res.json({ config });
 });
-
-/**
- * Canonical set of known event types emitted by the gateway.
- * Kept here so the metrics series set is stable across scrapes even when
- * the event log is empty.
- */
-const KNOWN_EVENT_TYPES = [
-  "pair.registered",
-  "pair.refreshed",
-  "pair.unregistered",
-  "apikey.created",
-  "apikey.deleted",
-  "webhook.created",
-  "webhook.deleted",
-  "admin.paused",
-  "admin.unpaused",
-] as const;
 
 /**
  * Escape a Prometheus label value per the exposition format rules:

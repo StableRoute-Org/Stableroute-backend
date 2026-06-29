@@ -1207,6 +1207,18 @@ const pairMetaPatchDescriptors: Array<{
       typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000,
     errorMessage: "feeBps must be an integer in [0,1000]",
   },
+  {
+    suffix: "rate",
+    field: "rate",
+    bodyKey: "rate",
+    validate: (v) => {
+      if (typeof v !== "string") return false;
+      if (v.length > 20) return false; // bound precision
+      return /^[0-9]+(\.[0-9]{1,8})?$/.test(v) && parseFloat(v) > 0;
+    },
+    errorMessage:
+      'rate must be a positive decimal string (e.g. "1.0", "0.85"), max 8 decimal places',
+  },
 ];
 
 // Register each descriptor as a PATCH route.
@@ -1698,8 +1710,7 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       source_asset,
       dest_asset,
       amount: String(amount),
-      estimated_rate: "1.0",
-      ...computeQuoteTimes(),
+      estimated_rate: (pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta()).rate,
     };
   });
   res.json({ results });
@@ -1749,7 +1760,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
-    estimated_rate: "1.0",
+    estimated_rate: meta.rate,
     route: [source_asset, dest_asset],
     feeBps: meta.feeBps,
     feeAmount: feeAmount.toString(),

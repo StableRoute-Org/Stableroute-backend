@@ -12,11 +12,8 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
-## Pricing concepts
-
-See [docs/pricing.md](docs/pricing.md) for a guide explaining base-units
-amounts, `BigInt` precision, basis-point fees, min/max/liquidity bounds,
-and the placeholder rate — including worked numeric examples.
+See [docs/events.md](docs/events.md) for the event taxonomy, `AppEvent`
+envelope schema, webhook subscription model, and JSON payload examples.
 
 ## Prerequisites
 

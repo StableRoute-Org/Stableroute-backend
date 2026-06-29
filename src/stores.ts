@@ -47,6 +47,30 @@ export type WebhookRecord = {
 /** Hard cap on event-log size; oldest entries are evicted beyond this. */
 export const EVENT_LOG_CAP = 10_000;
 
+/**
+ * Maximum number of event-name entries allowed per webhook registration.
+ * Prevents callers from bloating the store with thousands of event names.
+ */
+export const WEBHOOK_MAX_EVENTS = 20;
+
+/**
+ * Maximum character length of a single webhook event name.
+ * Mirrors the spirit of the 2048-char URL cap and prevents multi-kilobyte
+ * event strings from inflating `webhookStore` and `GET /api/v1/webhooks`.
+ */
+export const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/**
+ * Event-name prefixes that are reserved for internal StableRoute use.
+ * Registrations that subscribe to a reserved-prefix name are rejected
+ * so external callers cannot shadow system events.
+ */
+export const WEBHOOK_RESERVED_PREFIXES: readonly string[] = [
+  "internal.",
+  "system.",
+  "admin.",
+];
+
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 /** Fresh pair-meta with all fields zeroed. */

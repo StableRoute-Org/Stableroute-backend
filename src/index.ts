@@ -313,9 +313,42 @@ app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   res.json({ paused });
 });
 
+/**
+ * Parse a single numeric query param into a finite integer.
+ *
+ * Only single string values are accepted; an absent value falls back to
+ * `fallback`, while array-form params (e.g. `?since=1&since=2`, which Express
+ * surfaces as a string array) and non-numeric strings yield `null` so the
+ * caller can reject them explicitly instead of silently producing `NaN`.
+ *
+ * @param value    - The raw `req.query[...]` value (string, string[], or undefined).
+ * @param fallback - The value to use when the param is absent.
+ * @returns A finite integer, or `null` when the input is array-form or non-numeric.
+ */
+const parseIntegerQueryParam = (value: unknown, fallback: number): number | null => {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && Number.isInteger(n) ? n : null;
+};
+
 app.get("/api/v1/events", (req: Request, res: Response) => {
-  const since = Number(req.query.since ?? 0);
-  const limit = Math.min(EVENT_LOG_CAP, Math.max(1, Number(req.query.limit ?? 100)));
+  // `since` must be a single, non-negative integer. Array-form or non-numeric
+  // values are rejected rather than coerced to NaN (which would silently
+  // return zero events).
+  const since = parseIntegerQueryParam(req.query.since, 0);
+  if (since === null || since < 0) {
+    sendError(res, req, 400, "invalid_request", "since must be a non-negative integer");
+    return;
+  }
+
+  // `limit` must be a single numeric value; it is then clamped to [1, EVENT_LOG_CAP].
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(EVENT_LOG_CAP, Math.max(1, rawLimit));
 
   // Optional type filter: when present, must be one of the known event types.
   const typeParam = req.query.type;

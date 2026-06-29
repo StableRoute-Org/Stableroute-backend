@@ -1150,4 +1150,46 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("GET /api/v1/events param validation", () => {
+    it("rejects a non-numeric since with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?since=abc");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("rejects a negative since with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?since=-5");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
+    });
+
+    it("rejects an array-form limit with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?limit=1&limit=2");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/limit/);
+    });
+
+    it("rejects a non-numeric limit with 400 invalid_request", async () => {
+      const res = await request(app).get("/api/v1/events?limit=xyz");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("clamps limit=0 up to 1 in-range value", async () => {
+      const res = await request(app).get("/api/v1/events?limit=0");
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeLessThanOrEqual(1);
+    });
+
+    it("treats absent params as since=0, limit=100 (defaults)", async () => {
+      const res = await request(app).get("/api/v1/events");
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.items)).toBe(true);
+    });
+  });
 });

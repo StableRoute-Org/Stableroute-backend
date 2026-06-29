@@ -145,6 +145,11 @@ cross-test bleed. This function is not exposed via any HTTP route.
 
 Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
+### `GET /api/v1/events` query params
+
+- `since` — optional, a single non-negative integer (Unix epoch millis). Absent defaults to `0`. Non-numeric, negative, or array-form values are rejected with `400 invalid_request`.
+- `limit` — optional, a single integer clamped to `[1, EVENT_LOG_CAP]`. Absent defaults to `100`. Non-numeric or array-form values are rejected with `400 invalid_request`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

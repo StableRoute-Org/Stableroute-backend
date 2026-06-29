@@ -683,6 +683,93 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Invert the fee formula to solve for the gross input required to deliver
+ * exactly `output` base units after the gateway fee is deducted.
+ *
+ * The forward fee formula is:
+ *   fee    = floor(gross * feeBps / 10_000)
+ *   output = gross - fee
+ *
+ * Rearranging:
+ *   gross  = ceil(output * 10_000 / (10_000 - feeBps))
+ *
+ * The result is rounded **up** (ceiling division) so that applying the
+ * forward fee to `requiredInput` always yields at least `output` — the
+ * recipient is never short-changed.
+ *
+ * @param output  - Target delivered amount in base units (must be > 0).
+ * @param feeBps  - Fee in basis points in [0, 10000).
+ * @returns Object with `requiredInput` (gross, rounded up) and `feeAmount`.
+ * @throws {RangeError} if feeBps >= 10000 (100% fee leaves nothing to deliver).
+ */
+export const invertFee = (
+  output: bigint,
+  feeBps: number
+): { requiredInput: bigint; feeAmount: bigint } => {
+  if (feeBps < 0 || feeBps >= 10_000) {
+    throw new RangeError("feeBps must be in [0, 9999]");
+  }
+  const denominator = BigInt(10_000 - feeBps);
+  const numerator = output * 10_000n;
+  // Ceiling division: (a + b - 1) / b
+  const requiredInput = (numerator + denominator - 1n) / denominator;
+  const feeAmount = requiredInput - output;
+  return { requiredInput, feeAmount };
+};
+
+app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
+  const { source_asset, dest_asset, output } = req.query;
+
+  if (!source_asset || !dest_asset || !output) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "Missing required query params: source_asset, dest_asset, output"
+    );
+  }
+  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source_asset and dest_asset must be 1-12 character strings"
+    );
+  }
+  if (source_asset === dest_asset) {
+    return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
+  }
+  const parsedOutput = parseAmount(output);
+  if (parsedOutput === null) {
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "output must be a positive integer string with no leading zero"
+    );
+  }
+
+  const k = pairKey(source_asset, dest_asset);
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  const feeBps = meta.feeBps;
+
+  const { requiredInput, feeAmount } = invertFee(parsedOutput, feeBps);
+
+  res.json({
+    source_asset,
+    dest_asset,
+    output: parsedOutput.toString(),
+    requiredInput: requiredInput.toString(),
+    feeAmount: feeAmount.toString(),
+    feeBps,
+    route: [source_asset, dest_asset],
+  });
+});
+
 // Unknown route: structured 404 echoing the request id.
 app.use((req: Request, res: Response) => {
   sendError(res, req, 404, "not_found", `No route for ${req.method} ${req.path}`);

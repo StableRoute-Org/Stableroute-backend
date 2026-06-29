@@ -931,4 +931,112 @@ describe("StableRoute Backend", () => {
       expect(res.body.amount).toBe(huge);
     });
   });
+
+  describe("GET /api/v1/quote/reverse", () => {
+    it("returns 200 with required response shape for a zero-fee pair", async () => {
+      // Register pair (feeBps defaults to 0)
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", output: "1000" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.source_asset).toBe("USDC");
+      expect(res.body.dest_asset).toBe("EURC");
+      expect(res.body.output).toBe("1000");
+      expect(res.body.requiredInput).toBe("1000");
+      expect(res.body.feeAmount).toBe("0");
+      expect(res.body.feeBps).toBe(0);
+      expect(res.body.route).toEqual(["USDC", "EURC"]);
+    });
+
+    it("round-trips: requiredInput fed to forward quote yields at least the target output", async () => {
+      // Set a 30 bps fee on USDC->EURC pair
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .patch("/api/v1/pairs/USDC/EURC/fee_bps")
+        .send({ feeBps: 30 });
+
+      const targetOutput = "10000";
+      const revRes = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", output: targetOutput });
+
+      expect(revRes.status).toBe(200);
+      const requiredInput = BigInt(revRes.body.requiredInput);
+      const feeAmount = BigInt(revRes.body.feeAmount);
+      // feeAmount = floor(requiredInput * feeBps / 10000)
+      const computedFee = (requiredInput * 30n) / 10000n;
+      const deliveredOutput = requiredInput - computedFee;
+      // Delivered output must be >= targetOutput (rounding up contract)
+      expect(deliveredOutput >= BigInt(targetOutput)).toBe(true);
+      // feeAmount must match
+      expect(feeAmount).toBe(requiredInput - BigInt(targetOutput));
+    });
+
+    it("handles output of 1 (minimum valid output)", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "XLM", destination: "USDC" });
+
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "XLM", dest_asset: "USDC", output: "1" });
+
+      expect(res.status).toBe(200);
+      expect(BigInt(res.body.requiredInput) >= 1n).toBe(true);
+    });
+
+    it("handles a large BigInt output above Number.MAX_SAFE_INTEGER", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
+
+      const huge = "10000000000000000000000000"; // 10^25
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", output: huge });
+
+      expect(res.status).toBe(200);
+      expect(res.body.output).toBe(huge);
+      // requiredInput must be >= output
+      expect(BigInt(res.body.requiredInput) >= BigInt(huge)).toBe(true);
+    });
+
+    it("returns 400 when query params are missing", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/Missing required query params/);
+    });
+
+    it("returns 400 when source_asset equals dest_asset", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "USDC", output: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/must differ/);
+    });
+
+    it("returns 400 for invalid output value", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", output: "0" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("OpenAPI spec includes /api/v1/quote/reverse path", async () => {
+      const res = await request(app).get("/api/v1/openapi.json");
+      expect(res.status).toBe(200);
+      expect(res.body.paths["/api/v1/quote/reverse"]).toBeTruthy();
+    });
+  });
 });

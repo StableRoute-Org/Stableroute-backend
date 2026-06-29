@@ -49,7 +49,8 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "conflict"
   | "method_not_allowed"
-  | "read_only_mode";
+  | "read_only_mode"
+  | "idempotency_conflict";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -81,6 +82,96 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+/** TTL for idempotency cache entries (default 24 hours). */
+const IDEMPOTENCY_TTL_MS = Number(process.env.IDEMPOTENCY_TTL_MS ?? 24 * 60 * 60 * 1000);
+
+/** Maximum number of entries kept in the idempotency cache. */
+const IDEMPOTENCY_CACHE_MAX = 10_000;
+
+interface IdempotencyCacheEntry {
+  status: number;
+  body: unknown;
+  bodyHash: string;
+  expiresAt: number;
+}
+
+/**
+ * In-memory idempotency cache keyed by `"METHOD:path:idempotency-key"`.
+ * Entries are TTL-expiring and the map is bounded to IDEMPOTENCY_CACHE_MAX
+ * entries (oldest-first eviction).
+ */
+const idempotencyCache = new Map<string, IdempotencyCacheEntry>();
+
+/**
+ * Evict all expired entries. When the cache is still at capacity after
+ * expiry-based eviction, drop the oldest insertion-order entry.
+ */
+const pruneIdempotencyCache = (): void => {
+  const now = Date.now();
+  for (const [k, entry] of idempotencyCache) {
+    if (entry.expiresAt <= now) idempotencyCache.delete(k);
+  }
+  if (idempotencyCache.size >= IDEMPOTENCY_CACHE_MAX) {
+    const oldest = idempotencyCache.keys().next().value;
+    if (oldest !== undefined) idempotencyCache.delete(oldest);
+  }
+};
+
+/**
+ * Express middleware that implements Idempotency-Key semantics for create
+ * (POST) endpoints.
+ *
+ * Behaviour:
+ * - No Idempotency-Key header: passes through unchanged.
+ * - Key present but outside 1-200 chars: passes through unchanged.
+ * - First request with a key: executes the handler, captures the response,
+ *   and stores { status, body, bodyHash, expiresAt } in the cache.
+ * - Repeat request with matching key + matching body hash: replays cached
+ *   response verbatim (no handler invocation).
+ * - Repeat request with matching key but different body: 409 idempotency_conflict.
+ *
+ * Cache entries expire after IDEMPOTENCY_TTL_MS (default 24 h).
+ */
+const idempotencyGuard = (req: Request, res: Response, next: NextFunction): void => {
+  const idempotencyKey = req.header("idempotency-key");
+  if (!idempotencyKey || idempotencyKey.length < 1 || idempotencyKey.length > 200) {
+    return next();
+  }
+
+  const cacheKey = `${req.method}:${req.path}:${idempotencyKey}`;
+  const bodyHash = createHash("sha256").update(JSON.stringify(req.body ?? null)).digest("hex");
+
+  const existing = idempotencyCache.get(cacheKey);
+  if (existing) {
+    if (existing.expiresAt > Date.now()) {
+      if (existing.bodyHash !== bodyHash) {
+        sendError(res, req, 409, "idempotency_conflict", "Idempotency-Key reused with a different request body");
+        return;
+      }
+      // Replay cached response verbatim.
+      res.status(existing.status).json(existing.body);
+      return;
+    }
+    // Expired entry - remove it and fall through to execute the handler.
+    idempotencyCache.delete(cacheKey);
+  }
+
+  // Wrap res.json to capture the response before it is sent.
+  const originalJson = res.json.bind(res);
+  res.json = (body: unknown): Response => {
+    pruneIdempotencyCache();
+    idempotencyCache.set(cacheKey, {
+      status: res.statusCode,
+      body,
+      bodyHash,
+      expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+    });
+    return originalJson(body);
+  };
+
+  next();
+};
 
 /**
  * Strict body-key guard.
@@ -552,7 +643,7 @@ app.get("/api/v1/api-keys", (_req: Request, res: Response) => {
   res.json({ items });
 });
 
-app.post("/api/v1/api-keys", (req: Request, res: Response) => {
+app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => {
   const { label, scopes } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
@@ -643,7 +734,7 @@ app.get("/api/v1/webhooks", (_req: Request, res: Response) => {
   res.json({ items });
 });
 
-app.post("/api/v1/webhooks", (req: Request, res: Response) => {
+app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
@@ -1235,7 +1326,7 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
  * admin auth guard once the gateway lands). Body: { source, destination }.
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
-app.post("/api/v1/pairs", (req: Request, res: Response) => {
+app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
   const { source: rawSource, destination: rawDestination } = req.body ?? {};
   const source = normalizeAsset(rawSource);
   const destination = normalizeAsset(rawDestination);

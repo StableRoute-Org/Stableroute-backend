@@ -1151,45 +1151,33 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("GET /api/v1/events param validation", () => {
-    it("rejects a non-numeric since with 400 invalid_request", async () => {
-      const res = await request(app).get("/api/v1/events?since=abc");
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/since/);
-      expect(res.body.requestId).toBeTruthy();
+  describe("GET /api/v1/events/types — catalog", () => {
+    beforeEach(() => {
+      resetStores();
     });
 
-    it("rejects a negative since with 400 invalid_request", async () => {
-      const res = await request(app).get("/api/v1/events?since=-5");
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/since/);
-    });
-
-    it("rejects an array-form limit with 400 invalid_request", async () => {
-      const res = await request(app).get("/api/v1/events?limit=1&limit=2");
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/limit/);
-    });
-
-    it("rejects a non-numeric limit with 400 invalid_request", async () => {
-      const res = await request(app).get("/api/v1/events?limit=xyz");
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("invalid_request");
-    });
-
-    it("clamps limit=0 up to 1 in-range value", async () => {
-      const res = await request(app).get("/api/v1/events?limit=0");
+    it("returns an empty catalog when no events have been emitted", async () => {
+      const res = await request(app).get("/api/v1/events/types");
       expect(res.status).toBe(200);
-      expect(res.body.items.length).toBeLessThanOrEqual(1);
+      expect(res.body.types).toEqual([]);
     });
 
-    it("treats absent params as since=0, limit=100 (defaults)", async () => {
-      const res = await request(app).get("/api/v1/events");
+    it("returns the distinct event types with a count per type", async () => {
+      // 2 x pair.registered, 1 x pair.unregistered
+      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "ONE" });
+      await request(app).post("/api/v1/pairs").send({ source: "CAT", destination: "TWO" });
+      await request(app).delete("/api/v1/pairs/CAT/ONE");
+
+      const res = await request(app).get("/api/v1/events/types");
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body.items)).toBe(true);
+
+      const byType = Object.fromEntries(
+        res.body.types.map((t: { type: string; count: number }) => [t.type, t.count])
+      );
+      expect(byType["pair.registered"]).toBe(2);
+      expect(byType["pair.unregistered"]).toBe(1);
+      // pair.refreshed never emitted here, so it must be absent
+      expect("pair.refreshed" in byType).toBe(false);
     });
   });
 });

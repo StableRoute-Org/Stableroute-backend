@@ -407,6 +407,27 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   res.json({ items: items.slice(-limit) });
 });
 
+/**
+ * Catalog of the distinct event types currently present in the event log,
+ * with a count per type.
+ *
+ * Returns `{ types: [{ type, count }, ...] }` aggregated from the in-memory
+ * `eventLog`. Types with no events are omitted, so the catalog reflects what
+ * the system has actually emitted in this process lifetime. Consumers can use
+ * this to discover valid values for the `type` query filter on
+ * `GET /api/v1/events` without downloading the full log.
+ *
+ * @route GET /api/v1/events/types
+ */
+app.get("/api/v1/events/types", (_req: Request, res: Response) => {
+  const counts = new Map<string, number>();
+  for (const e of eventLog) {
+    counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+  }
+  const types = Array.from(counts.entries()).map(([type, count]) => ({ type, count }));
+  res.json({ types });
+});
+
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
   let found: string | undefined;

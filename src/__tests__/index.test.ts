@@ -1,5 +1,7 @@
 import request from "supertest";
 import app from "../index";
+import { applyFee } from "../index";
+import { pairRegistry, pairMeta, pairKey, resetStores } from "../stores";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -731,6 +733,150 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+});
+
+// ─── applyFee unit tests ────────────────────────────────────────────────────
+
+describe("applyFee helper", () => {
+  it("returns zero feeAmount and full netAmount when feeBps is 0", () => {
+    const { feeAmount, netAmount } = applyFee(1000n, 0);
+    expect(feeAmount).toBe(0n);
+    expect(netAmount).toBe(1000n);
+  });
+
+  it("computes correct feeAmount and netAmount for a mid-range fee (30 bps)", () => {
+    // 1000 * 30 / 10000 = 3
+    const { feeAmount, netAmount } = applyFee(1000n, 30);
+    expect(feeAmount).toBe(3n);
+    expect(netAmount).toBe(997n);
+  });
+
+  it("rounds fee DOWN (integer division, gateway favour) for non-exact amounts", () => {
+    // 100 * 30 / 10000 = 0.3 → rounds down to 0
+    const { feeAmount, netAmount } = applyFee(100n, 30);
+    expect(feeAmount).toBe(0n);
+    expect(netAmount).toBe(100n);
+  });
+
+  it("handles max fee (1000 bps = 10%) correctly", () => {
+    // 10000 * 1000 / 10000 = 1000
+    const { feeAmount, netAmount } = applyFee(10000n, 1000);
+    expect(feeAmount).toBe(1000n);
+    expect(netAmount).toBe(9000n);
+  });
+
+  it("never produces a negative netAmount (amount=1, feeBps=1000 rounds to 0 fee)", () => {
+    // 1 * 1000 / 10000 = 0.1 → rounds down to 0
+    const { feeAmount, netAmount } = applyFee(1n, 1000);
+    expect(feeAmount).toBe(0n);
+    expect(netAmount).toBe(1n);
+    expect(netAmount).toBeGreaterThanOrEqual(0n);
+  });
+
+  it("handles amounts above Number.MAX_SAFE_INTEGER with full BigInt precision", () => {
+    // 10^25 * 30 / 10000 = 3 * 10^22 (exact)
+    const huge = BigInt("10000000000000000000000000");
+    const { feeAmount, netAmount } = applyFee(huge, 30);
+    expect(feeAmount).toBe(BigInt("30000000000000000000000"));
+    expect(netAmount).toBe(BigInt("9970000000000000000000000"));
+    expect(feeAmount + netAmount).toBe(huge);
+  });
+});
+
+// ─── Quote fee breakdown integration tests ─────────────────────────────────
+
+describe("GET /api/v1/quote — fee breakdown", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  it("returns feeBps=0, feeAmount='0', netAmount equal to amount when no pair meta exists", async () => {
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "EURC", amount: "1000" });
+    expect(res.status).toBe(200);
+    expect(res.body.feeBps).toBe(0);
+    expect(res.body.feeAmount).toBe("0");
+    expect(res.body.netAmount).toBe("1000");
+  });
+
+  it("includes correct feeAmount and netAmount when pair has feeBps set", async () => {
+    // Register the pair and set fee to 30 bps
+    pairRegistry.add(pairKey("USDC", "EURC"));
+    pairMeta.set(pairKey("USDC", "EURC"), {
+      feeBps: 30,
+      minAmount: "0",
+      maxAmount: "0",
+      liquidity: "0",
+    });
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "EURC", amount: "10000" });
+    expect(res.status).toBe(200);
+    expect(res.body.feeBps).toBe(30);
+    expect(res.body.feeAmount).toBe("30");
+    expect(res.body.netAmount).toBe("9970");
+  });
+
+  it("fee rounding direction: 100 * 30bps rounds to 0 fee (not 1)", async () => {
+    pairRegistry.add(pairKey("USDC", "EURC"));
+    pairMeta.set(pairKey("USDC", "EURC"), {
+      feeBps: 30,
+      minAmount: "0",
+      maxAmount: "0",
+      liquidity: "0",
+    });
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
+    expect(res.status).toBe(200);
+    expect(res.body.feeBps).toBe(30);
+    expect(res.body.feeAmount).toBe("0");
+    expect(res.body.netAmount).toBe("100");
+  });
+
+  it("handles very large BigInt amounts correctly in the response", async () => {
+    pairRegistry.add(pairKey("USDC", "EURC"));
+    pairMeta.set(pairKey("USDC", "EURC"), {
+      feeBps: 100,
+      minAmount: "0",
+      maxAmount: "0",
+      liquidity: "0",
+    });
+    const huge = "10000000000000000000000000";
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
+    expect(res.status).toBe(200);
+    // 10^25 * 100 / 10000 = 10^23
+    expect(res.body.feeAmount).toBe("100000000000000000000000");
+    expect(res.body.netAmount).toBe("9900000000000000000000000");
+  });
+
+  it("still returns 400 for invalid asset codes with fee breakdown in place", async () => {
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "USDC", amount: "100" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+  });
+
+  it("preserves backward-compatible fields alongside fee breakdown", async () => {
+    const res = await request(app)
+      .get("/api/v1/quote")
+      .query({ source_asset: "USDC", dest_asset: "EURC", amount: "500" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      source_asset: "USDC",
+      dest_asset: "EURC",
+      amount: "500",
+      estimated_rate: "1.0",
+      route: ["USDC", "EURC"],
+      feeBps: 0,
+      feeAmount: "0",
+      netAmount: "500",
     });
   });
 });

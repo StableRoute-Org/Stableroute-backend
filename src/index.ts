@@ -74,6 +74,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // hitting the limit.
 const RATE_LIMIT_PER_WINDOW = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Absolute ceiling for bulkMaxItems to prevent runaway memory usage. */
+const BULK_ABSOLUTE_MAX = 100_000;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
@@ -517,6 +520,27 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+/**
+ * Compute the fee breakdown for a given amount and fee rate.
+ *
+ * Arithmetic is performed entirely with `BigInt` to preserve precision on
+ * amounts above `Number.MAX_SAFE_INTEGER`. Fees are rounded **down** (in
+ * the gateway's favour) via integer division. The resulting `netAmount` is
+ * always non-negative: `netAmount = amount - feeAmount`.
+ *
+ * @param amount  - The gross amount in base units (must be > 0n).
+ * @param feeBps  - Fee rate in basis points (0–1000, where 10000 bps = 100 %).
+ * @returns An object with `feeAmount` and `netAmount` as `bigint` values.
+ */
+export const applyFee = (
+  amount: bigint,
+  feeBps: number
+): { feeAmount: bigint; netAmount: bigint } => {
+  const feeAmount = (amount * BigInt(feeBps)) / 10_000n;
+  const netAmount = amount - feeAmount;
+  return { feeAmount, netAmount };
+};
+
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -576,12 +600,18 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
+  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
+
   res.json({
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
     estimated_rate: "1.0",
     route: [source_asset, dest_asset],
+    feeBps: meta.feeBps,
+    feeAmount: feeAmount.toString(),
+    netAmount: netAmount.toString(),
   });
 });
 

@@ -794,6 +794,50 @@ app.post("/api/v1/pairs", (req: Request, res: Response) => {
   res.status(isNew ? 201 : 200).json({ source, destination, registered: true });
 });
 
+/**
+ * Register many pairs in a single request, returning a per-item outcome.
+ *
+ * Body: `{ pairs: [{ source, destination }, ...] }` with 1–`config.bulkMaxItems`
+ * entries. Each item is validated independently with the same `isAssetCode` and
+ * same-asset rules as the single-pair endpoint; one bad item never fails the
+ * whole batch. A `pair.registered` / `pair.refreshed` event is recorded for
+ * each successfully registered item exactly as the single endpoint does.
+ *
+ * Per-item result shape:
+ *   - success: `{ index, ok: true, source, destination, registered: true }`
+ *   - failure: `{ index, ok: false, error }`
+ *
+ * Returns `400 invalid_request` only when the `pairs` array itself is missing,
+ * empty, or exceeds the configured cap.
+ *
+ * @route POST /api/v1/pairs/bulk
+ */
+app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
+  const { pairs } = req.body ?? {};
+  const maxItems = config.bulkMaxItems;
+  if (!Array.isArray(pairs) || pairs.length === 0 || pairs.length > maxItems) {
+    sendError(res, req, 400, "invalid_request", `pairs must be 1-${maxItems} entries`);
+    return;
+  }
+  const results = pairs.map(
+    (it: { source?: unknown; destination?: unknown }, index: number) => {
+      const { source, destination } = it ?? {};
+      if (!isAssetCode(source) || !isAssetCode(destination)) {
+        return { index, ok: false as const, error: "invalid_asset_code" };
+      }
+      if (source === destination) {
+        return { index, ok: false as const, error: "same_asset" };
+      }
+      const key = pairKey(source, destination);
+      const isNew = !pairRegistry.has(key);
+      pairRegistry.add(key);
+      recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
+      return { index, ok: true as const, source, destination, registered: true };
+    }
+  );
+  res.json({ results });
+});
+
 // Asset symbols are short uppercase identifiers (USDC, EURC, XLM, …).
 // Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
 // anything that is not a single string so an array param can't smuggle

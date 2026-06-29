@@ -12,6 +12,18 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### Bulk pair registration
+
+`POST /api/v1/pairs/bulk` registers many pairs in one request. Body:
+`{ pairs: [{ source, destination }, ...] }` with 1–`config.bulkMaxItems`
+entries (default 100). Each item is validated independently — a bad item never
+fails the batch — and a `pair.registered` / `pair.refreshed` event is recorded
+per successful item, exactly as the single-pair endpoint does. The response is
+`{ results: [...] }` where each entry is either
+`{ index, ok: true, source, destination, registered: true }` or
+`{ index, ok: false, error }`. A `400 invalid_request` is returned only when the
+`pairs` array itself is missing, empty, or over the cap.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

@@ -1150,4 +1150,73 @@ describe("StableRoute Backend", () => {
       expect(types.has("pair.unregistered")).toBe(true);
     });
   });
+
+  describe("POST /api/v1/pairs/bulk", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("rejects a missing or empty pairs array with 400", async () => {
+      const empty = await request(app).post("/api/v1/pairs/bulk").send({ pairs: [] });
+      expect(empty.status).toBe(400);
+      expect(empty.body.error).toBe("invalid_request");
+
+      const missing = await request(app).post("/api/v1/pairs/bulk").send({});
+      expect(missing.status).toBe(400);
+    });
+
+    it("rejects a batch over the configured cap with 400", async () => {
+      const over = await request(app)
+        .post("/api/v1/pairs/bulk")
+        .send({ pairs: new Array(101).fill({ source: "USDC", destination: "EURC" }) });
+      expect(over.status).toBe(400);
+      expect(over.body.message).toMatch(/1-100/);
+    });
+
+    it("returns per-item results for a mixed batch without failing the whole batch", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs/bulk")
+        .send({
+          pairs: [
+            { source: "USDC", destination: "EURC" },
+            { source: "XLM", destination: "XLM" },
+            { source: "TOOLONGASSETCODE", destination: "USDC" },
+          ],
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({
+        index: 0,
+        ok: true,
+        source: "USDC",
+        destination: "EURC",
+        registered: true,
+      });
+      expect(res.body.results[1]).toMatchObject({ index: 1, ok: false });
+      expect(res.body.results[2]).toMatchObject({ index: 2, ok: false });
+
+      // Only the valid pair should appear in the registry
+      const list = await request(app).get("/api/v1/pairs");
+      expect(list.body.pairs).toContainEqual({ source: "USDC", destination: "EURC" });
+      expect(list.body.pairs).toHaveLength(1);
+    });
+
+    it("is idempotent: re-registering the same pair still returns ok", async () => {
+      await request(app)
+        .post("/api/v1/pairs/bulk")
+        .send({ pairs: [{ source: "AAA", destination: "BBB" }] });
+      const second = await request(app)
+        .post("/api/v1/pairs/bulk")
+        .send({ pairs: [{ source: "AAA", destination: "BBB" }] });
+      expect(second.status).toBe(200);
+      expect(second.body.results[0].ok).toBe(true);
+    });
+
+    it("rejects a batch of non-object entries per item", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs/bulk")
+        .send({ pairs: ["not-an-object", 42] });
+      expect(res.status).toBe(200);
+      expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(true);
+    });
+  });
 });

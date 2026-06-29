@@ -62,14 +62,13 @@ rationale), a Mermaid request-flow diagram, and the canonical error envelope.
 The backend is configured entirely through environment variables. The
 table below lists every variable the code reads — there are no others.
 
-| Variable           | Purpose                                                                                              | Default                        | Example                    |
-|--------------------|------------------------------------------------------------------------------------------------------|--------------------------------|----------------------------|
-| `PORT`             | TCP port the HTTP server binds to.                                                                   | `3001`                         | `8080`                     |
-| `NODE_ENV`         | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_                      | `production`               |
-| `GIT_COMMIT`       | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_                 | `a1b2c3d`                  |
-| `BUILD_TIME`       | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_             | `2026-01-01T00:00:00Z`     |
-| `STORAGE_BACKEND`  | Storage adapter to use. `"memory"` keeps state in-process (lost on restart); `"json-file"` persists state to disk across restarts. | `memory` | `json-file` |
-| `STORAGE_FILE`     | Path to the JSON file used when `STORAGE_BACKEND=json-file`. Ignored for other backends.            | `./stableroute-data.json`      | `/var/data/stableroute.json` |
+| Variable             | Purpose                                                                                                                                                                          | Default    | Example                  |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------|
+| `PORT`               | TCP port the HTTP server binds to.                                                                                                                                               | `3001`     | `8080`                   |
+| `NODE_ENV`           | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest).                                                                             | _(unset)_  | `production`             |
+| `SHUTDOWN_GRACE_MS`  | Grace period in milliseconds before the shutdown handler forces `process.exit(1)` when `server.close()` is still draining. Must be a positive integer; invalid values use the default. | `10000`    | `30000`                  |
+| `GIT_COMMIT`         | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                        | _(unset)_  | `a1b2c3d`                |
+| `BUILD_TIME`         | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                   | _(unset)_  | `2026-01-01T00:00:00Z`   |
 
 ### Build/version endpoint
 

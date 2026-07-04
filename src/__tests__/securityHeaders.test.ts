@@ -1,4 +1,4 @@
-import request, { type Response } from "supertest";
+import request from "supertest";
 import app from "../index";
 
 const ROUTES = [
@@ -9,10 +9,14 @@ const ROUTES = [
 ];
 
 const SECURITY_HEADERS: [string, string | RegExp][] = [
+  ["content-security-policy", "default-src 'none'"],
+  ["cross-origin-embedder-policy", "require-corp"],
+  ["cross-origin-opener-policy", "same-origin"],
+  ["cross-origin-resource-policy", "same-origin"],
   ["x-content-type-options", "nosniff"],
   ["x-frame-options", "DENY"],
   ["referrer-policy", "no-referrer"],
-  ["strict-transport-security", /max-age=\d+/],
+  ["strict-transport-security", "max-age=31536000; includeSubDomains"],
 ];
 
 describe("Security headers on every response", () => {

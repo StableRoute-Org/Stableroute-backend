@@ -17,6 +17,12 @@ describe("StableRoute Backend", () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "ok", service: "stableroute-backend" });
+    expect(res.headers["content-security-policy"]).toBe("default-src 'none'");
+    expect(res.headers["strict-transport-security"]).toBe(
+      "max-age=31536000; includeSubDomains"
+    );
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["x-frame-options"]).toBe("DENY");
   });
 
   it("GET /api/v1/quote with params returns quote for a registered pair", async () => {

@@ -233,6 +233,16 @@ Payloads never include secret material — the raw API key and any webhook
 secret are deliberately excluded. The existing `EVENT_LOG_CAP` eviction applies
 unchanged.
 
+## Security headers
+
+The Express app uses `helmet` to set browser-facing response headers on every
+route. StableRoute is a JSON API, so its Content-Security-Policy is deliberately
+restrictive: `default-src 'none'`. The policy preserves the previous
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, and
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` headers while
+also enabling Helmet-managed `Cross-Origin-*` protections.
+
 ## Request correlation (`X-Request-Id`)
 
 Every request is assigned a correlation id that is echoed in the `X-Request-Id`

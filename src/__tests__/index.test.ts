@@ -452,6 +452,16 @@ describe("StableRoute Backend", () => {
   });
 
   describe("pair-meta endpoints", () => {
+    const expectPairMetaError = (
+      body: Record<string, unknown>,
+      requestId: string,
+      error: string
+    ) => {
+      expect(body.error).toBe(error);
+      expect(body.message).toBeTruthy();
+      expect(body.requestId).toBe(requestId);
+    };
+
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
         .post("/api/v1/pairs")
@@ -466,11 +476,83 @@ describe("StableRoute Backend", () => {
       expect(info.status).toBe(200);
       expect(info.body.feeBps).toBe(50);
     });
+
+    it("returns registered pair info with default metadata before any patch", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "DFLT", destination: "META" });
+
+      const info = await request(app).get("/api/v1/pairs/DFLT/META/info");
+      expect(info.status).toBe(200);
+      expect(info.body).toMatchObject({
+        source: "DFLT",
+        destination: "META",
+        registered: true,
+        feeBps: 0,
+        minAmount: "0",
+        maxAmount: "0",
+        liquidity: "0",
+        enabled: true,
+      });
+    });
+
+    it.each([0, 1000])("accepts feeBps boundary value %i", async (feeBps) => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: `FEE${feeBps === 0 ? "Z" : "M"}`, destination: "BND" });
+
+      const source = feeBps === 0 ? "FEEZ" : "FEEM";
+      const res = await request(app)
+        .patch(`/api/v1/pairs/${source}/BND/fee_bps`)
+        .send({ feeBps });
+
+      expect(res.status).toBe(200);
+      expect(res.body.feeBps).toBe(feeBps);
+    });
+
+    it.each([
+      ["above range", 1001],
+      ["negative", -1],
+      ["decimal", 1.5],
+      ["numeric string", "50"],
+      ["array", [50]],
+      ["object", { value: 50 }],
+    ])("rejects feeBps that is %s", async (_label, feeBps) => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BADFEE", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/BADFEE/META/fee_bps")
+        .set("X-Request-Id", "bad-fee-bps")
+        .send({ feeBps });
+
+      expect(res.status).toBe(400);
+      expectPairMetaError(res.body, "bad-fee-bps", "invalid_request");
+    });
+
+    it("rejects unknown fee patch body keys with canonical error shape", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "FEEKEY", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/FEEKEY/META/fee_bps")
+        .set("X-Request-Id", "fee-unknown-key")
+        .send({ feeBps: 5, extra: true });
+
+      expect(res.status).toBe(400);
+      expectPairMetaError(res.body, "fee-unknown-key", "invalid_request");
+      expect(res.body.unknownKeys).toEqual(["extra"]);
+    });
+
     it("rejects PATCH /fee_bps when pair is not registered", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/AAA/BBB/fee_bps")
+        .set("X-Request-Id", "missing-fee-pair")
         .send({ feeBps: 5 });
       expect(res.status).toBe(404);
+      expectPairMetaError(res.body, "missing-fee-pair", "not_found");
     });
   });
 
@@ -526,8 +608,23 @@ describe("StableRoute Backend", () => {
     it("rejects liquidity with non-numeric string", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
+        .set("X-Request-Id", "bad-liquidity-alpha")
         .send({ liquidity: "abc" });
       expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-liquidity-alpha", "invalid_request");
+    });
+
+    it.each([
+      ["leading zero", "01"],
+      ["array", ["10"]],
+      ["object", { value: "10" }],
+    ])("rejects liquidity that is %s", async (_label, liquidity) => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/META/TEST/liquidity")
+        .set("X-Request-Id", "bad-liquidity-shape")
+        .send({ liquidity });
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-liquidity-shape", "invalid_request");
     });
 
     it("patches maxAmount", async () => {
@@ -541,8 +638,23 @@ describe("StableRoute Backend", () => {
     it("rejects maxAmount with zero", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
+        .set("X-Request-Id", "bad-max-zero")
         .send({ maxAmount: "0" });
       expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-max-zero", "invalid_request");
+    });
+
+    it.each([
+      ["leading zero", "01"],
+      ["array", ["10"]],
+      ["object", { value: "10" }],
+    ])("rejects maxAmount that is %s", async (_label, maxAmount) => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/META/TEST/max")
+        .set("X-Request-Id", "bad-max-shape")
+        .send({ maxAmount });
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-max-shape", "invalid_request");
     });
 
     it("patches minAmount", async () => {
@@ -556,25 +668,46 @@ describe("StableRoute Backend", () => {
     it("rejects minAmount with negative", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
+        .set("X-Request-Id", "bad-min-negative")
         .send({ minAmount: "-5" });
       expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-min-negative", "invalid_request");
+    });
+
+    it.each([
+      ["leading zero", "01"],
+      ["array", ["10"]],
+      ["object", { value: "10" }],
+    ])("rejects minAmount that is %s", async (_label, minAmount) => {
+      const res = await request(app)
+        .patch("/api/v1/pairs/META/TEST/min")
+        .set("X-Request-Id", "bad-min-shape")
+        .send({ minAmount });
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bad-min-shape", "invalid_request");
     });
 
     it("returns 404 for unregistered pair on all patch endpoints", async () => {
       const liquidity = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/liquidity")
+        .set("X-Request-Id", "missing-liquidity-pair")
         .send({ liquidity: "10" });
       expect(liquidity.status).toBe(404);
+      expectCanonicalError(liquidity.body, "missing-liquidity-pair", "not_found");
 
       const max = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/max")
+        .set("X-Request-Id", "missing-max-pair")
         .send({ maxAmount: "10" });
       expect(max.status).toBe(404);
+      expectCanonicalError(max.body, "missing-max-pair", "not_found");
 
       const min = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/min")
+        .set("X-Request-Id", "missing-min-pair")
         .send({ minAmount: "10" });
       expect(min.status).toBe(404);
+      expectCanonicalError(min.body, "missing-min-pair", "not_found");
     });
 
     it("returns info with default values for unregistered pair", async () => {
@@ -582,6 +715,10 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.registered).toBe(false);
       expect(res.body.feeBps).toBe(0);
+      expect(res.body.minAmount).toBe("0");
+      expect(res.body.maxAmount).toBe("0");
+      expect(res.body.liquidity).toBe("0");
+      expect(res.body.enabled).toBe(true);
     });
   });
 

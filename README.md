@@ -161,6 +161,20 @@ succeed; every other mutating write is rejected with `503 read_only_mode` using
 the canonical error body. `paused` is strictly stronger: when the service is
 paused, the existing pause behavior (`503 service_paused`) wins.
 
+## Quote amount bounds
+
+Registered pairs can carry `minAmount`, `maxAmount`, and `liquidity` metadata
+through the pair metadata PATCH endpoints. Quote handlers compare the parsed
+base-unit amount with those values using `BigInt`; the string value `"0"` means
+that bound is unset.
+
+- `GET /api/v1/quote` returns `400 invalid_request` when `amount < minAmount`
+  or `amount > maxAmount`.
+- `GET /api/v1/quote` returns `422 insufficient_liquidity` when `amount`
+  exceeds non-zero `liquidity`.
+- `POST /api/v1/quote/bulk` keeps processing the batch and reports bound
+  failures per item as `{ index, ok: false, error: "out_of_bounds" }`.
+
 ## OpenAPI spec
 
 The OpenAPI document is the single source of truth in `src/openapi.ts`

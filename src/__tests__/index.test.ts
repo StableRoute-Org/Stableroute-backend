@@ -1148,6 +1148,95 @@ describe("StableRoute Backend", () => {
     });
   });
 
+  describe("quote amount bounds", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("rejects GET quotes below minAmount with a canonical 400", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "MIN", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/MIN/DST/min").send({ minAmount: "100" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-min")
+        .query({ source_asset: "MIN", dest_asset: "DST", amount: "99" });
+
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bounds-min", "invalid_request");
+      expect(res.body.message).toMatch(/below minAmount/);
+    });
+
+    it("rejects GET quotes above maxAmount with a canonical 400", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "MAX", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/MAX/DST/max").send({ maxAmount: "1000" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-max")
+        .query({ source_asset: "MAX", dest_asset: "DST", amount: "1001" });
+
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bounds-max", "invalid_request");
+      expect(res.body.message).toMatch(/exceeds maxAmount/);
+    });
+
+    it("rejects GET quotes above liquidity with insufficient_liquidity", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "LIQ", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/LIQ/DST/liquidity").send({ liquidity: "500" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-liq")
+        .query({ source_asset: "LIQ", dest_asset: "DST", amount: "501" });
+
+      expect(res.status).toBe(422);
+      expectCanonicalError(res.body, "bounds-liq", "insufficient_liquidity");
+      expect(res.body.message).toMatch(/available liquidity/);
+    });
+
+    it("allows amounts exactly at min, max, and liquidity bounds", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "EDGE", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/min").send({ minAmount: "100" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/max").send({ maxAmount: "1000" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/liquidity").send({ liquidity: "1000" });
+
+      const min = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "EDGE", dest_asset: "DST", amount: "100" });
+      expect(min.status).toBe(200);
+      expect(min.body.amount).toBe("100");
+
+      const maxAndLiquidity = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "EDGE", dest_asset: "DST", amount: "1000" });
+      expect(maxAndLiquidity.status).toBe(200);
+      expect(maxAndLiquidity.body.amount).toBe("1000");
+    });
+
+    it("reports bulk quote bound failures per item without failing the batch", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "BULK", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/min").send({ minAmount: "100" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/max").send({ maxAmount: "1000" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/liquidity").send({ liquidity: "1000" });
+
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "BULK", dest_asset: "DST", amount: "100" },
+            { source_asset: "BULK", dest_asset: "DST", amount: "99" },
+            { source_asset: "BULK", dest_asset: "DST", amount: "1001" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({ index: 0, ok: true, amount: "100" });
+      expect(res.body.results[1]).toMatchObject({ index: 1, ok: false, error: "out_of_bounds" });
+      expect(res.body.results[2]).toMatchObject({ index: 2, ok: false, error: "out_of_bounds" });
+    });
+  });
+
   describe("GET /api/v1/events — type filter", () => {
     beforeEach(() => {
       resetStores();

@@ -1791,6 +1791,13 @@ const parseAmount = (v: unknown): bigint | null => {
   }
 };
 
+const parseSlippageBps = (v: unknown): number | null => {
+  if (v === undefined) return 0;
+  if (typeof v !== "string" || !/^[0-9]{1,4}$/.test(v)) return null;
+  const parsed = Number(v);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1000 ? parsed : null;
+};
+
 /**
  * Compute the fee breakdown for a given amount and fee rate.
  *
@@ -1828,6 +1835,56 @@ export const applyFee = (
   return { feeAmount, netAmount };
 };
 
+type QuoteBoundsViolation = {
+  status: 400 | 422;
+  error: "invalid_request" | "insufficient_liquidity";
+  bulkError: "out_of_bounds";
+  message: string;
+};
+
+/**
+ * Validate a quote amount against per-pair min/max/liquidity metadata.
+ *
+ * The metadata value "0" means the bound is unset. All comparisons stay in
+ * BigInt space so large base-unit amounts are never coerced through Number.
+ */
+export const checkQuoteBounds = (
+  meta: PairMeta,
+  amount: bigint
+): QuoteBoundsViolation | null => {
+  const minAmount = BigInt(meta.minAmount);
+  if (minAmount !== 0n && amount < minAmount) {
+    return {
+      status: 400,
+      error: "invalid_request",
+      bulkError: "out_of_bounds",
+      message: `amount (${amount}) is below minAmount (${minAmount})`,
+    };
+  }
+
+  const maxAmount = BigInt(meta.maxAmount);
+  if (maxAmount !== 0n && amount > maxAmount) {
+    return {
+      status: 400,
+      error: "invalid_request",
+      bulkError: "out_of_bounds",
+      message: `amount (${amount}) exceeds maxAmount (${maxAmount})`,
+    };
+  }
+
+  const liquidity = BigInt(meta.liquidity);
+  if (liquidity !== 0n && amount > liquidity) {
+    return {
+      status: 422,
+      error: "insufficient_liquidity",
+      bulkError: "out_of_bounds",
+      message: `amount (${amount}) exceeds available liquidity (${liquidity})`,
+    };
+  }
+
+  return null;
+};
+
 const computeQuoteTimes = (): { quoted_at: number; expires_at: number } => {
   const ttl = (config.quote_ttl_ms ?? 30000) as number;
   const quoted_at = Date.now();
@@ -1855,7 +1912,8 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
     const source_asset = normalizeAsset(rawSource);
     const dest_asset = normalizeAsset(rawDest);
-    if (source_asset === null || dest_asset === null || parseAmount(amount) === null || source_asset === dest_asset) {
+    const parsedAmount = parseAmount(amount);
+    if (source_asset === null || dest_asset === null || parsedAmount === null || source_asset === dest_asset) {
       return { index: i, ok: false as const, error: "invalid_item" };
     }
     if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
@@ -1866,13 +1924,30 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
     if (pairRegistry.has(bulkKey) && bulkMeta.enabled === false) {
       return { index: i, ok: false as const, error: "pair_disabled" };
     }
+    if (pairRegistry.has(bulkKey)) {
+      const boundsViolation = checkQuoteBounds(bulkMeta, parsedAmount);
+      if (boundsViolation) {
+        return {
+          index: i,
+          ok: false as const,
+          error: boundsViolation.bulkError,
+          message: boundsViolation.message,
+        };
+      }
+    }
+    const slippage_bps = 0;
+    const { feeAmount, netAmount } = applyFee(parsedAmount, bulkMeta.feeBps);
+    const min_received = applySlippage(netAmount, slippage_bps);
     return {
       index: i,
       ok: true as const,
       source_asset,
       dest_asset,
-      amount: String(amount),
-      estimated_rate: "1.0",
+      amount: parsedAmount.toString(),
+      estimated_rate: bulkMeta.rate,
+      feeBps: bulkMeta.feeBps,
+      feeAmount: feeAmount.toString(),
+      netAmount: netAmount.toString(),
       slippage_bps,
       min_received: min_received.toString(),
     };
@@ -1916,6 +1991,10 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       "amount must be a positive integer string with no leading zero"
     );
   }
+  const slippage_bps = parseSlippageBps(rawSlippage);
+  if (slippage_bps === null) {
+    return sendError(res, req, 400, "invalid_request", "slippage_bps must be an integer in [0,1000]");
+  }
 
   /**
    * Pair registration guard.
@@ -1939,6 +2018,10 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
   }
 
   const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const boundsViolation = checkQuoteBounds(meta, parsedAmount);
+  if (boundsViolation) {
+    return sendError(res, req, boundsViolation.status, boundsViolation.error, boundsViolation.message);
+  }
   const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
   const min_received = applySlippage(netAmount, slippage_bps);
 

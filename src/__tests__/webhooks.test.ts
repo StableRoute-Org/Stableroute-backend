@@ -42,6 +42,32 @@ describe("Webhooks lifecycle", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each([
+    "http://localhost/hook",
+    "http://LOCALHOST/hook",
+    "http://127.0.0.1/hook",
+    "http://10.0.0.5/hook",
+    "http://172.16.0.10/hook",
+    "http://192.168.1.9/hook",
+    "http://169.254.169.254/latest/meta-data",
+    "http://[::1]/hook",
+    "http://[fe80::1]/hook",
+  ])("POST rejects SSRF-prone webhook host %s", async (url) => {
+    const res = await request(app).post("/api/v1/webhooks").send({ url, events: ["pair.registered"] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/url host must be public/);
+    expect(res.body.requestId).toBeDefined();
+  });
+
+  it("POST accepts a public https webhook URL", async () => {
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .send({ url: "https://hooks.example.com/stableroute", events: ["pair.registered"] });
+    expect(res.status).toBe(201);
+    expect(res.body.url).toBe("https://hooks.example.com/stableroute");
+  });
+
   it("POST rejects invalid events with 400", async () => {
     const res = await request(app)
       .post("/api/v1/webhooks")

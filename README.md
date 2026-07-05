@@ -69,6 +69,7 @@ table below lists every variable the code reads — there are no others.
 | `SHUTDOWN_GRACE_MS`  | Grace period in milliseconds before the shutdown handler forces `process.exit(1)` when `server.close()` is still draining. Must be a positive integer; invalid values use the default. | `10000`    | `30000`                  |
 | `GIT_COMMIT`         | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                        | _(unset)_  | `a1b2c3d`                |
 | `BUILD_TIME`         | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                   | _(unset)_  | `2026-01-01T00:00:00Z`   |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed by CORS. When unset, only localhost development origins are allowed. Requests without an `Origin` header are passed through without reflecting arbitrary origins. | localhost-only | `https://app.example.com,https://admin.example.com` |
 
 ### Build/version endpoint
 

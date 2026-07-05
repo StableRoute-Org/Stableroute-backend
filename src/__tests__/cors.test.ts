@@ -12,17 +12,17 @@
  * individual test cases stay concise.
  */
 import request from "supertest";
-import app from "../index";
+import app, { isCorsOriginAllowed, parseCorsAllowedOrigins } from "../index";
 import { setPaused } from "../stores";
 
 /**
  * Issue an OPTIONS preflight request to `path` with the required CORS
  * preflight headers.  Returns the supertest response.
  */
-const sendPreflight = (path: string) =>
+const sendPreflight = (path: string, origin = "http://localhost:3000") =>
   request(app)
     .options(path)
-    .set("Origin", "https://example.com")
+    .set("Origin", origin)
     .set("Access-Control-Request-Method", "POST");
 
 describe("CORS preflight smoke tests", () => {
@@ -31,16 +31,42 @@ describe("CORS preflight smoke tests", () => {
     setPaused(false);
   });
 
-  it("OPTIONS preflight returns CORS headers and a non-error status in normal operation", async () => {
+  it("parses comma-separated CORS allowlist entries", () => {
+    const allowed = parseCorsAllowedOrigins(" https://app.example.com,https://admin.example.com ,, ");
+    expect(allowed).toEqual(new Set(["https://app.example.com", "https://admin.example.com"]));
+  });
+
+  it("allows configured origins and requests without Origin only", () => {
+    const allowed = parseCorsAllowedOrigins("https://app.example.com");
+    expect(isCorsOriginAllowed("https://app.example.com", allowed)).toBe(true);
+    expect(isCorsOriginAllowed("https://evil.example", allowed)).toBe(false);
+    expect(isCorsOriginAllowed(undefined, allowed)).toBe(true);
+  });
+
+  it("OPTIONS preflight returns CORS headers for an allowed origin in normal operation", async () => {
     const res = await sendPreflight("/api/v1/pairs");
 
-    // cors() must set at least these two response headers on a preflight.
-    expect(res.headers["access-control-allow-origin"]).toBeTruthy();
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
     expect(res.headers["access-control-allow-methods"]).toBeTruthy();
+    expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
 
     // 204 (Express cors default) or 200 are both acceptable — either way it
     // must not be a server error or a service_paused rejection.
     expect(res.status).toBeLessThan(400);
+  });
+
+  it("does not reflect disallowed origins", async () => {
+    const res = await sendPreflight("/api/v1/pairs", "https://example.com");
+
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+  });
+
+  it("requests without an Origin header continue without CORS reflection", async () => {
+    const res = await request(app).get("/health");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
   it("OPTIONS preflight succeeds while the service is paused (not blocked with 503)", async () => {
@@ -54,7 +80,7 @@ describe("CORS preflight smoke tests", () => {
 
     // CORS headers must still be present — a missing header would break
     // browser clients just as much as a 503 would.
-    expect(res.headers["access-control-allow-origin"]).toBeTruthy();
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
   });
 
   it("mutating POST is still blocked with 503 while paused (pause guard integrity)", async () => {

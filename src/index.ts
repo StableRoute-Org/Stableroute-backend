@@ -66,7 +66,38 @@ const trimEventLog = (cap: number): void => {
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-app.use(cors());
+const DEFAULT_CORS_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+];
+
+/** Parse a comma-separated CORS origin allowlist, falling back to localhost-only development origins. */
+export const parseCorsAllowedOrigins = (value: string | undefined): Set<string> => {
+  const source = value === undefined || value.trim() === "" ? DEFAULT_CORS_ALLOWED_ORIGINS.join(",") : value;
+  return new Set(source.split(",").map((origin) => origin.trim()).filter(Boolean));
+};
+
+/**
+ * Resolve whether an inbound Origin is allowed.
+ *
+ * Requests without an Origin header are same-origin/server-to-server traffic and
+ * are passed through without reflecting arbitrary browser origins.
+ */
+export const isCorsOriginAllowed = (
+  origin: string | undefined,
+  allowedOrigins: Set<string>
+): boolean => origin === undefined || allowedOrigins.has(origin);
+
+const corsAllowedOrigins = parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+
+app.use(cors({
+  credentials: false,
+  origin: (origin, callback) => {
+    callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
+  },
+}));
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;

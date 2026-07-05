@@ -1,5 +1,5 @@
 import request from "supertest";
-import app, { evictRateBuckets } from "../index";
+import app, { evictRateBuckets, parseTrustProxy, pruneExpiredRateBuckets } from "../index";
 import { rateBuckets, RATE_BUCKETS_MAX_IPS, resetStores } from "../stores";
 
 // Each test advances the clock by 120 s relative to the previous test's
@@ -216,5 +216,58 @@ describe("evictRateBuckets — ceiling eviction", () => {
       rateBuckets.set(ip, [now]);
     }
     expect(rateBuckets.size).toBeLessThanOrEqual(RATE_BUCKETS_MAX_IPS);
+  });
+});
+
+describe("rate limiter proxy trust configuration", () => {
+  it("does not trust forwarded headers by default", () => {
+    expect(parseTrustProxy(undefined)).toBe(false);
+    expect(parseTrustProxy("")).toBe(false);
+    expect(parseTrustProxy("false")).toBe(false);
+  });
+
+  it("parses explicit trust proxy settings", () => {
+    expect(parseTrustProxy("true")).toBe(true);
+    expect(parseTrustProxy("1")).toBe(1);
+    expect(parseTrustProxy("loopback")).toBe("loopback");
+    expect(parseTrustProxy("loopback, linklocal, uniquelocal")).toEqual([
+      "loopback",
+      "linklocal",
+      "uniquelocal",
+    ]);
+  });
+});
+
+describe("rate limiter lazy GC", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  afterEach(() => {
+    resetStores();
+  });
+
+  it("removes expired buckets for clients that never return", () => {
+    const now = 12_000_000;
+    rateBuckets.set("10.0.1.1", [now - WINDOW_MS - 1]);
+    rateBuckets.set("10.0.1.2", [now - 1000]);
+    rateBuckets.set("10.0.1.3", [now - WINDOW_MS - 5, now - 500]);
+
+    const removed = pruneExpiredRateBuckets(now, WINDOW_MS);
+
+    expect(removed).toBe(1);
+    expect(rateBuckets.has("10.0.1.1")).toBe(false);
+    expect(rateBuckets.get("10.0.1.2")).toEqual([now - 1000]);
+    expect(rateBuckets.get("10.0.1.3")).toEqual([now - 500]);
+  });
+
+  it("is rate-limited to avoid sweeping on every request", () => {
+    const now = 14_000_000;
+    rateBuckets.set("10.0.2.1", [now - WINDOW_MS - 1]);
+
+    expect(pruneExpiredRateBuckets(now, WINDOW_MS)).toBe(1);
+    rateBuckets.set("10.0.2.2", [now - WINDOW_MS - 1]);
+    expect(pruneExpiredRateBuckets(now + 1000, WINDOW_MS)).toBe(0);
+    expect(rateBuckets.has("10.0.2.2")).toBe(true);
   });
 });

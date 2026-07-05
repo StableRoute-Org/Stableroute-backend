@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -393,17 +394,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const startNs = process.hrtime.bigint();
   res.on("finish", () => {
     const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
-    if (process.env.NODE_ENV !== "test") {
-      console.log(
-        JSON.stringify({
-          requestId: getRequestId(req),
-          method: req.method,
-          path: req.path,
+    logger
+      .child({
+        requestId: getRequestId(req),
+        method: req.method,
+        path: req.path,
+      })
+      .info(
+        {
           status: res.statusCode,
           durationMs: Math.round(ms * 10) / 10,
-        })
+        },
+        "request completed"
       );
-    }
   });
   next();
 });
@@ -2079,9 +2082,15 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     return;
   }
   const isProduction = process.env.NODE_ENV === "production";
-  if (!isProduction && err instanceof Error) {
-    console.error(err);
-  }
+  logger.error(
+    {
+      err,
+      requestId: getRequestId(req),
+      method: req.method,
+      path: req.path,
+    },
+    "unhandled request error"
+  );
   const message = isProduction
     ? "An unexpected error occurred"
     : err instanceof Error

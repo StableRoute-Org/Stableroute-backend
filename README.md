@@ -294,6 +294,11 @@ Coverage reports are uploaded as a CI artifact on every push/PR.
 
 ## Security
 
+The API applies Helmet security headers by default, including a strict
+`Content-Security-Policy` with `default-src 'none'`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and
+`Strict-Transport-Security: max-age=31536000; includeSubDomains`.
+
 For the vulnerability disclosure process, supported versions, and the gateway
 threat model (unauthenticated admin routes, wildcard CORS, webhook SSRF, and
 more) see [SECURITY.md](SECURITY.md).

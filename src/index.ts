@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -408,13 +409,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  next();
-});
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    frameguard: { action: "deny" },
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
+    referrerPolicy: { policy: "no-referrer" },
+  })
+);
 
 /**
  * Paths that are exempt from the JSON content-negotiation guard.

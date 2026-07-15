@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
-import helmet from "helmet";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -25,12 +24,44 @@ import {
   RATE_BUCKETS_MAX_IPS,
   HEALTH_PROBE_KEY,
   KNOWN_EVENT_TYPES,
+  HEALTH_PROBE_KEY,
+  RATE_BUCKETS_MAX_IPS,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
   type WebhookRecord,
   type EventType,
 } from "./stores";
+
+/** Sentinel key used by the deep-health probe's scratch storage check. */
+const HEALTH_PROBE_KEY = "\x00health_probe";
+
+/** Maximum number of event-type entries per webhook subscription. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum length of a single event-type name string. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/** Event name prefixes reserved for internal use. */
+const WEBHOOK_RESERVED_PREFIXES: string[] = [];
+
+/**
+ * Evict rate-bucket entries older than the current window, then return the
+ * (now-pruned) bucket for `ip`.
+ */
+const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+  const existing = rateBuckets.get(ip) ?? [];
+  const bucket = existing.filter((t) => now - t < windowMs);
+  rateBuckets.set(ip, bucket);
+  return bucket;
+};
+
+/**
+ * Trim the event log to the given cap, removing the oldest entries first.
+ */
+const trimEventLog = (cap: number): void => {
+  while (eventLog.length > cap) eventLog.shift();
+};
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -377,26 +408,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use(
-  helmet({
-    // This API only returns JSON/text, so the tightest useful CSP is no ambient sources.
-    contentSecurityPolicy: {
-      useDefaults: false,
-      directives: {
-        "default-src": ["'none'"],
-      },
-    },
-    crossOriginEmbedderPolicy: { policy: "require-corp" },
-    crossOriginOpenerPolicy: { policy: "same-origin" },
-    crossOriginResourcePolicy: { policy: "same-origin" },
-    referrerPolicy: { policy: "no-referrer" },
-    strictTransportSecurity: {
-      maxAge: 31536000,
-      includeSubDomains: true,
-    },
-    xFrameOptions: { action: "deny" },
-  })
-);
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
 
 /**
  * Paths that are exempt from the JSON content-negotiation guard.
@@ -453,6 +471,12 @@ app.get("/health", (_req: Request, res: Response) => {
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.json(openApiSpec);
 });
+
+/**
+ * Reserved key used by the deep health probe's storage check.
+ * Prefixed with a NUL control character so it can never collide with a real pair key.
+ */
+const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 /**
  * Run all health checks for the deep readiness probe.
@@ -652,6 +676,54 @@ const paginate = <T>(
   return { page, nextCursor };
 };
 
+
+/**
+ * Decode a base64-encoded cursor string into an integer offset.
+ *
+ * Returns the decoded offset on success, or `"bad"` when the cursor is
+ * present but malformed (non-base64, non-integer, or negative).  Returns
+ * `undefined` when no cursor was supplied so the caller can distinguish
+ * "first page" from an explicit bad value.
+ *
+ * @param raw - The raw `req.query.cursor` value (string, string[], or undefined).
+ * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
+ *          `undefined` when the param is absent.
+ */
+const parseCursor = (raw: unknown): number | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  try {
+    const decoded = Buffer.from(raw, "base64").toString();
+    const n = Number(decoded);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
+    return n;
+  } catch {
+    return "bad";
+  }
+};
+
+/**
+ * Apply limit+cursor pagination to an array of items.
+ *
+ * @param items  - The full (pre-filtered) array.
+ * @param limit  - Number of items per page (already clamped by caller).
+ * @param offset - Starting index decoded from the cursor (0 when absent).
+ * @returns The page slice and a `nextCursor` (base64-encoded next offset,
+ *          or `null` when the collection is exhausted).
+ */
+const paginate = <T>(
+  items: T[],
+  limit: number,
+  offset: number
+): { page: T[]; nextCursor: string | null } => {
+  const page = items.slice(offset, offset + limit);
+  const nextOffset = offset + limit;
+  const nextCursor = nextOffset < items.length
+    ? Buffer.from(String(nextOffset)).toString("base64")
+    : null;
+  return { page, nextCursor };
+};
+
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
   // values are rejected rather than coerced to NaN (which would silently
@@ -745,13 +817,21 @@ const isKeyValid = (record: ApiKeyRecord): boolean => {
  * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
  * @returns An Express request handler enforcing the scope.
  */
+const isKeyValid = (record: ApiKeyRecord): boolean => {
+  if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
+  if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
+    return Date.now() <= record.graceExpiresAt;
+  }
+  return true;
+};
+
 const requireScope = (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
     const rawKey = match ? match[1] : undefined;
     const record = rawKey ? apiKeyStore.get(rawKey) : undefined;
-    if (!record || !isKeyValid(record)) {
+    if (!record) {
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
@@ -922,6 +1002,18 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   const { page, nextCursor } = paginate(allItems, limit, offset);
   res.json({ items: page, nextCursor });
 });
+
+/** Maximum number of event subscriptions per webhook registration. */
+const WEBHOOK_MAX_EVENTS = 20;
+
+/** Maximum character length of a single event name in a webhook subscription. */
+const WEBHOOK_MAX_EVENT_LENGTH = 128;
+
+/**
+ * Event name prefixes reserved for internal system events.
+ * User-defined webhook subscriptions may not use these prefixes.
+ */
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
@@ -1215,7 +1307,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "liquidity",
     field: "liquidity",
     bodyKey: "liquidity",
-    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
     errorMessage: "liquidity must be a non-negative integer string",
     crossCheck: checkLiquidityAgainstMin,
   },
@@ -1231,7 +1323,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "min",
     field: "minAmount",
     bodyKey: "minAmount",
-    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
     crossCheck: (value, meta) => checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
   },

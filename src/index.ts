@@ -4,6 +4,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
+import { isSafeWebhookUrl } from "./utils/webhookUrl";
+import { resolveClientIp } from "./utils/clientIp";
 import {
   paused,
   pairRegistry,
@@ -25,17 +27,12 @@ import {
   RATE_BUCKETS_MAX_IPS,
   HEALTH_PROBE_KEY,
   KNOWN_EVENT_TYPES,
-  HEALTH_PROBE_KEY,
-  RATE_BUCKETS_MAX_IPS,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
   type WebhookRecord,
   type EventType,
 } from "./stores";
-
-/** Sentinel key used by the deep-health probe's scratch storage check. */
-const HEALTH_PROBE_KEY = "\x00health_probe";
 
 /** Maximum number of event-type entries per webhook subscription. */
 const WEBHOOK_MAX_EVENTS = 20;
@@ -367,7 +364,7 @@ export const evictRateBuckets = (ip: string, now: number, windowMs: number): num
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
-  const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+  const ip = resolveClientIp(req.headers["x-forwarded-for"], req.ip ?? req.socket.remoteAddress);
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
   const limitPerWindow = config.rateLimitPerWindow ?? 60;
@@ -474,12 +471,6 @@ app.get("/health", (_req: Request, res: Response) => {
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
   res.json(openApiSpec);
 });
-
-/**
- * Reserved key used by the deep health probe's storage check.
- * Prefixed with a NUL control character so it can never collide with a real pair key.
- */
-const HEALTH_PROBE_KEY = "\x00__health_probe__";
 
 /**
  * Run all health checks for the deep readiness probe.
@@ -1023,6 +1014,10 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
+    return;
+  }
+  if (!isSafeWebhookUrl(url)) {
+    sendError(res, req, 400, "invalid_request", "url must not target private or loopback networks");
     return;
   }
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { isIP } from "node:net";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { openApiSpec } from "./openapi";
@@ -65,31 +66,6 @@ const trimEventLog = (cap: number): void => {
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
-
-type TrustProxySetting = boolean | number | string | string[];
-
-/**
- * Parse the TRUST_PROXY environment variable into an Express trust-proxy
- * setting. The default is deliberately false so forged X-Forwarded-For values
- * are ignored unless the deployment explicitly declares trusted hops.
- */
-export const parseTrustProxy = (value: string | undefined): TrustProxySetting => {
-  if (value === undefined || value.trim() === "") return false;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true") return true;
-  if (normalized === "false") return false;
-  const numeric = Number(normalized);
-  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
-  if (value.includes(",")) {
-    return value
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-  }
-  return value.trim();
-};
-
-app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
 app.use(cors());
 
@@ -354,8 +330,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_BUCKET_GC_INTERVAL_MS = 60_000;
-let lastRateBucketGcAt = 0;
 
 /** Maximum number of event type subscriptions per webhook. */
 const WEBHOOK_MAX_EVENTS = 20;
@@ -391,43 +365,12 @@ export const evictRateBuckets = (ip: string, now: number, windowMs: number): num
   return live;
 };
 
-/**
- * Sweep all expired rate-limit buckets at most once per GC interval. This lazy
- * pass bounds memory even when old clients never return after their windows
- * expire.
- */
-export const pruneExpiredRateBuckets = (now: number, windowMs: number): number => {
-  if (now - lastRateBucketGcAt < RATE_BUCKET_GC_INTERVAL_MS) return 0;
-  lastRateBucketGcAt = now;
-  let removed = 0;
-  for (const [ip, bucket] of rateBuckets) {
-    const live = bucket.filter((t) => now - t < windowMs);
-    if (live.length === 0) {
-      rateBuckets.delete(ip);
-      removed++;
-    } else if (live.length !== bucket.length) {
-      rateBuckets.set(ip, live);
-    }
-  }
-  return removed;
-};
-
-/**
- * Per-IP sliding-window rate limiter.
- *
- * The bucket key comes from Express' `req.ip`, which only honors
- * X-Forwarded-For when `TRUST_PROXY` has enabled trusted proxy hops. This keeps
- * spoofed forwarding headers from bypassing the limiter in direct deployments.
- * The limiter also lazily prunes expired buckets and enforces the existing
- * hard map-size ceiling to keep memory bounded.
- */
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
   const limitPerWindow = config.rateLimitPerWindow ?? 60;
-  pruneExpiredRateBuckets(now, windowMs);
   const bucket = evictRateBuckets(ip, now, windowMs);
   if (bucket.length >= limitPerWindow) {
     res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
@@ -1073,11 +1016,78 @@ const WEBHOOK_MAX_EVENT_LENGTH = 128;
  */
 const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
+const isPrivateIPv4 = (host: string): boolean => {
+  const parts = host.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+  const [a, b] = parts;
+  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+};
+
+const isPrivateIPv6 = (host: string): boolean => {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (normalized === "::1" || normalized === "0:0:0:0:0:0:0:1") return true;
+  if (normalized.startsWith("fe80:")) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(normalized)) return true;
+  if (normalized.startsWith("::ffff:")) {
+    const mapped = normalized.slice("::ffff:".length);
+    if (isIP(mapped) === 4) return isPrivateIPv4(mapped);
+  }
+  return false;
+};
+
+const allowedLowWebhookPorts = (): Set<string> =>
+  new Set(
+    (process.env.WEBHOOK_ALLOWED_LOW_PORTS ?? "")
+      .split(",")
+      .map((port) => port.trim())
+      .filter(Boolean)
+  );
+
+/**
+ * Validate webhook destinations before they are stored for future delivery.
+ *
+ * Only public http(s) destinations are accepted: localhost, loopback, private,
+ * and link-local hosts are rejected to avoid SSRF against metadata services or
+ * internal networks. Non-default privileged ports are denied unless explicitly
+ * allowlisted through WEBHOOK_ALLOWED_LOW_PORTS.
+ */
+export const isPublicWebhookUrl = (rawUrl: string): boolean => {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return false;
+
+  const ipVersion = isIP(hostname);
+  if (ipVersion === 4 && isPrivateIPv4(hostname)) return false;
+  if (ipVersion === 6 && isPrivateIPv6(hostname)) return false;
+
+  if (parsed.port) {
+    const port = Number(parsed.port);
+    const defaultPort = (parsed.protocol === "http:" && port === 80) || (parsed.protocol === "https:" && port === 443);
+    if (!defaultPort && port < 1024 && !allowedLowWebhookPorts().has(parsed.port)) return false;
+  }
+
+  return true;
+};
+
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
+    return;
+  }
+  if (!isPublicWebhookUrl(url)) {
+    sendError(res, req, 400, "invalid_request", "url host must be public and must not target localhost, private, or link-local networks");
     return;
   }
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {

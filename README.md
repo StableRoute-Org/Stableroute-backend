@@ -66,7 +66,7 @@ table below lists every variable the code reads — there are no others.
 |----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------|
 | `PORT`               | TCP port the HTTP server binds to.                                                                                                                                               | `3001`     | `8080`                   |
 | `NODE_ENV`           | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest).                                                                             | _(unset)_  | `production`             |
-| `TRUST_PROXY`        | Express trust-proxy setting for deployments behind known proxies. Leave unset/`false` for direct deployments so spoofed `X-Forwarded-For` headers are ignored. Supports `true`, hop counts, names like `loopback`, or comma-separated subnets. | `false`    | `loopback,10.0.0.0/8`    |
+| `WEBHOOK_ALLOWED_LOW_PORTS` | Optional comma-separated allowlist for non-default webhook destination ports below `1024`. Leave unset to reject privileged non-default ports during SSRF validation.       | _(unset)_  | `844,944`                |
 | `SHUTDOWN_GRACE_MS`  | Grace period in milliseconds before the shutdown handler forces `process.exit(1)` when `server.close()` is still draining. Must be a positive integer; invalid values use the default. | `10000`    | `30000`                  |
 | `GIT_COMMIT`         | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                        | _(unset)_  | `a1b2c3d`                |
 | `BUILD_TIME`         | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                   | _(unset)_  | `2026-01-01T00:00:00Z`   |
@@ -294,6 +294,11 @@ npm run test:coverage
 Coverage reports are uploaded as a CI artifact on every push/PR.
 
 ## Security
+
+Webhook registration rejects destinations that target `localhost`, loopback,
+private, or link-local network ranges, including cloud metadata IPs such as
+`169.254.169.254`. Non-default privileged ports below `1024` are also rejected
+unless explicitly allowlisted through `WEBHOOK_ALLOWED_LOW_PORTS`.
 
 For the vulnerability disclosure process, supported versions, and the gateway
 threat model (unauthenticated admin routes, wildcard CORS, webhook SSRF, and

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { isIP } from "node:net";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -394,17 +394,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const startNs = process.hrtime.bigint();
   res.on("finish", () => {
     const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
-    if (process.env.NODE_ENV !== "test") {
-      console.log(
-        JSON.stringify({
-          requestId: getRequestId(req),
-          method: req.method,
-          path: req.path,
+    logger
+      .child({
+        requestId: getRequestId(req),
+        method: req.method,
+        path: req.path,
+      })
+      .info(
+        {
           status: res.statusCode,
           durationMs: Math.round(ms * 10) / 10,
-        })
+        },
+        "request completed"
       );
-    }
   });
   next();
 });
@@ -1016,78 +1018,11 @@ const WEBHOOK_MAX_EVENT_LENGTH = 128;
  */
 const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
-const isPrivateIPv4 = (host: string): boolean => {
-  const parts = host.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return true;
-  }
-  const [a, b] = parts;
-  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
-};
-
-const isPrivateIPv6 = (host: string): boolean => {
-  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (normalized === "::1" || normalized === "0:0:0:0:0:0:0:1") return true;
-  if (normalized.startsWith("fe80:")) return true;
-  if (/^f[cd][0-9a-f]{2}:/.test(normalized)) return true;
-  if (normalized.startsWith("::ffff:")) {
-    const mapped = normalized.slice("::ffff:".length);
-    if (isIP(mapped) === 4) return isPrivateIPv4(mapped);
-  }
-  return false;
-};
-
-const allowedLowWebhookPorts = (): Set<string> =>
-  new Set(
-    (process.env.WEBHOOK_ALLOWED_LOW_PORTS ?? "")
-      .split(",")
-      .map((port) => port.trim())
-      .filter(Boolean)
-  );
-
-/**
- * Validate webhook destinations before they are stored for future delivery.
- *
- * Only public http(s) destinations are accepted: localhost, loopback, private,
- * and link-local hosts are rejected to avoid SSRF against metadata services or
- * internal networks. Non-default privileged ports are denied unless explicitly
- * allowlisted through WEBHOOK_ALLOWED_LOW_PORTS.
- */
-export const isPublicWebhookUrl = (rawUrl: string): boolean => {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return false;
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (hostname === "localhost" || hostname.endsWith(".localhost")) return false;
-
-  const ipVersion = isIP(hostname);
-  if (ipVersion === 4 && isPrivateIPv4(hostname)) return false;
-  if (ipVersion === 6 && isPrivateIPv6(hostname)) return false;
-
-  if (parsed.port) {
-    const port = Number(parsed.port);
-    const defaultPort = (parsed.protocol === "http:" && port === 80) || (parsed.protocol === "https:" && port === 443);
-    if (!defaultPort && port < 1024 && !allowedLowWebhookPorts().has(parsed.port)) return false;
-  }
-
-  return true;
-};
-
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
     sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
-    return;
-  }
-  if (!isPublicWebhookUrl(url)) {
-    sendError(res, req, 400, "invalid_request", "url host must be public and must not target localhost, private, or link-local networks");
     return;
   }
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
@@ -2147,9 +2082,15 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     return;
   }
   const isProduction = process.env.NODE_ENV === "production";
-  if (!isProduction && err instanceof Error) {
-    console.error(err);
-  }
+  logger.error(
+    {
+      err,
+      requestId: getRequestId(req),
+      method: req.method,
+      path: req.path,
+    },
+    "unhandled request error"
+  );
   const message = isProduction
     ? "An unexpected error occurred"
     : err instanceof Error

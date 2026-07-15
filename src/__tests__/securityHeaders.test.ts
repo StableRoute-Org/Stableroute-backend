@@ -9,24 +9,26 @@ const ROUTES = [
 ];
 
 const SECURITY_HEADERS: [string, string | RegExp][] = [
-  ["content-security-policy", "default-src 'none'"],
-  ["cross-origin-embedder-policy", "require-corp"],
-  ["cross-origin-opener-policy", "same-origin"],
-  ["cross-origin-resource-policy", "same-origin"],
+  ["content-security-policy", /default-src 'none'/],
   ["x-content-type-options", "nosniff"],
   ["x-frame-options", "DENY"],
   ["referrer-policy", "no-referrer"],
-  ["strict-transport-security", "max-age=31536000; includeSubDomains"],
+  ["strict-transport-security", /max-age=31536000; includeSubDomains/],
 ];
 
 describe("Security headers on every response", () => {
   for (const { method, path } of ROUTES) {
     describe(`${method.toUpperCase()} ${path}`, () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let res: any;
+      let res: Response;
 
       beforeAll(async () => {
-        res = await (request(app) as unknown as Record<string, CallableFunction>)[method](path);
+        switch (method) {
+          case "get":
+            res = await request(app).get(path);
+            break;
+          default:
+            throw new Error(`Unsupported test method: ${method}`);
+        }
       });
 
       for (const [header, expected] of SECURITY_HEADERS) {

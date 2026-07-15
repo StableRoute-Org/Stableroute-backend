@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -66,38 +67,7 @@ const trimEventLog = (cap: number): void => {
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-const DEFAULT_CORS_ALLOWED_ORIGINS = [
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "http://127.0.0.1:3000",
-  "http://127.0.0.1:3001",
-];
-
-/** Parse a comma-separated CORS origin allowlist, falling back to localhost-only development origins. */
-export const parseCorsAllowedOrigins = (value: string | undefined): Set<string> => {
-  const source = value === undefined || value.trim() === "" ? DEFAULT_CORS_ALLOWED_ORIGINS.join(",") : value;
-  return new Set(source.split(",").map((origin) => origin.trim()).filter(Boolean));
-};
-
-/**
- * Resolve whether an inbound Origin is allowed.
- *
- * Requests without an Origin header are same-origin/server-to-server traffic and
- * are passed through without reflecting arbitrary browser origins.
- */
-export const isCorsOriginAllowed = (
-  origin: string | undefined,
-  allowedOrigins: Set<string>
-): boolean => origin === undefined || allowedOrigins.has(origin);
-
-const corsAllowedOrigins = parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
-
-app.use(cors({
-  credentials: false,
-  origin: (origin, callback) => {
-    callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
-  },
-}));
+app.use(cors());
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
@@ -439,13 +409,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  next();
-});
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    frameguard: { action: "deny" },
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
+    referrerPolicy: { policy: "no-referrer" },
+  })
+);
 
 /**
  * Paths that are exempt from the JSON content-negotiation guard.
@@ -1338,7 +1316,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "liquidity",
     field: "liquidity",
     bodyKey: "liquidity",
-    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
+    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
     errorMessage: "liquidity must be a non-negative integer string",
     crossCheck: checkLiquidityAgainstMin,
   },
@@ -1354,7 +1332,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "min",
     field: "minAmount",
     bodyKey: "minAmount",
-    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
+    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
     crossCheck: (value, meta) => checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
   },

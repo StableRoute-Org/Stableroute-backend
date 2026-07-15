@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
-import helmet from "helmet";
 import { openApiSpec } from "./openapi";
 import {
   paused,
@@ -66,6 +65,31 @@ const trimEventLog = (cap: number): void => {
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+
+type TrustProxySetting = boolean | number | string | string[];
+
+/**
+ * Parse the TRUST_PROXY environment variable into an Express trust-proxy
+ * setting. The default is deliberately false so forged X-Forwarded-For values
+ * are ignored unless the deployment explicitly declares trusted hops.
+ */
+export const parseTrustProxy = (value: string | undefined): TrustProxySetting => {
+  if (value === undefined || value.trim() === "") return false;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  const numeric = Number(normalized);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  if (value.includes(",")) {
+    return value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+  return value.trim();
+};
+
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
 app.use(cors());
 
@@ -330,6 +354,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // so PATCH /api/v1/config changes take effect immediately.
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_BUCKET_GC_INTERVAL_MS = 60_000;
+let lastRateBucketGcAt = 0;
 
 /** Maximum number of event type subscriptions per webhook. */
 const WEBHOOK_MAX_EVENTS = 20;
@@ -365,12 +391,43 @@ export const evictRateBuckets = (ip: string, now: number, windowMs: number): num
   return live;
 };
 
+/**
+ * Sweep all expired rate-limit buckets at most once per GC interval. This lazy
+ * pass bounds memory even when old clients never return after their windows
+ * expire.
+ */
+export const pruneExpiredRateBuckets = (now: number, windowMs: number): number => {
+  if (now - lastRateBucketGcAt < RATE_BUCKET_GC_INTERVAL_MS) return 0;
+  lastRateBucketGcAt = now;
+  let removed = 0;
+  for (const [ip, bucket] of rateBuckets) {
+    const live = bucket.filter((t) => now - t < windowMs);
+    if (live.length === 0) {
+      rateBuckets.delete(ip);
+      removed++;
+    } else if (live.length !== bucket.length) {
+      rateBuckets.set(ip, live);
+    }
+  }
+  return removed;
+};
+
+/**
+ * Per-IP sliding-window rate limiter.
+ *
+ * The bucket key comes from Express' `req.ip`, which only honors
+ * X-Forwarded-For when `TRUST_PROXY` has enabled trusted proxy hops. This keeps
+ * spoofed forwarding headers from bypassing the limiter in direct deployments.
+ * The limiter also lazily prunes expired buckets and enforces the existing
+ * hard map-size ceiling to keep memory bounded.
+ */
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
   const limitPerWindow = config.rateLimitPerWindow ?? 60;
+  pruneExpiredRateBuckets(now, windowMs);
   const bucket = evictRateBuckets(ip, now, windowMs);
   if (bucket.length >= limitPerWindow) {
     res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
@@ -409,21 +466,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'none'"],
-        baseUri: ["'none'"],
-        formAction: ["'none'"],
-        frameAncestors: ["'none'"],
-      },
-    },
-    frameguard: { action: "deny" },
-    hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
-    referrerPolicy: { policy: "no-referrer" },
-  })
-);
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
 
 /**
  * Paths that are exempt from the JSON content-negotiation guard.

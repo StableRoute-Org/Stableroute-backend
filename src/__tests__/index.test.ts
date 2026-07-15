@@ -511,14 +511,273 @@ describe("StableRoute Backend", () => {
     });
 
     it.each([
-      ["above range", 1001],
-      ["negative", -1],
-      ["decimal", 1.5],
-      ["numeric string", "50"],
-      ["array", [50]],
-      ["object", { value: 50 }],
-    ])("rejects feeBps that is %s", async (_label, feeBps) => {
-      await request(app)
+      ["zero", "0"],
+      ["negative", "-5"],
+      ["leading zero", "0100"],
+      ["non-numeric", "abc"],
+      ["decimal", "1.5"],
+      ["empty", ""],
+    ])("rejects amount that is %s", async (_label, amount) => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "EURC", amount });
+      expect(res.status).toBe(400);
+    });
+
+    it("accepts a very large positive amount via BigInt parsing", async () => {
+      // 10^25 — far above Number.MAX_SAFE_INTEGER (~9.007 * 10^15)
+      const huge = "10000000000000000000000000";
+      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
+      expect(res.status).toBe(200);
+      expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("GET /api/v1/quote — pair registration requirement", () => {
+    it("returns 404 pair_not_registered for an unregistered pair", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "unreg-pair-test")
+        .query({ source_asset: "NOTREGISTERED", dest_asset: "PAIR", amount: "100" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+      expect(res.body.message).toMatch(/NOTREGISTERED.*PAIR/);
+      expect(res.body.source_asset).toBe("NOTREGISTERED");
+      expect(res.body.dest_asset).toBe("PAIR");
+      expect(res.body.requestId).toBe("unreg-pair-test");
+    });
+
+    it("returns 200 after the pair is registered", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "REGSRC", destination: "REGDST" });
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "REGSRC", dest_asset: "REGDST", amount: "200" });
+      expect(res.status).toBe(200);
+      expect(res.body.source_asset).toBe("REGSRC");
+      expect(res.body.dest_asset).toBe("REGDST");
+      expect(res.body.route).toEqual(["REGSRC", "REGDST"]);
+    });
+
+    it("returns 404 again after a pair is unregistered", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "GONE", destination: "SOON" });
+      await request(app).delete("/api/v1/pairs/GONE/SOON");
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "GONE", dest_asset: "SOON", amount: "1" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+    });
+
+    it("400 validation errors take precedence over 404 pair_not_registered", async () => {
+      // Invalid amount — should be 400, not 404
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "NOTREGX", dest_asset: "NOTREGY", amount: "0" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("pair_not_registered response includes canonical requestId envelope", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "canon-id-123")
+        .query({ source_asset: "AA", dest_asset: "BB", amount: "1" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+      expect(res.body.requestId).toBe("canon-id-123");
+      expect(res.body.message).toBeTruthy();
+      expect(res.body.source_asset).toBe("AA");
+      expect(res.body.dest_asset).toBe("BB");
+    });
+  });
+
+  describe("quote amount bounds", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("rejects GET quotes below minAmount with a canonical 400", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "MIN", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/MIN/DST/min").send({ minAmount: "100" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-min")
+        .query({ source_asset: "MIN", dest_asset: "DST", amount: "99" });
+
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bounds-min", "invalid_request");
+      expect(res.body.message).toMatch(/below minAmount/);
+    });
+
+    it("rejects GET quotes above maxAmount with a canonical 400", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "MAX", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/MAX/DST/max").send({ maxAmount: "1000" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-max")
+        .query({ source_asset: "MAX", dest_asset: "DST", amount: "1001" });
+
+      expect(res.status).toBe(400);
+      expectCanonicalError(res.body, "bounds-max", "invalid_request");
+      expect(res.body.message).toMatch(/exceeds maxAmount/);
+    });
+
+    it("rejects GET quotes above liquidity with insufficient_liquidity", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "LIQ", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/LIQ/DST/liquidity").send({ liquidity: "500" });
+
+      const res = await request(app)
+        .get("/api/v1/quote")
+        .set("X-Request-Id", "bounds-liq")
+        .query({ source_asset: "LIQ", dest_asset: "DST", amount: "501" });
+
+      expect(res.status).toBe(422);
+      expectCanonicalError(res.body, "bounds-liq", "insufficient_liquidity");
+      expect(res.body.message).toMatch(/available liquidity/);
+    });
+
+    it("allows amounts exactly at min, max, and liquidity bounds", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "EDGE", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/min").send({ minAmount: "100" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/max").send({ maxAmount: "1000" });
+      await request(app).patch("/api/v1/pairs/EDGE/DST/liquidity").send({ liquidity: "1000" });
+
+      const min = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "EDGE", dest_asset: "DST", amount: "100" });
+      expect(min.status).toBe(200);
+      expect(min.body.amount).toBe("100");
+
+      const maxAndLiquidity = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "EDGE", dest_asset: "DST", amount: "1000" });
+      expect(maxAndLiquidity.status).toBe(200);
+      expect(maxAndLiquidity.body.amount).toBe("1000");
+    });
+
+    it("reports bulk quote bound failures per item without failing the batch", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "BULK", destination: "DST" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/min").send({ minAmount: "100" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/max").send({ maxAmount: "1000" });
+      await request(app).patch("/api/v1/pairs/BULK/DST/liquidity").send({ liquidity: "1000" });
+
+      const res = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({
+          items: [
+            { source_asset: "BULK", dest_asset: "DST", amount: "100" },
+            { source_asset: "BULK", dest_asset: "DST", amount: "99" },
+            { source_asset: "BULK", dest_asset: "DST", amount: "1001" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]).toMatchObject({ index: 0, ok: true, amount: "100" });
+      expect(res.body.results[1]).toMatchObject({ index: 1, ok: false, error: "out_of_bounds" });
+      expect(res.body.results[2]).toMatchObject({ index: 2, ok: false, error: "out_of_bounds" });
+    });
+  });
+
+  describe("GET /api/v1/events — type filter", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("filters events by a valid type", async () => {
+      // Register a pair (pair.registered) then unregister it (pair.unregistered)
+      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app).delete("/api/v1/pairs/FIL/TER");
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("excludes events of other types when type param is set", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app).delete("/api/v1/pairs/FIL/TER");
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.unregistered")).toBe(true);
+      // No pair.registered events should appear
+      expect(res.body.items.some((e: { type: string }) => e.type === "pair.registered")).toBe(false);
+    });
+
+    it("returns 400 with invalid_request for an unknown event type", async () => {
+      const res = await request(app).get("/api/v1/events").query({ type: "unknown.event" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/pair\.registered/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 with invalid_request for an injection attempt", async () => {
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered; DROP TABLE" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("returns empty items when type filter matches no events", async () => {
+      // Only register a pair (no unregister) — so pair.unregistered will not appear
+      await request(app).post("/api/v1/pairs").send({ source: "NO", destination: "MATCH" });
+
+      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(0);
+    });
+
+    it("type filter composes correctly with since param", async () => {
+      const before = Date.now() - 1;
+      await request(app).post("/api/v1/pairs").send({ source: "SNC", destination: "TST" });
+
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered", since: before });
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.items.every((e: { type: string; ts: number }) =>
+        e.type === "pair.registered" && e.ts >= before
+      )).toBe(true);
+    });
+
+    it("type filter composes correctly with limit param", async () => {
+      // Register multiple pairs to produce multiple events
+      for (let i = 0; i < 5; i++) {
+        await request(app).post("/api/v1/pairs").send({ source: `LIM${i}`, destination: "TST" });
+      }
+
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered", limit: 2 });
+      expect(res.status).toBe(200);
+      // At most 2 items returned
+      expect(res.body.items.length).toBeLessThanOrEqual(2);
+      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+    });
+
+    it("returns all events when type param is omitted", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "ALL", destination: "EVT" });
+      await request(app).delete("/api/v1/pairs/ALL/EVT");
+
+      const res = await request(app).get("/api/v1/events");
+      expect(res.status).toBe(200);
+      const types = new Set(res.body.items.map((e: { type: string }) => e.type));
+      // Both event types should be present
+      expect(types.has("pair.registered")).toBe(true);
+      expect(types.has("pair.unregistered")).toBe(true);
+    });
+  });
+
+  describe("malformed JSON handling", () => {
+    it("returns 400 invalid_json for a malformed body without leaking the raw fragment", async () => {
+      const res = await request(app)
         .post("/api/v1/pairs")
         .send({ source: "BADFEE", destination: "META" });
 

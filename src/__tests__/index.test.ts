@@ -1796,4 +1796,170 @@ describe("StableRoute Backend", () => {
       }
     });
   });
+
+  describe("List Endpoints Pagination", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    describe("GET /api/v1/pairs pagination", () => {
+      it("pages through pairs successfully", async () => {
+        const pairsToRegister = [
+          { source: "USDC", destination: "EURC" },
+          { source: "USDC", destination: "XLM" },
+          { source: "XLM", destination: "EURC" },
+          { source: "EURC", destination: "XLM" },
+          { source: "BTC", destination: "USD" },
+        ];
+        for (const p of pairsToRegister) {
+          await request(app).post("/api/v1/pairs").send(p);
+        }
+
+        const res1 = await request(app).get("/api/v1/pairs").query({ limit: 2 });
+        expect(res1.status).toBe(200);
+        expect(res1.body.pairs).toHaveLength(2);
+        expect(res1.body.nextCursor).toBeTruthy();
+
+        const res2 = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 2, cursor: res1.body.nextCursor });
+        expect(res2.status).toBe(200);
+        expect(res2.body.pairs).toHaveLength(2);
+        expect(res2.body.nextCursor).toBeTruthy();
+
+        const res3 = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 2, cursor: res2.body.nextCursor });
+        expect(res3.status).toBe(200);
+        expect(res3.body.pairs).toHaveLength(1);
+        expect(res3.body.nextCursor).toBeNull();
+      });
+
+      it("respects default limit and caps limit to 500", async () => {
+        for (let i = 0; i < 10; i++) {
+          await request(app)
+            .post("/api/v1/pairs")
+            .send({ source: `P${i}`, destination: "USD" });
+        }
+
+        const resDefault = await request(app).get("/api/v1/pairs");
+        expect(resDefault.status).toBe(200);
+        expect(resDefault.body.pairs.length).toBeGreaterThanOrEqual(10);
+        expect(resDefault.body.nextCursor).toBeNull();
+
+        const resClamp = await request(app).get("/api/v1/pairs").query({ limit: 600 });
+        expect(resClamp.status).toBe(200);
+      });
+
+      it("rejects invalid/malformed cursors with 400 invalid_request", async () => {
+        const res = await request(app)
+          .get("/api/v1/pairs")
+          .set("X-Request-Id", "malformed-cursor-test")
+          .query({ cursor: "not-base64-!!!" });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+        expect(res.body.message).toMatch(/cursor/i);
+        expect(res.body.requestId).toBe("malformed-cursor-test");
+      });
+
+      it("preserves ETag behavior on paginated slice", async () => {
+        await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+        await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "XLM" });
+
+        const res = await request(app).get("/api/v1/pairs").query({ limit: 1 });
+        expect(res.status).toBe(200);
+        const etag = res.headers.etag;
+        expect(etag).toBeTruthy();
+
+        const res304 = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 1 })
+          .set("If-None-Match", etag);
+        expect(res304.status).toBe(304);
+      });
+    });
+
+    describe("GET /api/v1/webhooks pagination", () => {
+      it("pages through webhooks", async () => {
+        for (let i = 0; i < 3; i++) {
+          await request(app)
+            .post("/api/v1/webhooks")
+            .send({ url: `https://example.com/wh${i}`, events: ["pair.registered"] });
+        }
+
+        const res1 = await request(app).get("/api/v1/webhooks").query({ limit: 2 });
+        expect(res1.status).toBe(200);
+        expect(res1.body.items).toHaveLength(2);
+        expect(res1.body.nextCursor).toBeTruthy();
+
+        const res2 = await request(app)
+          .get("/api/v1/webhooks")
+          .query({ limit: 2, cursor: res1.body.nextCursor });
+        expect(res2.status).toBe(200);
+        expect(res2.body.items).toHaveLength(1);
+        expect(res2.body.nextCursor).toBeNull();
+      });
+
+      it("returns 400 for malformed cursor", async () => {
+        const res = await request(app).get("/api/v1/webhooks").query({ cursor: "!!!" });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      });
+    });
+
+    describe("GET /api/v1/api-keys pagination", () => {
+      it("pages through api keys", async () => {
+        for (let i = 0; i < 3; i++) {
+          await request(app).post("/api/v1/api-keys").send({ label: `key-${i}` });
+        }
+
+        const res1 = await request(app).get("/api/v1/api-keys").query({ limit: 2 });
+        expect(res1.status).toBe(200);
+        expect(res1.body.items).toHaveLength(2);
+        expect(res1.body.nextCursor).toBeTruthy();
+
+        const res2 = await request(app)
+          .get("/api/v1/api-keys")
+          .query({ limit: 2, cursor: res1.body.nextCursor });
+        expect(res2.status).toBe(200);
+        expect(res2.body.items).toHaveLength(1);
+        expect(res2.body.nextCursor).toBeNull();
+      });
+
+      it("returns 400 for malformed cursor", async () => {
+        const res = await request(app).get("/api/v1/api-keys").query({ cursor: "!!!" });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      });
+    });
+
+    describe("GET /api/v1/events pagination", () => {
+      it("pages through events with since/type filters layered", async () => {
+        const before = Date.now() - 1000;
+        await request(app).post("/api/v1/pairs").send({ source: "EVT1", destination: "USD" });
+        await request(app).post("/api/v1/pairs").send({ source: "EVT2", destination: "USD" });
+        await request(app).post("/api/v1/pairs").send({ source: "EVT3", destination: "USD" });
+
+        const res1 = await request(app)
+          .get("/api/v1/events")
+          .query({ limit: 2, type: "pair.registered", since: before });
+        expect(res1.status).toBe(200);
+        expect(res1.body.items).toHaveLength(2);
+        expect(res1.body.nextCursor).toBeTruthy();
+
+        const res2 = await request(app)
+          .get("/api/v1/events")
+          .query({ limit: 2, type: "pair.registered", since: before, cursor: res1.body.nextCursor });
+        expect(res2.status).toBe(200);
+        expect(res2.body.items).toHaveLength(1);
+        expect(res2.body.nextCursor).toBeNull();
+      });
+
+      it("returns 400 for malformed cursor", async () => {
+        const res = await request(app).get("/api/v1/events").query({ cursor: "!!!" });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      });
+    });
+  });
 });

@@ -12,6 +12,47 @@ API gateway, routing engine, and pricing service for [StableRoute](https://githu
 See [docs/api.md](docs/api.md) for the complete endpoint and error-code
 reference, including request/response shapes and `curl` examples.
 
+### Pagination
+
+Consistent pagination is supported across all four list endpoints:
+- `GET /api/v1/pairs`
+- `GET /api/v1/events`
+- `GET /api/v1/api-keys`
+- `GET /api/v1/webhooks`
+
+#### Query Parameters
+
+- `limit` (optional): The maximum number of items to return. Defaults to `100`. Clamped to `[1, 500]` for pairs, API keys, and webhooks, and `[1, 10000]` for events.
+- `cursor` (optional): An opaque, base64-encoded string representing the pagination offset. Omit this parameter to retrieve the first page.
+
+#### Response Envelope
+
+All paginated endpoints return an object containing the items and a `nextCursor` property. The top-level key for the items list is `pairs` for the pairs endpoint, and `items` for the others:
+
+**Pairs response:**
+```json
+{
+  "pairs": [
+    { "source": "USDC", "destination": "EURC" }
+  ],
+  "nextCursor": "Mw=="
+}
+```
+
+**Others response (events, api-keys, webhooks):**
+```json
+{
+  "items": [ ... ],
+  "nextCursor": "Mw=="
+}
+```
+
+If the collection is exhausted (i.e. there are no more items to fetch), `nextCursor` will be returned as `null`.
+
+#### Error Handling
+
+If an invalid or malformed cursor is supplied, the endpoints will reject the request with `400 invalid_request` and include the canonical `requestId`.
+
 ### API-key rotation
 
 `POST /api/v1/api-keys/:prefix/rotate` rotates a key without downtime. It

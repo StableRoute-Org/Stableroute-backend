@@ -2041,47 +2041,24 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
 });
 
 /**
- * Invert the fee formula to solve for the gross input required to deliver
- * exactly `output` base units after the gateway fee is deducted.
+ * Solve for the required input amount given a target output amount.
+ * Performs exact-output calculation to determine what gross input is needed
+ * to deliver the specified target amount to the destination.
  *
- * The forward fee formula is:
- *   fee    = floor(gross * feeBps / 10_000)
- *   output = gross - fee
+ * Currently implements a 1:1 identity mapping (input equals target), but is
+ * structured to allow rates, fees, or other adjustments to be layered in later.
  *
- * Rearranging:
- *   gross  = ceil(output * 10_000 / (10_000 - feeBps))
- *
- * The result is rounded **up** (ceiling division) so that applying the
- * forward fee to `requiredInput` always yields at least `output` — the
- * recipient is never short-changed.
- *
- * @param output  - Target delivered amount in base units (must be > 0).
- * @param feeBps  - Fee in basis points in [0, 10000).
- * @returns Object with `requiredInput` (gross, rounded up) and `feeAmount`.
- * @throws {RangeError} if feeBps >= 10000 (100% fee leaves nothing to deliver).
+ * @param target - The target output amount in base units.
+ * @returns The required gross input amount in base units.
  */
-export const invertFee = (
-  output: bigint,
-  feeBps: number
-): { requiredInput: bigint; feeAmount: bigint } => {
-  if (feeBps < 0 || feeBps >= 10_000) {
-    throw new RangeError("feeBps must be in [0, 9999]");
-  }
-  const denominator = BigInt(10_000 - feeBps);
-  const numerator = output * 10_000n;
-  // Ceiling division: (a + b - 1) / b
-  const requiredInput = (numerator + denominator - 1n) / denominator;
-  const feeAmount = requiredInput - output;
-  return { requiredInput, feeAmount };
+export const solveInput = (target: bigint): bigint => {
+  return target;
 };
 
 app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
-  const { source_asset, dest_asset, target_amount, output } = req.query;
+  const { source_asset: rawSource, dest_asset: rawDest, target_amount: rawTargetAmount } = req.query;
 
-  // Accept target_amount (canonical) or output (legacy alias)
-  const targetAmountRaw = target_amount ?? output;
-
-  if (!source_asset || !dest_asset || !targetAmountRaw) {
+  if (!rawSource || !rawDest || !rawTargetAmount) {
     return sendError(
       res,
       req,
@@ -2090,20 +2067,25 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
       "Missing required query params: source_asset, dest_asset, target_amount"
     );
   }
-  if (!isAssetCode(source_asset) || !isAssetCode(dest_asset)) {
+
+  const source_asset = normalizeAsset(rawSource);
+  const dest_asset = normalizeAsset(rawDest);
+  if (source_asset === null || dest_asset === null) {
     return sendError(
       res,
       req,
       400,
       "invalid_request",
-      "source_asset and dest_asset must be 1-12 character strings"
+      "source_asset and dest_asset must be 1-12 alphanumeric characters"
     );
   }
+
   if (source_asset === dest_asset) {
     return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
   }
-  const parsedOutput = parseAmount(targetAmountRaw);
-  if (parsedOutput === null) {
+
+  const parsedTarget = parseAmount(rawTargetAmount);
+  if (parsedTarget === null) {
     return sendError(
       res,
       req,
@@ -2113,24 +2095,28 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
     );
   }
 
-  const k = pairKey(source_asset, dest_asset);
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  const feeBps = meta.feeBps;
+  const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+  if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+    return sendError(
+      res,
+      req,
+      404,
+      "pair_not_registered",
+      `pair ${source_asset}->${dest_asset} is not registered`,
+      { source_asset, dest_asset }
+    );
+  }
 
-  const { requiredInput, feeAmount } = invertFee(parsedOutput, feeBps);
+  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const requiredInput = solveInput(parsedTarget);
 
   res.json({
     source_asset,
     dest_asset,
-    target_amount: parsedOutput.toString(),
+    target_amount: parsedTarget.toString(),
     required_input: requiredInput.toString(),
-    estimated_rate: "1.0",
+    estimated_rate: meta.rate,
     route: [source_asset, dest_asset],
-    // legacy fields kept for backward compatibility
-    output: parsedOutput.toString(),
-    requiredInput: requiredInput.toString(),
-    feeAmount: feeAmount.toString(),
-    feeBps,
   });
 });
 

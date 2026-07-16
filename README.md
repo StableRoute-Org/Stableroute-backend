@@ -64,6 +64,15 @@ overlap window, letting callers cut over gracefully. `GET /api/v1/api-keys`
 surfaces `rotatedAt` on rotated predecessor records (raw keys are never
 returned). An unknown prefix returns `404 not_found`.
 
+### Idempotency
+
+Mutating create endpoints — `POST /api/v1/api-keys`, `POST /api/v1/webhooks`, and `POST /api/v1/pairs` — support safe retries using the `Idempotency-Key` header:
+- **`Idempotency-Key` header:** Any string between `1` and `200` characters. When present, the server caches the first response (status and body) and replays it verbatim on subsequent identical requests.
+- **Conflict Handling:** Reusing the same `Idempotency-Key` with a different request body returns `409 idempotency_conflict`.
+- **TTL & Expiry:** Cache entries expire after a configurable TTL (see `IDEMPOTENCY_TTL_MS`).
+- **Cache Bounding:** The cache size is capped at `10,000` entries (configurable via `IDEMPOTENCY_CACHE_MAX`) to prevent unbounded memory growth. The oldest entries are evicted first if capacity is reached.
+- When no `Idempotency-Key` is provided, requests behave normally without caching.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,
@@ -112,6 +121,8 @@ table below lists every variable the code reads — there are no others.
 | `GIT_COMMIT`         | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                        | _(unset)_  | `a1b2c3d`                |
 | `BUILD_TIME`         | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`.                                                                   | _(unset)_  | `2026-01-01T00:00:00Z`   |
 | `ALLOW_UNREGISTERED_QUOTES` | Set to `"true"` to allow quoting of unregistered asset pairs. By default, quotes for unregistered pairs are rejected with `404 pair_not_registered`. | `false` | `true` |
+| `IDEMPOTENCY_TTL_MS` | TTL in milliseconds for the idempotency cache entries. | `86400000` (24h) | `3600000` (1h) |
+| `IDEMPOTENCY_CACHE_MAX` | Maximum number of entries kept in the idempotency cache. | `10000` | `5000` |
 
 ### Build/version endpoint
 

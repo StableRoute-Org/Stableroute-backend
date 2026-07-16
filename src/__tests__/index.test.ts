@@ -1,5 +1,5 @@
 import request from "supertest";
-import app, { isValidRequestId } from "../index";
+import app, { isValidRequestId, clearIdempotencyCache } from "../index";
 import { resetStores } from "../stores";
 
 const expectCanonicalError = (
@@ -1959,6 +1959,192 @@ describe("StableRoute Backend", () => {
         const res = await request(app).get("/api/v1/events").query({ cursor: "!!!" });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
+      });
+    });
+  });
+
+  describe("Idempotency Support", () => {
+    beforeEach(() => {
+      resetStores();
+      clearIdempotencyCache();
+      delete process.env.IDEMPOTENCY_TTL_MS;
+      delete process.env.IDEMPOTENCY_CACHE_MAX;
+    });
+
+    afterEach(() => {
+      delete process.env.IDEMPOTENCY_TTL_MS;
+      delete process.env.IDEMPOTENCY_CACHE_MAX;
+    });
+
+    describe("POST /api/v1/api-keys", () => {
+      it("behaves normally when no key is provided", async () => {
+        const res1 = await request(app).post("/api/v1/api-keys").send({ label: "key1" });
+        expect(res1.status).toBe(201);
+        const res2 = await request(app).post("/api/v1/api-keys").send({ label: "key1" });
+        expect(res2.status).toBe(201);
+        expect(res1.body.key).not.toBe(res2.body.key);
+      });
+
+      it("replays the response when the same key and body are sent twice", async () => {
+        const key = "idem-key-1";
+        const res1 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "key-idem" });
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "key-idem" });
+        expect(res2.status).toBe(201);
+        expect(res2.body).toEqual(res1.body);
+      });
+
+      it("returns 409 idempotency_conflict when same key is used with a different body", async () => {
+        const key = "idem-key-2";
+        const res1 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "key-idem" });
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "different-label" });
+        expect(res2.status).toBe(409);
+        expect(res2.body.error).toBe("idempotency_conflict");
+      });
+    });
+
+    describe("POST /api/v1/webhooks", () => {
+      it("behaves normally when no key is provided", async () => {
+        const res1 = await request(app)
+          .post("/api/v1/webhooks")
+          .send({ url: "https://example.com/w1", events: ["pair.registered"] });
+        expect(res1.status).toBe(201);
+        const res2 = await request(app)
+          .post("/api/v1/webhooks")
+          .send({ url: "https://example.com/w1", events: ["pair.registered"] });
+        expect(res2.status).toBe(201);
+        expect(res1.body.id).not.toBe(res2.body.id);
+      });
+
+      it("replays the response when the same key and body are sent twice", async () => {
+        const key = "idem-wh-1";
+        const body = { url: "https://example.com/w1", events: ["pair.registered"] };
+        const res1 = await request(app)
+          .post("/api/v1/webhooks")
+          .set("Idempotency-Key", key)
+          .send(body);
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/webhooks")
+          .set("Idempotency-Key", key)
+          .send(body);
+        expect(res2.status).toBe(201);
+        expect(res2.body).toEqual(res1.body);
+      });
+
+      it("returns 409 idempotency_conflict when same key is used with a different body", async () => {
+        const key = "idem-wh-2";
+        const body1 = { url: "https://example.com/w1", events: ["pair.registered"] };
+        const body2 = { url: "https://example.com/w2", events: ["pair.registered"] };
+        const res1 = await request(app)
+          .post("/api/v1/webhooks")
+          .set("Idempotency-Key", key)
+          .send(body1);
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/webhooks")
+          .set("Idempotency-Key", key)
+          .send(body2);
+        expect(res2.status).toBe(409);
+        expect(res2.body.error).toBe("idempotency_conflict");
+      });
+    });
+
+    describe("POST /api/v1/pairs", () => {
+      it("replays the response when the same key and body are sent twice", async () => {
+        const key = "idem-pair-1";
+        const body = { source: "IDEMA", destination: "IDEMB" };
+        const res1 = await request(app)
+          .post("/api/v1/pairs")
+          .set("Idempotency-Key", key)
+          .send(body);
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/pairs")
+          .set("Idempotency-Key", key)
+          .send(body);
+        expect(res2.status).toBe(201);
+        expect(res2.body).toEqual(res1.body);
+      });
+
+      it("returns 409 idempotency_conflict when same key is used with a different body", async () => {
+        const key = "idem-pair-2";
+        const body1 = { source: "IDEMA", destination: "IDEMB" };
+        const body2 = { source: "IDEMA", destination: "IDEMC" };
+        const res1 = await request(app)
+          .post("/api/v1/pairs")
+          .set("Idempotency-Key", key)
+          .send(body1);
+        expect(res1.status).toBe(201);
+
+        const res2 = await request(app)
+          .post("/api/v1/pairs")
+          .set("Idempotency-Key", key)
+          .send(body2);
+        expect(res2.status).toBe(409);
+        expect(res2.body.error).toBe("idempotency_conflict");
+      });
+    });
+
+    describe("TTL expiry and cache limits", () => {
+      it("ignores/expires the key after TTL expires", async () => {
+        process.env.IDEMPOTENCY_TTL_MS = "50"; // 50ms TTL
+        const key = "ttl-key-1";
+        const res1 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "key1" });
+        expect(res1.status).toBe(201);
+
+        // Wait for TTL to expire
+        await new Promise((resolve) => setTimeout(resolve, 60));
+
+        const res2 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", key)
+          .send({ label: "key1" });
+        expect(res2.status).toBe(201);
+        expect(res2.body.key).not.toBe(res1.body.key);
+      });
+
+      it("enforces cache limits (evicts oldest entries)", async () => {
+        process.env.IDEMPOTENCY_CACHE_MAX = "2"; // only keep 2 entries
+        const body = { label: "key" };
+
+        const res1 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-1").send(body);
+        const res2 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-2").send(body);
+        expect(res1.status).toBe(201);
+        expect(res2.status).toBe(201);
+
+        // Third request will evict key-1
+        const res3 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-3").send(body);
+        expect(res3.status).toBe(201);
+
+        const resReplay2 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-2").send(body);
+        expect(resReplay2.status).toBe(201);
+        expect(resReplay2.body.key).toBe(res2.body.key);
+
+        const resReplay1 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-1").send(body);
+        expect(resReplay1.status).toBe(201);
+        expect(resReplay1.body.key).not.toBe(res1.body.key);
       });
     });
   });

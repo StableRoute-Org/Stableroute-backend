@@ -1668,4 +1668,132 @@ describe("StableRoute Backend", () => {
       expect(res.body.error).toBe("payload_too_large");
     });
   });
+
+  describe("GET /api/v1/quote/reverse", () => {
+    beforeEach(async () => {
+      resetStores();
+      // Register a pair to test registration-required paths
+      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+    });
+
+    it("returns 200 and exact-output quote for a registered pair", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "100" });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        source_asset: "USDC",
+        dest_asset: "EURC",
+        target_amount: "100",
+        required_input: "100",
+        estimated_rate: "1.0",
+        route: ["USDC", "EURC"],
+      });
+    });
+
+    it("rejects when any required query parameter is missing", async () => {
+      // Missing target_amount
+      const res1 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC" });
+      expect(res1.status).toBe(400);
+      expect(res1.body.error).toBe("invalid_request");
+      expect(res1.body.message).toMatch(/Missing required query params/);
+
+      // Missing source_asset
+      const res2 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ dest_asset: "EURC", target_amount: "100" });
+      expect(res2.status).toBe(400);
+      expect(res2.body.error).toBe("invalid_request");
+
+      // Missing dest_asset
+      const res3 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", target_amount: "100" });
+      expect(res3.status).toBe(400);
+      expect(res3.body.error).toBe("invalid_request");
+    });
+
+    it("rejects equal source and destination assets", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "USDC", target_amount: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/source_asset and dest_asset must differ/);
+    });
+
+    it("rejects invalid asset codes", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "INVALID_ASSET_CODE_TOO_LONG", dest_asset: "EURC", target_amount: "100" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/source_asset and dest_asset must be 1-12 alphanumeric characters/);
+    });
+
+    it("rejects invalid target_amount values", async () => {
+      // Zero amount
+      const res1 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "0" });
+      expect(res1.status).toBe(400);
+      expect(res1.body.error).toBe("invalid_request");
+
+      // Leading zero
+      const res2 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "0100" });
+      expect(res2.status).toBe(400);
+      expect(res2.body.error).toBe("invalid_request");
+
+      // Non-integer string
+      const res3 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "100.5" });
+      expect(res3.status).toBe(400);
+      expect(res3.body.error).toBe("invalid_request");
+
+      // Negative number
+      const res4 = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "-100" });
+      expect(res4.status).toBe(400);
+      expect(res4.body.error).toBe("invalid_request");
+    });
+
+    it("rejects when the pair is unregistered", async () => {
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDT", dest_asset: "EURC", target_amount: "100" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("pair_not_registered");
+      expect(res.body.source_asset).toBe("USDT");
+      expect(res.body.dest_asset).toBe("EURC");
+    });
+
+    it("handles extremely large 39-digit BigInt target amounts", async () => {
+      const largeTarget = "9".repeat(39);
+      const res = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: largeTarget });
+      expect(res.status).toBe(200);
+      expect(res.body.target_amount).toBe(largeTarget);
+      expect(res.body.required_input).toBe(largeTarget);
+    });
+
+    it("bypass registration check when ALLOW_UNREGISTERED_QUOTES=true", async () => {
+      process.env.ALLOW_UNREGISTERED_QUOTES = "true";
+      try {
+        const res = await request(app)
+          .get("/api/v1/quote/reverse")
+          .query({ source_asset: "USDT", dest_asset: "EURC", target_amount: "100" });
+        expect(res.status).toBe(200);
+        expect(res.body.required_input).toBe("100");
+      } finally {
+        delete process.env.ALLOW_UNREGISTERED_QUOTES;
+      }
+    });
+  });
 });

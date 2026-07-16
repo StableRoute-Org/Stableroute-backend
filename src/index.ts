@@ -706,7 +706,8 @@ const parseCursor = (raw: unknown): number | "bad" | undefined => {
   if (raw === undefined) return undefined;
   if (typeof raw !== "string" || raw.trim() === "") return "bad";
   try {
-    const decoded = Buffer.from(raw, "base64").toString();
+    const decoded = Buffer.from(raw, "base64").toString("utf8");
+    if (!/^(0|[1-9][0-9]{0,14})$/.test(decoded)) return "bad";
     const n = Number(decoded);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
     return n;

@@ -398,6 +398,49 @@ error handler maps the body-parser parse failure (`entity.parse.failed` /
 never echoed. The `413 payload_too_large` mapping still takes precedence, and
 genuinely unexpected errors continue to fall through to `500 internal_error`.
 
+### Content-Type requirement for write requests
+
+`POST`, `PATCH`, and `PUT` requests that include a body **must** declare:
+
+```
+Content-Type: application/json
+```
+
+The `charset` parameter is allowed (e.g. `application/json; charset=utf-8`).
+Any other media type — or an absent `Content-Type` on a non-empty body — is
+rejected before the route handler runs:
+
+```
+HTTP/1.1 415 Unsupported Media Type
+Content-Type: application/json
+
+{
+  "error": "unsupported_media_type",
+  "message": "Content-Type must be application/json",
+  "requestId": "..."
+}
+```
+
+`curl` example of a correctly formed request:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/pairs \
+  -H "Content-Type: application/json" \
+  -d '{"source":"USDC","destination":"EURC"}'
+```
+
+**Exempted requests:**
+- `GET`, `HEAD`, `DELETE`, and `OPTIONS` are never checked (they carry no
+  request body by convention).
+- Body-bearing methods with no `Content-Length` *and* no `Transfer-Encoding`
+  are also passed through, since there is no payload to validate.
+
+**Security invariant:** The `Content-Type: application/json` declaration does
+not bypass the 100 kB body-size limit. `express.json()` runs *before* the
+content-type guard, so an oversized body is rejected with `413 payload_too_large`
+before the guard even fires — a forged content-type header cannot smuggle raw
+bytes into a route handler.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

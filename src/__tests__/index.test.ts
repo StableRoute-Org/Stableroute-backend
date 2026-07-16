@@ -1,6 +1,6 @@
 import request from "supertest";
 import { type Request, type Response } from "express";
-import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope } from "../index";
+import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
 import { resetStores, apiKeyStore } from "../stores";
 
 const expectCanonicalError = (
@@ -2322,6 +2322,366 @@ describe("StableRoute Backend", () => {
         const resReplay1 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-1").send(body);
         expect(resReplay1.status).toBe(201);
         expect(resReplay1.body.key).not.toBe(res1.body.key);
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Content-Type guard
+  // ---------------------------------------------------------------------------
+  describe("Content-Type guard (requireJsonContentType)", () => {
+    // --- Integration tests via supertest ---
+
+    it("returns 415 unsupported_media_type when POST is sent as text/plain", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "text/plain")
+        .set("X-Request-Id", "ct-415-plain")
+        .send('{"source":"USDC","destination":"EURC"}');
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.message).toMatch(/application\/json/);
+      expect(res.body.requestId).toBe("ct-415-plain");
+    });
+
+    it("returns 415 when POST is sent as application/x-www-form-urlencoded", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .set("X-Request-Id", "ct-415-form")
+        .send("source=USDC&destination=EURC");
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.requestId).toBe("ct-415-form");
+    });
+
+    it("returns 415 when POST body is present but Content-Type header is omitted entirely", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("X-Request-Id", "ct-415-missing")
+        .set("Content-Type", "")
+        // Use a raw buffer so supertest does not inject a content-type
+        .send(Buffer.from('{"source":"USDC","destination":"EURC"}'));
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.requestId).toBe("ct-415-missing");
+    });
+
+    it("accepts POST with Content-Type: application/json and processes normally", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .set("X-Request-Id", "ct-200-json")
+        .send({ source: "CTJSN", destination: "EURC" });
+      // 200 (already registered) or 201 (new) — both are success
+      expect(res.status === 200 || res.status === 201).toBe(true);
+    });
+
+    it("accepts POST with application/json; charset=utf-8", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json; charset=utf-8")
+        .set("X-Request-Id", "ct-200-charset")
+        .send({ source: "CTCHR", destination: "EURC" });
+      expect(res.status === 200 || res.status === 201).toBe(true);
+    });
+
+    it("passes through an empty-body POST without requiring Content-Type", async () => {
+      // A POST with no body (no Content-Length, no Transfer-Encoding) must
+      // bypass the content-type check entirely and reach the route handler.
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("X-Request-Id", "ct-empty-post")
+        // Explicitly clear content-type so no default is sent
+        .set("Content-Type", "");
+      // The route handler will return 400 invalid_request (missing fields),
+      // not 415, proving the guard did not block an empty body.
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("passes through a DELETE request without requiring Content-Type (no body method)", async () => {
+      // Register a pair first so the DELETE has a real target
+      await request(app).post("/api/v1/pairs").send({ source: "CTDEL", destination: "EURC" });
+      const res = await request(app)
+        .delete("/api/v1/pairs/CTDEL/EURC")
+        .set("X-Request-Id", "ct-delete-ok");
+      // 204 No Content — DELETE was not blocked by the guard
+      expect(res.status).toBe(204);
+    });
+
+    it("passes through GET, HEAD, and OPTIONS without requiring Content-Type", async () => {
+      const getRes = await request(app).get("/health");
+      expect(getRes.status).toBe(200);
+
+      const headRes = await request(app).head("/health");
+      expect(headRes.status).toBe(200);
+
+      const optRes = await request(app).options("/health");
+      // OPTIONS may return 204 (cors preflight) or 200
+      expect(optRes.status === 200 || optRes.status === 204).toBe(true);
+    });
+
+    it("415 error body carries the requestId from X-Request-Id correlation header", async () => {
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "text/xml")
+        .set("X-Request-Id", "ct-corr-id-xyz")
+        .send("<pair/>");
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.requestId).toBe("ct-corr-id-xyz");
+      expect(typeof res.body.message).toBe("string");
+      expect(res.body.message.length).toBeGreaterThan(0);
+    });
+
+    it(
+      "forged Content-Type: application/json with oversized body is blocked at 413 (body-size limit)",
+      async () => {
+        // This asserts the security invariant: a caller cannot use
+        // Content-Type: application/json to bypass the 100 kB body-size limit
+        // and push raw bytes into a handler. The body parser rejects the
+        // oversized body before requireJsonContentType even runs.
+        const res = await request(app)
+          .post("/api/v1/pairs")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "ct-413-forged")
+          .send({ payload: "x".repeat(110_000) });
+        expect(res.status).toBe(413);
+        expect(res.body.error).toBe("payload_too_large");
+        expect(res.body.requestId).toBe("ct-413-forged");
+      }
+    );
+
+    it("returns 415 for PATCH with wrong content-type", async () => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .set("Content-Type", "application/xml")
+        .set("X-Request-Id", "ct-415-patch")
+        .send("<config/>");
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.requestId).toBe("ct-415-patch");
+    });
+
+    it("returns 415 for PUT with wrong content-type", async () => {
+      // PUT is not a defined route but the guard fires before the 404 handler
+      const res = await request(app)
+        .put("/api/v1/pairs")
+        .set("Content-Type", "text/csv")
+        .set("X-Request-Id", "ct-415-put")
+        .send("source,destination\nUSDC,EURC");
+      expect(res.status).toBe(415);
+      expect(res.body.error).toBe("unsupported_media_type");
+      expect(res.body.requestId).toBe("ct-415-put");
+    });
+
+    // --- Unit tests directly exercising the exported middleware ---
+
+    describe("requireJsonContentType unit tests", () => {
+      const makeReq = (
+        overrides: Partial<{
+          method: string;
+          contentType: string | undefined;
+          contentLength: string | undefined;
+          transferEncoding: string | undefined;
+        }> = {}
+      ) =>
+        ({
+          method: overrides.method ?? "POST",
+          headers: {
+            ...(overrides.contentType !== undefined
+              ? { "content-type": overrides.contentType }
+              : {}),
+            ...(overrides.contentLength !== undefined
+              ? { "content-length": overrides.contentLength }
+              : {}),
+            ...(overrides.transferEncoding !== undefined
+              ? { "transfer-encoding": overrides.transferEncoding }
+              : {}),
+          },
+          header: (name: string) =>
+            (overrides as Record<string, string | undefined>)[name],
+        } as unknown as Request);
+
+      const makeRes = () => {
+        const res = {
+          status: jest.fn().mockReturnThis(),
+          json: jest.fn().mockReturnThis(),
+          setHeader: jest.fn(),
+        } as unknown as Response;
+        return res;
+      };
+
+      it("calls next() for GET method regardless of headers", () => {
+        const req = makeReq({
+          method: "GET",
+          contentType: "text/plain",
+          contentLength: "100",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("calls next() for HEAD method", () => {
+        const req = makeReq({ method: "HEAD", contentLength: "50" });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("calls next() for DELETE method", () => {
+        const req = makeReq({ method: "DELETE", contentLength: "50" });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("calls next() for OPTIONS method", () => {
+        const req = makeReq({ method: "OPTIONS", contentLength: "50" });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("calls next() for POST with no body indicators (no Content-Length, no Transfer-Encoding)", () => {
+        const req = makeReq({ method: "POST" }); // no contentLength, no transferEncoding
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("calls next() for POST with Content-Length: 0 (treated as no body)", () => {
+        const req = makeReq({ method: "POST", contentLength: "0" });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("calls next() for POST with application/json content-type and body", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "application/json",
+          contentLength: "42",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("calls next() for POST with application/json; charset=utf-8", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "application/json; charset=utf-8",
+          contentLength: "42",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("calls next() for POST with APPLICATION/JSON (uppercase — case-insensitive check)", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "APPLICATION/JSON",
+          contentLength: "42",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("sends 415 for POST with text/plain and non-zero Content-Length", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "text/plain",
+          contentLength: "10",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(415);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ error: "unsupported_media_type" })
+        );
+      });
+
+      it("sends 415 for POST with missing Content-Type but non-zero Content-Length", () => {
+        // No content-type header at all — headers object has no key
+        const req = makeReq({ method: "POST", contentLength: "10" });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(415);
+      });
+
+      it("sends 415 for POST with application/x-www-form-urlencoded and Transfer-Encoding: chunked", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "application/x-www-form-urlencoded",
+          transferEncoding: "chunked",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(415);
+      });
+
+      it("calls next() for POST with Transfer-Encoding: chunked and application/json", () => {
+        const req = makeReq({
+          method: "POST",
+          contentType: "application/json",
+          transferEncoding: "chunked",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it("sends 415 for PATCH with wrong content-type and body", () => {
+        const req = makeReq({
+          method: "PATCH",
+          contentType: "application/xml",
+          contentLength: "20",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(415);
+      });
+
+      it("sends 415 for PUT with wrong content-type and body", () => {
+        const req = makeReq({
+          method: "PUT",
+          contentType: "text/csv",
+          contentLength: "5",
+        });
+        const res = makeRes();
+        const next = jest.fn();
+        requireJsonContentType(req, res, next);
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(415);
       });
     });
   });

@@ -447,41 +447,30 @@ Response:
 
 ### `GET /api/v1/quote/reverse`
 
-Reverse quote: given a desired output amount, compute the gross input needed
-so the recipient receives exactly `output` base units after fees are deducted.
+Reverse quote: given a desired target output amount, compute the required gross input needed.
 
 - **Query:** `source_asset` (1–12 chars), `dest_asset` (1–12 chars),
-  `output` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
+  `target_amount` (positive integer string, no leading zero, `/^[1-9][0-9]{0,38}$/`).
 - **Response 200:**
   ```json
   {
     "source_asset": "USDC",
     "dest_asset": "EURC",
-    "output": "9970",
-    "requiredInput": "10000",
-    "feeAmount": "30",
-    "feeBps": 30,
+    "target_amount": "10000",
+    "required_input": "10000",
+    "estimated_rate": "1.0",
     "route": ["USDC", "EURC"]
   }
   ```
 - **Errors:** `400 invalid_request` if any param is missing, if assets are invalid
-  or equal, or if `output` is not a valid positive integer string.
+  or equal, or if `target_amount` is not a valid positive integer string.
 
-#### Reverse fee formula
+#### Reverse formula
 
-The forward fee formula is `fee = floor(gross × feeBps / 10000)`, so
-`output = gross - fee`. Inverting:
-
-```
-requiredInput = ceil(output × 10000 / (10000 − feeBps))
-feeAmount     = requiredInput − output
-```
-
-Ceiling division ensures the recipient always receives at least `output` base
-units. A `feeBps` of `10000` (100%) is rejected with a `RangeError`.
+Currently, the exact-output quote solver (`solveInput`) implements a 1:1 identity mapping (input equals target), but is structured so a fee/rate can be layered in later.
 
 ```bash
-curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&output=9970'
+curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&target_amount=10000'
 ```
 
 ### `POST /api/v1/quote/bulk`
@@ -908,10 +897,10 @@ curl -X POST http://localhost:3001/api/v1/webhooks \
   -d '{"url":"https://example.com/hook","events":["pair.registered"]}'
 ```
 
-Get a reverse quote (what input is needed to deliver exactly 9970 output units):
+Get a reverse quote (what input is needed to deliver exactly 10000 target output units):
 
 ```bash
-curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&output=9970'
+curl 'http://localhost:3001/api/v1/quote/reverse?source_asset=USDC&dest_asset=EURC&target_amount=10000'
 ```
 
 Bulk register pairs:

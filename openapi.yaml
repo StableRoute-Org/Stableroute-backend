@@ -847,10 +847,10 @@ paths:
           required: true
           schema:
             $ref: "#/components/schemas/AssetCode"
-        - name: output
+        - name: target_amount
           in: query
           required: true
-          description: Target delivered amount in base units.
+          description: Target delivered amount in base units (positive integer string).
           schema:
             type: string
             pattern: "^[1-9][0-9]{0,38}$"
@@ -864,24 +864,21 @@ paths:
                 required:
                   - source_asset
                   - dest_asset
-                  - output
-                  - requiredInput
-                  - feeAmount
-                  - feeBps
+                  - target_amount
+                  - required_input
+                  - estimated_rate
                   - route
                 properties:
                   source_asset:
                     $ref: "#/components/schemas/AssetCode"
                   dest_asset:
                     $ref: "#/components/schemas/AssetCode"
-                  output:
+                  target_amount:
                     type: string
-                  requiredInput:
+                  required_input:
                     type: string
-                  feeAmount:
+                  estimated_rate:
                     type: string
-                  feeBps:
-                    type: integer
                   route:
                     type: array
                     items:

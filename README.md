@@ -53,6 +53,13 @@ If the collection is exhausted (i.e. there are no more items to fetch), `nextCur
 
 If an invalid or malformed cursor is supplied, the endpoints will reject the request with `400 invalid_request` and include the canonical `requestId`.
 
+### API-key expiry and last-used tracking
+
+- **Creation Expiry:** `POST /api/v1/api-keys` accepts an optional `expiresInSeconds` parameter (positive integer, max 31,536,000 / 1 year) in the request body. If specified, the server computes and stores an absolute epoch-ms expiration timestamp `expiresAt`. The response returns `expiresAt` along with the raw key and label.
+- **Validity check:** Any expired key will be treated as invalid by the auth middleware (`requireScope`), returning a `401 unauthorized` error.
+- **Last-used tracking:** When a key is successfully authenticated, its `lastUsedAt` timestamp is updated in the map.
+- **List representation:** `GET /api/v1/api-keys` includes `expiresAt` and `lastUsedAt` (if present) for each key, helping operators clean up stale keys and manage key rotation schedules. The raw key is never exposed.
+
 ### API-key rotation
 
 `POST /api/v1/api-keys/:prefix/rotate` rotates a key without downtime. It

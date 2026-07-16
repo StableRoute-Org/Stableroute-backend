@@ -858,7 +858,7 @@ export const isKeyValid = (record: ApiKeyRecord): boolean => {
  * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
  * @returns An Express request handler enforcing the scope.
  */
-const requireScope = (scope: string) =>
+export const requireScope = (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);

@@ -1,6 +1,7 @@
 import request from "supertest";
-import app, { isValidRequestId, clearIdempotencyCache } from "../index";
-import { resetStores } from "../stores";
+import { type Request, type Response } from "express";
+import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope } from "../index";
+import { resetStores, apiKeyStore } from "../stores";
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
@@ -293,6 +294,182 @@ describe("StableRoute Backend", () => {
     expect(list.body.items.some((k: { prefix: string }) => k.prefix === prefix)).toBe(true);
     const del = await request(app).delete(`/api/v1/api-keys/${prefix}`);
     expect(del.status).toBe(204);
+  });
+
+  describe("API Key Expiry and Last-Used Tracking", () => {
+    beforeEach(() => {
+      resetStores();
+    });
+
+    it("creates a key with a valid expiresInSeconds and returns expiresAt in the response", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "expires-soon", expiresInSeconds: 60 });
+      expect(res.status).toBe(201);
+      expect(res.body.expiresAt).toBeDefined();
+      expect(typeof res.body.expiresAt).toBe("number");
+      expect(res.body.expiresAt).toBeGreaterThan(Date.now());
+    });
+
+    it("rejects non-positive expiresInSeconds or invalid types", async () => {
+      const cases = [
+        { expiresInSeconds: 0 },
+        { expiresInSeconds: -10 },
+        { expiresInSeconds: 31_536_001 }, // above 31536000 limit
+        { expiresInSeconds: "60" }, // wrong type
+        { expiresInSeconds: 1.5 }, // non-integer
+      ];
+      for (const payload of cases) {
+        const res = await request(app)
+          .post("/api/v1/api-keys")
+          .send({ label: "invalid-expiry", ...payload });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      }
+    });
+
+    it("surfaces expiresAt and lastUsedAt in the GET list endpoint (never raw key)", async () => {
+      const label = "list-expiry-key";
+      const createRes = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label, expiresInSeconds: 3600 });
+      expect(createRes.status).toBe(201);
+
+      const prefix = createRes.body.key.slice(0, 8);
+      const listRes = await request(app).get("/api/v1/api-keys");
+      expect(listRes.status).toBe(200);
+
+      const keyRecord = listRes.body.items.find((item: { prefix: string }) => item.prefix === prefix);
+      expect(keyRecord).toBeDefined();
+      expect(keyRecord.expiresAt).toBe(createRes.body.expiresAt);
+      expect(keyRecord).not.toHaveProperty("key");
+      expect(JSON.stringify(listRes.body)).not.toContain(createRes.body.key);
+    });
+
+    it("asserts that isKeyValid flips after expiry", async () => {
+      // Create a key with 10ms expiry
+      const record = {
+        label: "test-expiry",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 10, // 10ms in the future
+      };
+      expect(isKeyValid(record)).toBe(true);
+
+      // Wait 15ms so it expires
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(isKeyValid(record)).toBe(false);
+    });
+
+    it("requireScope middleware rejects expired keys with 401", () => {
+      const rawKey = "srk_test_auth_expired";
+      const record = {
+        label: "test-auth-expired",
+        createdAt: Date.now(),
+        expiresAt: Date.now() - 1000, // expired 1s ago
+        scopes: ["pairs:write"],
+      };
+      apiKeyStore.set(rawKey, record);
+
+      const middleware = requireScope("pairs:write");
+      
+      const req = {
+        header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
+      } as unknown as Request;
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      } as unknown as Response;
+      const next = jest.fn();
+
+      middleware(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "unauthorized",
+          message: "a valid API key is required",
+        })
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it("requireScope middleware accepts valid keys with required scope and updates lastUsedAt", () => {
+      const rawKey = "srk_test_auth_valid";
+      const record = {
+        label: "test-auth-valid",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 3600 * 1000,
+        scopes: ["pairs:write"],
+      };
+      apiKeyStore.set(rawKey, record);
+
+      const middleware = requireScope("pairs:write");
+      
+      const req = {
+        header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
+      } as unknown as Request;
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      } as unknown as Response;
+      const next = jest.fn();
+
+      middleware(req, res, next);
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+      
+      const updatedRecord = apiKeyStore.get(rawKey);
+      expect(updatedRecord!.lastUsedAt).toBeDefined();
+      expect(updatedRecord!.lastUsedAt).toBeGreaterThan(0);
+    });
+
+    it("asserts that isKeyValid handles rotated keys and grace period correctly", async () => {
+      // 1. Valid grace period
+      const record = {
+        label: "test-rotation-grace",
+        createdAt: Date.now() - 2000,
+        rotatedAt: Date.now() - 1000,
+        graceExpiresAt: Date.now() + 10, // expires in 10ms
+      };
+      expect(isKeyValid(record)).toBe(true);
+
+      // 2. Expired grace period
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(isKeyValid(record)).toBe(false);
+    });
+
+    it("requireScope middleware rejects keys that lack the required scope", () => {
+      const rawKey = "srk_test_auth_no_scope";
+      const record = {
+        label: "test-auth-no-scope",
+        createdAt: Date.now(),
+        scopes: [], // empty scope
+      };
+      apiKeyStore.set(rawKey, record);
+
+      const middleware = requireScope("pairs:write");
+      
+      const req = {
+        header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
+      } as unknown as Request;
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      } as unknown as Response;
+      const next = jest.fn();
+
+      middleware(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "forbidden",
+          message: "this key is missing the required scope: pairs:write",
+        })
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
   });
 
   describe("GET /api/v1/health/deep — readiness probe", () => {

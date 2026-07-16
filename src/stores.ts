@@ -264,6 +264,12 @@ export const setReadOnly = (value: boolean): void => {
   readOnly = value;
 };
 
+/** Get the current paused state. */
+export const isPaused = (): boolean => paused;
+
+/** Get the current read-only state. */
+export const isReadOnly = (): boolean => readOnly;
+
 // ─── Reset helper (test-only) ────────────────────────────────────────────────
 
 /**

@@ -2,6 +2,14 @@ import request from "supertest";
 import app from "../index";
 import { setPaused, setReadOnly } from "../stores";
 
+beforeAll(() => {
+  process.env.ALLOW_UNREGISTERED_QUOTES = "true";
+});
+
+afterAll(() => {
+  delete process.env.ALLOW_UNREGISTERED_QUOTES;
+});
+
 afterEach(() => {
   setReadOnly(false);
   setPaused(false);

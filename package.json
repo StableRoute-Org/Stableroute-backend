@@ -14,11 +14,17 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["stellar", "routing", "stablecoin", "payments"],
+  "keywords": [
+    "stellar",
+    "routing",
+    "stablecoin",
+    "payments"
+  ],
   "license": "MIT",
   "dependencies": {
-    "express": "^4.21.0",
     "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "helmet": "^8.3.0",
     "pino": "^9.6.0"
   },
   "devDependencies": {

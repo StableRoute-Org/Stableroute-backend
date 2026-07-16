@@ -2,12 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
 import { resolveClientIp } from "./utils/clientIp";
 import {
-  paused,
+  isPaused,
+  isReadOnly,
   pairRegistry,
   pairMeta,
   apiKeyStore,
@@ -15,7 +17,6 @@ import {
   eventLog,
   rateBuckets,
   config,
-  readOnly,
   setPaused,
   setReadOnly,
   pairKey,
@@ -286,7 +287,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     return next();
   }
   const hasBody =
-    req.headers["content-length"] !== undefined ||
+    (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0") ||
     req.headers["transfer-encoding"] !== undefined;
   if (!hasBody) return next();
   const contentType = (req.headers["content-type"] ?? "").toLowerCase();
@@ -303,7 +304,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Pause guard: refuses non-idempotent methods with 503 except
 // /admin/unpause, so an operator can always recover.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!paused) return next();
+  if (!isPaused()) return next();
   const m = req.method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
   if (req.path === "/api/v1/admin/unpause") return next();
@@ -333,7 +334,7 @@ const QUOTE_PATHS = new Set([
   "/api/v1/quote/bulk",
 ]);
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!readOnly) return next();
+  if (!isReadOnly()) return next();
   const m = req.method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
   if (QUOTE_PATHS.has(req.path)) return next();
@@ -461,13 +462,26 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  next();
-});
+app.use(
+  helmet({
+    // This API only returns JSON/text, so the tightest useful CSP is no ambient sources.
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        "default-src": ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: { policy: "require-corp" },
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    referrerPolicy: { policy: "no-referrer" },
+    strictTransportSecurity: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+    },
+    xFrameOptions: { action: "deny" },
+  })
+);
 
 /**
  * Paths that are exempt from the JSON content-negotiation guard.
@@ -588,7 +602,7 @@ app.get("/api/v1/health/deep", (req: Request, res: Response) => {
   // Promise.race with a timeout or pass an AbortSignal.
   const checks = runHealthChecks();
   const degraded = checks.some((c) => c.status === "fail");
-  const status = paused ? "paused" : degraded ? "degraded" : "ok";
+  const status = isPaused() ? "paused" : degraded ? "degraded" : "ok";
 
   const body = {
     status,
@@ -642,20 +656,20 @@ app.get("/api/v1/version", (_req: Request, res: Response) => {
 app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
   setPaused(true);
   recordEvent("admin.paused", {});
-  res.json({ paused });
+  res.json({ paused: isPaused() });
 });
 app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
   setPaused(false);
   recordEvent("admin.unpaused", {});
-  res.json({ paused });
+  res.json({ paused: isPaused() });
 });
 app.post("/api/v1/admin/read-only", (_req: Request, res: Response) => {
   setReadOnly(true);
-  res.json({ readOnly });
+  res.json({ readOnly: isReadOnly() });
 });
 app.post("/api/v1/admin/read-write", (_req: Request, res: Response) => {
   setReadOnly(false);
-  res.json({ readOnly });
+  res.json({ readOnly: isReadOnly() });
 });
 
 /**
@@ -769,7 +783,7 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   }
   const offset = cursorResult ?? 0;
 
-  let items = eventLog.filter((e) => e.ts >= since);
+  let items = eventLog.filter((e) => e.ts >= since).reverse();
   if (typeParam !== undefined) {
     items = items.filter((e) => e.type === (typeParam as EventType));
   }
@@ -1006,7 +1020,7 @@ app.post("/api/v1/webhooks", (req: Request, res: Response) => {
     return;
   }
   if (!isSafeWebhookUrl(url)) {
-    sendError(res, req, 400, "invalid_request", "url must not target private or loopback networks");
+    sendError(res, req, 400, "invalid_request", "url host must be public");
     return;
   }
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
@@ -1294,7 +1308,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "liquidity",
     field: "liquidity",
     bodyKey: "liquidity",
-    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
     errorMessage: "liquidity must be a non-negative integer string",
     crossCheck: checkLiquidityAgainstMin,
   },
@@ -1310,7 +1324,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "min",
     field: "minAmount",
     bodyKey: "minAmount",
-    validate: (v) => typeof v === "string" && /^[0-9]{1,39}$/.test(v),
+    validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
     crossCheck: (value, meta) => checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
   },
@@ -1421,7 +1435,7 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
-  res.json({ paused, readOnly });
+  res.json({ paused: isPaused(), readOnly: isReadOnly() });
 });
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
@@ -1516,7 +1530,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
     `stableroute_pairs_total ${pairRegistry.size}`,
     "# HELP stableroute_paused 1 if paused, 0 otherwise.",
     "# TYPE stableroute_paused gauge",
-    `stableroute_paused ${paused ? 1 : 0}`,
+    `stableroute_paused ${isPaused() ? 1 : 0}`,
     "# HELP stableroute_events_total Total number of events in the audit log.",
     "# TYPE stableroute_events_total gauge",
     `stableroute_events_total ${eventLog.length}`,
@@ -1561,7 +1575,7 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
   const { pairsWithFee, distinctAssets } = aggregatePairStats();
   res.json({
     totalPairs: pairRegistry.size,
-    paused,
+    paused: isPaused(),
     totalApiKeys: apiKeyStore.size,
     totalWebhooks: webhookStore.size,
     totalEvents: eventLog.length,

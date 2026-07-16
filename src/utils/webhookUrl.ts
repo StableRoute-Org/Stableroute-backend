@@ -7,7 +7,10 @@ import { isIP } from "node:net";
 export const isSafeWebhookUrl = (urlString: string): boolean => {
   try {
     const url = new URL(urlString);
-    const host = url.hostname.toLowerCase();
+    let host = url.hostname.toLowerCase();
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host = host.slice(1, -1);
+    }
 
     if (host === "localhost") return false;
 

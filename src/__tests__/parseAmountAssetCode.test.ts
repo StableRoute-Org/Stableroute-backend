@@ -24,29 +24,29 @@ describe("parseAmount boundary behaviour (via quote endpoint)", () => {
 
   it("rejects zero amount", async () => {
     const res = await request(app)
-      .post("/api/v1/quote")
-      .send({ source_asset: "USD", dest_asset: "EUR", amount: "0" });
+      .get("/api/v1/quote")
+      .query({ source_asset: "USD", dest_asset: "EUR", amount: "0" });
     expect(res.status).toBe(400);
   });
 
   it("rejects negative amount", async () => {
     const res = await request(app)
-      .post("/api/v1/quote")
-      .send({ source_asset: "USD", dest_asset: "EUR", amount: "-100" });
+      .get("/api/v1/quote")
+      .query({ source_asset: "USD", dest_asset: "EUR", amount: "-100" });
     expect(res.status).toBe(400);
   });
 
   it("rejects non-numeric amount", async () => {
     const res = await request(app)
-      .post("/api/v1/quote")
-      .send({ source_asset: "USD", dest_asset: "EUR", amount: "abc" });
+      .get("/api/v1/quote")
+      .query({ source_asset: "USD", dest_asset: "EUR", amount: "abc" });
     expect(res.status).toBe(400);
   });
 
   it("accepts a valid positive integer amount", async () => {
     const res = await request(app)
-      .post("/api/v1/quote")
-      .send({ source_asset: "USD", dest_asset: "EUR", amount: "1000000" });
+      .get("/api/v1/quote")
+      .query({ source_asset: "USD", dest_asset: "EUR", amount: "1000000" });
     expect([200, 400]).toContain(res.status);
   });
 });

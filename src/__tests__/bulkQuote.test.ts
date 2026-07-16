@@ -6,8 +6,13 @@ describe("POST /api/v1/quote/bulk", () => {
   let originalBulkMax: number;
 
   beforeAll(async () => {
+    process.env.ALLOW_UNREGISTERED_QUOTES = "true";
     const cfg = await request(app).get("/api/v1/config");
     originalBulkMax = cfg.body.config.bulkMaxItems;
+  });
+
+  afterAll(() => {
+    delete process.env.ALLOW_UNREGISTERED_QUOTES;
   });
 
   afterEach(async () => {

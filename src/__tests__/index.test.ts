@@ -541,11 +541,11 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .get("/api/v1/quote")
         .set("X-Request-Id", "unreg-pair-test")
-        .query({ source_asset: "NOTREGISTERED", dest_asset: "PAIR", amount: "100" });
+        .query({ source_asset: "NOTREG", dest_asset: "PAIR", amount: "100" });
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("pair_not_registered");
-      expect(res.body.message).toMatch(/NOTREGISTERED.*PAIR/);
-      expect(res.body.source_asset).toBe("NOTREGISTERED");
+      expect(res.body.message).toMatch(/NOTREG.*PAIR/);
+      expect(res.body.source_asset).toBe("NOTREG");
       expect(res.body.dest_asset).toBe("PAIR");
       expect(res.body.requestId).toBe("unreg-pair-test");
     });
@@ -1491,11 +1491,11 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .get("/api/v1/quote")
         .set("X-Request-Id", "unreg-pair-test")
-        .query({ source_asset: "NOTREGISTERED", dest_asset: "PAIR", amount: "100" });
+        .query({ source_asset: "NOTREG", dest_asset: "PAIR", amount: "100" });
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("pair_not_registered");
-      expect(res.body.message).toMatch(/NOTREGISTERED.*PAIR/);
-      expect(res.body.source_asset).toBe("NOTREGISTERED");
+      expect(res.body.message).toMatch(/NOTREG.*PAIR/);
+      expect(res.body.source_asset).toBe("NOTREG");
       expect(res.body.dest_asset).toBe("PAIR");
       expect(res.body.requestId).toBe("unreg-pair-test");
     });

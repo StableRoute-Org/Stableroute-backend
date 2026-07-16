@@ -28,12 +28,12 @@ describe("pair read and unregister — 204 and 404 paths", () => {
 
   describe("GET /api/v1/pairs/:source/:destination", () => {
     it("returns 200 with registered:true for a registered pair", async () => {
-      await register("RD_SRC", "RD_DST");
-      const res = await readPair("RD_SRC", "RD_DST");
+      await register("RDSRC", "RDDST");
+      const res = await readPair("RDSRC", "RDDST");
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
-        source: "RD_SRC",
-        destination: "RD_DST",
+        source: "RDSRC",
+        destination: "RDDST",
         registered: true,
       });
     });
@@ -54,9 +54,9 @@ describe("pair read and unregister — 204 and 404 paths", () => {
     });
 
     it("returns 404 after the pair has been deleted", async () => {
-      await register("DEL_THEN_READ", "SRC");
-      await deletePair("DEL_THEN_READ", "SRC");
-      const res = await readPair("DEL_THEN_READ", "SRC");
+      await register("DELREAD", "SRC");
+      await deletePair("DELREAD", "SRC");
+      const res = await readPair("DELREAD", "SRC");
       expect(res.status).toBe(404);
     });
   });
@@ -65,21 +65,21 @@ describe("pair read and unregister — 204 and 404 paths", () => {
 
   describe("DELETE /api/v1/pairs/:source/:destination", () => {
     it("returns 204 when deleting a registered pair", async () => {
-      await register("DEL_SRC", "DEL_DST");
-      const res = await deletePair("DEL_SRC", "DEL_DST");
+      await register("DELSRC", "DELDST");
+      const res = await deletePair("DELSRC", "DELDST");
       expect(res.status).toBe(204);
       expect(res.text).toBe("");
     });
 
     it("removes the pair from GET /api/v1/pairs after deletion", async () => {
-      await register("REM_SRC", "REM_DST");
-      await deletePair("REM_SRC", "REM_DST");
+      await register("REMSRC", "REMDST");
+      await deletePair("REMSRC", "REMDST");
       const list = await listPairs();
       expect(list.status).toBe(200);
       expect(
         list.body.pairs.some(
           (p: { source: string; destination: string }) =>
-            p.source === "REM_SRC" && p.destination === "REM_DST"
+            p.source === "REMSRC" && p.destination === "REMDST"
         )
       ).toBe(false);
     });
@@ -93,10 +93,10 @@ describe("pair read and unregister — 204 and 404 paths", () => {
     });
 
     it("second delete of the same pair returns 404 (idempotent-safe)", async () => {
-      await register("IDEM_DEL", "PAIR");
-      const first = await deletePair("IDEM_DEL", "PAIR");
+      await register("IDEMDEL", "PAIR");
+      const first = await deletePair("IDEMDEL", "PAIR");
       expect(first.status).toBe(204);
-      const second = await deletePair("IDEM_DEL", "PAIR");
+      const second = await deletePair("IDEMDEL", "PAIR");
       expect(second.status).toBe(404);
     });
 
@@ -112,17 +112,17 @@ describe("pair read and unregister — 204 and 404 paths", () => {
 
   describe("pair.unregistered event", () => {
     it("records a pair.unregistered event after successful DELETE", async () => {
-      await register("EVT_SRC", "EVT_DST");
+      await register("EVTSRC", "EVTDST");
       const beforeTs = Date.now();
-      await deletePair("EVT_SRC", "EVT_DST");
+      await deletePair("EVTSRC", "EVTDST");
 
       const events = await listEvents();
       expect(events.status).toBe(200);
       const unregistered = events.body.items.filter(
         (e: { type: string; payload: { source: string; destination: string }; ts: number }) =>
           e.type === "pair.unregistered" &&
-          e.payload.source === "EVT_SRC" &&
-          e.payload.destination === "EVT_DST" &&
+          e.payload.source === "EVTSRC" &&
+          e.payload.destination === "EVTDST" &&
           e.ts >= beforeTs
       );
       expect(unregistered.length).toBeGreaterThanOrEqual(1);

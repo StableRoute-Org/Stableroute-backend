@@ -130,6 +130,70 @@ table below lists every variable the code reads — there are no others.
 | `ALLOW_UNREGISTERED_QUOTES` | Set to `"true"` to allow quoting of unregistered asset pairs. By default, quotes for unregistered pairs are rejected with `404 pair_not_registered`. | `false` | `true` |
 | `IDEMPOTENCY_TTL_MS` | TTL in milliseconds for the idempotency cache entries. | `86400000` (24h) | `3600000` (1h) |
 | `IDEMPOTENCY_CACHE_MAX` | Maximum number of entries kept in the idempotency cache. | `10000` | `5000` |
+| `PERSIST_PATH`       | File path for the JSON persistence snapshot. When set, hydrates stores on startup and saves them on mutations. Defaults to in-memory only. | _(unset)_ | `./snapshot.json` |
+
+### Store persistence and snapshot format
+
+When the `PERSIST_PATH` environment variable is set, the application hydrates its stores on startup and automatically saves a snapshot to that path whenever a mutation is made to `pairRegistry`, `pairMeta`, `apiKeyStore`, `webhookStore`, or `eventLog` (debounced by 100ms).
+
+#### Atomic Writes & Security
+- **Atomic Writes:** To prevent corruption (e.g., if the process crashes mid-write), the snapshot is written to a temporary file (`<PERSIST_PATH>.tmp`) and then atomically renamed to the final destination using `fs.renameSync`.
+- **Restricted Permissions:** The snapshot file is created with restricted read/write permissions (`0o600` / owner-only) to secure sensitive credentials such as API keys.
+
+#### Snapshot JSON Format
+The snapshot file has the following JSON structure:
+```json
+{
+  "pairRegistry": [
+    "USDC::EURC"
+  ],
+  "pairMeta": [
+    [
+      "USDC::EURC",
+      {
+        "feeBps": 10,
+        "minAmount": "1",
+        "maxAmount": "100",
+        "liquidity": "1000",
+        "enabled": true,
+        "rate": "1.08"
+      }
+    ]
+  ],
+  "apiKeyStore": [
+    [
+      "srk_examplekey",
+      {
+        "label": "My Key",
+        "createdAt": 1710000000000,
+        "scopes": ["write"],
+        "expiresAt": 1720000000000
+      }
+    ]
+  ],
+  "webhookStore": [
+    [
+      "wh_example",
+      {
+        "url": "https://example.com/webhook",
+        "events": ["pair.registered"],
+        "createdAt": 1710000000000
+      }
+    ]
+  ],
+  "eventLog": [
+    {
+      "id": "893c5d63-5f09-4e89-9a7c-f1261d7b1b36",
+      "ts": 1710000000000,
+      "type": "pair.registered",
+      "payload": {
+        "source": "USDC",
+        "destination": "EURC"
+      }
+    }
+  ]
+}
+```
 
 ### Build/version endpoint
 

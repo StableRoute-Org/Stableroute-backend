@@ -7,6 +7,7 @@ import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
 import { resolveClientIp } from "./utils/clientIp";
+import { getStoreAdapter } from "./persistence";
 import {
   isPaused,
   isReadOnly,
@@ -28,10 +29,11 @@ import {
   RATE_BUCKETS_MAX_IPS,
   HEALTH_PROBE_KEY,
   KNOWN_EVENT_TYPES,
+  hydrateFromSnapshot,
+  setHydrating,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
-  type WebhookRecord,
   type EventType,
 } from "./stores";
 
@@ -49,7 +51,29 @@ const BULK_ABSOLUTE_MAX = 10_000;
 
 
 const app = express();
-const PORT = process.env.PORT ?? 3001;
+
+// --- Persistence Hydration on startup ---
+export const hydrationPromise = (async () => {
+  try {
+    const adapter = getStoreAdapter();
+    setHydrating(true);
+    const snapshot = await adapter.load();
+    if (snapshot) {
+      hydrateFromSnapshot(snapshot);
+      logger.info("[persistence] hydrated stores successfully from adapter");
+    } else {
+      logger.info("[persistence] no snapshot found or hydration skipped");
+    }
+  } catch (err) {
+    logger.error({ err }, "[persistence] hydration failed");
+  } finally {
+    setHydrating(false);
+  }
+})();
+
+
+
+
 
 const DEFAULT_CORS_ALLOWED_ORIGINS = [
   "http://localhost:3000",
@@ -1141,22 +1165,6 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   res.json({ id, ...updated });
 });
 
-/**
- * Resolve the source/destination route params and the computed pair key.
- * Returns null and sends a 404 if the pair is not registered.
- */
-function resolvePair(
-  req: Request,
-  res: Response
-): { source: string; destination: string; key: string } | null {
-  const { source, destination } = req.params;
-  const key = pairKey(source, destination);
-  if (!pairRegistry.has(key)) {
-    sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
-    return null;
-  }
-  return { source, destination, key };
-}
 
 /**
  * Normalize the `:source`/`:destination` route params to their canonical asset
@@ -1917,11 +1925,6 @@ export const checkQuoteBounds = (
   return null;
 };
 
-const computeQuoteTimes = (): { quoted_at: number; expires_at: number } => {
-  const ttl = (config.quote_ttl_ms ?? 30000) as number;
-  const quoted_at = Date.now();
-  return { quoted_at, expires_at: quoted_at + ttl };
-};
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};

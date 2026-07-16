@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { Express } from "express";
-import app from "./index";
+import app, { hydrationPromise } from "./index";
 
 /**
  * Bind the Express app to a port and start listening.
@@ -112,7 +112,8 @@ export function registerSignalHandlers(server: http.Server): void {
  *
  * @returns the running `http.Server`.
  */
-export function start(): http.Server {
+export async function start(): Promise<http.Server> {
+  await hydrationPromise;
   const server = createServer();
   registerSignalHandlers(server);
   return server;
@@ -121,5 +122,5 @@ export function start(): http.Server {
 // Only start listening when run directly (`node dist/server.js`), not when
 // imported by tests.
 if (require.main === module) {
-  start();
+  void start();
 }

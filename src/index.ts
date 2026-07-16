@@ -828,14 +828,16 @@ const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
 const DEFAULT_SCOPES: readonly string[] = [];
 
 /**
- * Returns `true` when the API key record should be accepted for
- * authentication, `false` when it should be rejected.
+ * Validates whether a given API key record is currently active and usable.
  *
- * A key is considered invalid when:
- * - Its explicit `expiresAt` deadline has passed (hard expiry set at creation).
- * - It is a rotated predecessor whose grace window has expired.
+ * A key is considered valid if and only if:
+ * 1. It has not reached its explicit expiration time (`expiresAt`), if one was set.
+ * 2. If it was rotated, its grace period (`graceExpiresAt`) has not expired.
+ *
+ * @param record - The API key record retrieved from the store.
+ * @returns `true` if the key is valid and usable; otherwise `false`.
  */
-const isKeyValid = (record: ApiKeyRecord): boolean => {
+export const isKeyValid = (record: ApiKeyRecord): boolean => {
   if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
   if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
     // Rotated predecessor: still valid until grace window expires
@@ -862,7 +864,7 @@ const requireScope = (scope: string) =>
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
     const rawKey = match ? match[1] : undefined;
     const record = rawKey ? apiKeyStore.get(rawKey) : undefined;
-    if (!record) {
+    if (!record || !isKeyValid(record)) {
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
@@ -956,7 +958,12 @@ app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => 
     expiresAt = Date.now() + expiresInSeconds * 1000;
   }
   const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, { label, createdAt: Date.now(), scopes: grantedScopes });
+  apiKeyStore.set(key, {
+    label,
+    createdAt: Date.now(),
+    scopes: grantedScopes,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+  });
   // Record only the non-sensitive prefix and label — never the raw key.
   recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
   res.status(201).json({ key, label, ...(expiresAt !== undefined ? { expiresAt } : {}) });

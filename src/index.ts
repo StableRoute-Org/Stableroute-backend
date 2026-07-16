@@ -138,11 +138,21 @@ const sendError = (
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
 
-/** TTL for idempotency cache entries (default 24 hours). */
-const IDEMPOTENCY_TTL_MS = Number(process.env.IDEMPOTENCY_TTL_MS ?? 24 * 60 * 60 * 1000);
+/**
+ * Helper to retrieve the current idempotency TTL in milliseconds.
+ * Always resolves dynamically from `process.env.IDEMPOTENCY_TTL_MS`
+ * to allow test overrides, falling back to 24 hours.
+ */
+const getIdempotencyTtlMs = (): number =>
+  Number(process.env.IDEMPOTENCY_TTL_MS ?? 24 * 60 * 60 * 1000);
 
-/** Maximum number of entries kept in the idempotency cache. */
-const IDEMPOTENCY_CACHE_MAX = 10_000;
+/**
+ * Helper to retrieve the maximum number of entries kept in the idempotency cache.
+ * Always resolves dynamically from `process.env.IDEMPOTENCY_CACHE_MAX`
+ * to allow test overrides, falling back to 10,000.
+ */
+const getIdempotencyCacheMax = (): number =>
+  Number(process.env.IDEMPOTENCY_CACHE_MAX ?? 10_000);
 
 interface IdempotencyCacheEntry {
   status: number;
@@ -159,6 +169,14 @@ interface IdempotencyCacheEntry {
 const idempotencyCache = new Map<string, IdempotencyCacheEntry>();
 
 /**
+ * Clear the internal idempotency cache.
+ * Exposes the store for test isolation to prevent cross-test state bleed.
+ */
+export const clearIdempotencyCache = (): void => {
+  idempotencyCache.clear();
+};
+
+/**
  * Evict all expired entries. When the cache is still at capacity after
  * expiry-based eviction, drop the oldest insertion-order entry.
  */
@@ -167,7 +185,7 @@ const pruneIdempotencyCache = (): void => {
   for (const [k, entry] of idempotencyCache) {
     if (entry.expiresAt <= now) idempotencyCache.delete(k);
   }
-  if (idempotencyCache.size >= IDEMPOTENCY_CACHE_MAX) {
+  if (idempotencyCache.size >= getIdempotencyCacheMax()) {
     const oldest = idempotencyCache.keys().next().value;
     if (oldest !== undefined) idempotencyCache.delete(oldest);
   }
@@ -177,16 +195,21 @@ const pruneIdempotencyCache = (): void => {
  * Express middleware that implements Idempotency-Key semantics for create
  * (POST) endpoints.
  *
+ * @param req - Express Request object
+ * @param res - Express Response object
+ * @param next - Express NextFunction
+ *
+ * @remarks
  * Behaviour:
  * - No Idempotency-Key header: passes through unchanged.
  * - Key present but outside 1-200 chars: passes through unchanged.
  * - First request with a key: executes the handler, captures the response,
- *   and stores { status, body, bodyHash, expiresAt } in the cache.
+ *   and stores `{ status, body, bodyHash, expiresAt }` in the cache.
  * - Repeat request with matching key + matching body hash: replays cached
  *   response verbatim (no handler invocation).
  * - Repeat request with matching key but different body: 409 idempotency_conflict.
  *
- * Cache entries expire after IDEMPOTENCY_TTL_MS (default 24 h).
+ * Cache entries expire after dynamic TTL (default 24 h).
  */
 const idempotencyGuard = (req: Request, res: Response, next: NextFunction): void => {
   const idempotencyKey = req.header("idempotency-key");
@@ -220,7 +243,7 @@ const idempotencyGuard = (req: Request, res: Response, next: NextFunction): void
       status: res.statusCode,
       body,
       bodyHash,
-      expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+      expiresAt: Date.now() + getIdempotencyTtlMs(),
     });
     return originalJson(body);
   };
@@ -892,7 +915,7 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-app.post("/api/v1/api-keys", (req: Request, res: Response) => {
+app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => {
   const { label, scopes, expiresInSeconds } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
@@ -1013,7 +1036,7 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
 
 
 
-app.post("/api/v1/webhooks", (req: Request, res: Response) => {
+app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
   const { url, events } = req.body ?? {};
   if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {

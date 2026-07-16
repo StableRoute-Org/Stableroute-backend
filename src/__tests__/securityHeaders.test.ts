@@ -19,7 +19,7 @@ const SECURITY_HEADERS: [string, string | RegExp][] = [
 describe("Security headers on every response", () => {
   for (const { method, path } of ROUTES) {
     describe(`${method.toUpperCase()} ${path}`, () => {
-      let res: Response;
+      let res: any;
 
       beforeAll(async () => {
         switch (method) {

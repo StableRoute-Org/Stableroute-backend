@@ -41,30 +41,47 @@ const WEBHOOK_MAX_EVENTS = 20;
 const WEBHOOK_MAX_EVENT_LENGTH = 128;
 
 /** Event name prefixes reserved for internal use. */
-const WEBHOOK_RESERVED_PREFIXES: string[] = [];
+const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
-/**
- * Evict rate-bucket entries older than the current window, then return the
- * (now-pruned) bucket for `ip`.
- */
-const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
-  const existing = rateBuckets.get(ip) ?? [];
-  const bucket = existing.filter((t) => now - t < windowMs);
-  rateBuckets.set(ip, bucket);
-  return bucket;
-};
+/** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
+const BULK_ABSOLUTE_MAX = 10_000;
 
-/**
- * Trim the event log to the given cap, removing the oldest entries first.
- */
-const trimEventLog = (cap: number): void => {
-  while (eventLog.length > cap) eventLog.shift();
-};
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-app.use(cors());
+const DEFAULT_CORS_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+];
+
+/** Parse a comma-separated CORS origin allowlist, falling back to localhost-only development origins. */
+export const parseCorsAllowedOrigins = (value: string | undefined): Set<string> => {
+  const source = value === undefined || value.trim() === "" ? DEFAULT_CORS_ALLOWED_ORIGINS.join(",") : value;
+  return new Set(source.split(",").map((origin) => origin.trim()).filter(Boolean));
+};
+
+/**
+ * Resolve whether an inbound Origin is allowed.
+ *
+ * Requests without an Origin header are same-origin/server-to-server traffic and
+ * are passed through without reflecting arbitrary browser origins.
+ */
+export const isCorsOriginAllowed = (
+  origin: string | undefined,
+  allowedOrigins: Set<string>
+): boolean => origin === undefined || allowedOrigins.has(origin);
+
+const corsAllowedOrigins = parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+
+app.use(cors({
+  credentials: false,
+  origin: (origin, callback) => {
+    callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
+  },
+}));
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
@@ -84,7 +101,10 @@ export type ApiErrorCode =
   | "conflict"
   | "method_not_allowed"
   | "read_only_mode"
-  | "pair_not_registered";
+  | "pair_not_registered"
+  | "idempotency_conflict"
+  | "unsupported_media_type"
+  | "insufficient_liquidity";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -328,14 +348,46 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Disabled in test mode so the test suite can make many requests without hitting the limit.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Maximum number of event type subscriptions per webhook. */
-const WEBHOOK_MAX_EVENTS = 20;
+export type TrustProxySetting = boolean | number | string | string[];
 
-/** Maximum character length of a single event type name. */
-const WEBHOOK_MAX_EVENT_LENGTH = 128;
+/** Parse a trust proxy setting string from the environment. */
+export const parseTrustProxy = (value: string | undefined): TrustProxySetting => {
+  if (value === undefined || value.trim() === "") return false;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  const numeric = Number(normalized);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  if (value.includes(",")) {
+    return value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+  return value.trim();
+};
 
-/** Event name prefixes reserved for internal/system use. */
-const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
+
+let lastRateBucketGcAt = 0;
+const RATE_BUCKET_GC_INTERVAL_MS = 60_000;
+
+/** Prune IP rate limit buckets that have not had any requests within the window. */
+export const pruneExpiredRateBuckets = (now: number, windowMs: number): number => {
+  if (now - lastRateBucketGcAt < RATE_BUCKET_GC_INTERVAL_MS) return 0;
+  lastRateBucketGcAt = now;
+  let removed = 0;
+  for (const [ip, bucket] of rateBuckets) {
+    const live = bucket.filter((t) => now - t < windowMs);
+    if (live.length === 0) {
+      rateBuckets.delete(ip);
+      removed++;
+    } else if (live.length !== bucket.length) {
+      rateBuckets.set(ip, live);
+    }
+  }
+  return removed;
+};
 
 /**
  * Evict stale timestamps from the rate-bucket for `ip` and return the live
@@ -367,6 +419,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const ip = resolveClientIp(req.headers["x-forwarded-for"], req.ip ?? req.socket.remoteAddress);
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
+  pruneExpiredRateBuckets(now, windowMs);
   const limitPerWindow = config.rateLimitPerWindow ?? 60;
   const bucket = evictRateBuckets(ip, now, windowMs);
   if (bucket.length >= limitPerWindow) {
@@ -671,52 +724,6 @@ const paginate = <T>(
 };
 
 
-/**
- * Decode a base64-encoded cursor string into an integer offset.
- *
- * Returns the decoded offset on success, or `"bad"` when the cursor is
- * present but malformed (non-base64, non-integer, or negative).  Returns
- * `undefined` when no cursor was supplied so the caller can distinguish
- * "first page" from an explicit bad value.
- *
- * @param raw - The raw `req.query.cursor` value (string, string[], or undefined).
- * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
- *          `undefined` when the param is absent.
- */
-const parseCursor = (raw: unknown): number | "bad" | undefined => {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "string" || raw.trim() === "") return "bad";
-  try {
-    const decoded = Buffer.from(raw, "base64").toString();
-    const n = Number(decoded);
-    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return "bad";
-    return n;
-  } catch {
-    return "bad";
-  }
-};
-
-/**
- * Apply limit+cursor pagination to an array of items.
- *
- * @param items  - The full (pre-filtered) array.
- * @param limit  - Number of items per page (already clamped by caller).
- * @param offset - Starting index decoded from the cursor (0 when absent).
- * @returns The page slice and a `nextCursor` (base64-encoded next offset,
- *          or `null` when the collection is exhausted).
- */
-const paginate = <T>(
-  items: T[],
-  limit: number,
-  offset: number
-): { page: T[]; nextCursor: string | null } => {
-  const page = items.slice(offset, offset + limit);
-  const nextOffset = offset + limit;
-  const nextCursor = nextOffset < items.length
-    ? Buffer.from(String(nextOffset)).toString("base64")
-    : null;
-  return { page, nextCursor };
-};
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
@@ -811,14 +818,6 @@ const isKeyValid = (record: ApiKeyRecord): boolean => {
  * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
  * @returns An Express request handler enforcing the scope.
  */
-const isKeyValid = (record: ApiKeyRecord): boolean => {
-  if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
-  if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
-    return Date.now() <= record.graceExpiresAt;
-  }
-  return true;
-};
-
 const requireScope = (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
@@ -997,17 +996,7 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-/** Maximum number of event subscriptions per webhook registration. */
-const WEBHOOK_MAX_EVENTS = 20;
 
-/** Maximum character length of a single event name in a webhook subscription. */
-const WEBHOOK_MAX_EVENT_LENGTH = 128;
-
-/**
- * Event name prefixes reserved for internal system events.
- * User-defined webhook subscriptions may not use these prefixes.
- */
-const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
 app.post("/api/v1/webhooks", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;

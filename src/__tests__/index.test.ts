@@ -775,19 +775,19 @@ describe("StableRoute Backend", () => {
     });
   });
 
-  describe("malformed JSON handling", () => {
-    it("returns 400 invalid_json for a malformed body without leaking the raw fragment", async () => {
-      const res = await request(app)
+  describe("pair-meta patch validation additional cases", () => {
+    it("rejects invalid feeBps value", async () => {
+      await request(app)
         .post("/api/v1/pairs")
         .send({ source: "BADFEE", destination: "META" });
 
       const res = await request(app)
         .patch("/api/v1/pairs/BADFEE/META/fee_bps")
         .set("X-Request-Id", "bad-fee-bps")
-        .send({ feeBps });
+        .send({ feeBps: "invalid" as any });
 
       expect(res.status).toBe(400);
-      expectPairMetaError(res.body, "bad-fee-bps", "invalid_request");
+      expectCanonicalError(res.body, "bad-fee-bps", "invalid_request");
     });
 
     it("rejects unknown fee patch body keys with canonical error shape", async () => {
@@ -801,7 +801,7 @@ describe("StableRoute Backend", () => {
         .send({ feeBps: 5, extra: true });
 
       expect(res.status).toBe(400);
-      expectPairMetaError(res.body, "fee-unknown-key", "invalid_request");
+      expectCanonicalError(res.body, "fee-unknown-key", "invalid_request");
       expect(res.body.unknownKeys).toEqual(["extra"]);
     });
 
@@ -811,7 +811,7 @@ describe("StableRoute Backend", () => {
         .set("X-Request-Id", "missing-fee-pair")
         .send({ feeBps: 5 });
       expect(res.status).toBe(404);
-      expectPairMetaError(res.body, "missing-fee-pair", "not_found");
+      expectCanonicalError(res.body, "missing-fee-pair", "not_found");
     });
   });
 

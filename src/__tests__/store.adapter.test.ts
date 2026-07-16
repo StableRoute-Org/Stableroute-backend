@@ -29,12 +29,12 @@ const sampleMeta = (): PairMeta => ({
   rate: "1.0",
 });
 
-const sampleKey = (): ApiKeyRecord => ({ label: "test-key", createdAt: Date.now() });
+const sampleKey = (): ApiKeyRecord => ({ label: "test-key", createdAt: 1784200000000 });
 
 const sampleWebhook = (): WebhookRecord => ({
   url: "https://example.com/hook",
   events: ["pair.registered"],
-  createdAt: Date.now(),
+  createdAt: 1784200000000,
 });
 
 const sampleEvent = (type: EventType = "pair.registered"): AppEvent => ({

@@ -24,6 +24,8 @@ export const KNOWN_EVENT_TYPES = [
   "pair.refreshed",
   "pair.unregistered",
   "pair.meta.reset",
+  "pair.enabled",
+  "pair.disabled",
   "apikey.created",
   "apikey.deleted",
   "webhook.created",

@@ -53,6 +53,8 @@ export type PairMeta = {
   liquidity: string;
   /** Whether this pair is enabled for quoting. Default true. */
   enabled: boolean;
+  /** Base exchange rate for the pair. Defaults to "1.0". */
+  rate: string;
 };
 
 /** Structured event appended to the in-memory event log. */
@@ -127,6 +129,7 @@ export const defaultMeta = (): PairMeta => ({
   maxAmount: "0",
   liquidity: "0",
   enabled: true,
+  rate: "1.0",
 });
 
 /** Canonical config shape used by GET/PATCH /api/v1/config. */

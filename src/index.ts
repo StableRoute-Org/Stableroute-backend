@@ -325,28 +325,71 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: "100kb" }));
 
-// Content-Type guard: POST/PATCH/PUT requests with a body must declare
-// Content-Type: application/json. Requests with no body (no Content-Length
-// and no Transfer-Encoding) are passed through unchanged.
-app.use((req: Request, res: Response, next: NextFunction) => {
+/**
+ * Content-Type guard for body-bearing HTTP methods.
+ *
+ * Mutating requests (`POST`, `PATCH`, `PUT`) that include a payload **must**
+ * declare `Content-Type: application/json` (the `charset` parameter is
+ * permitted, e.g. `application/json; charset=utf-8`). Any other media type —
+ * or an absent `Content-Type` — is rejected immediately with
+ * `415 unsupported_media_type` and the canonical `{ error, message, requestId }`
+ * body.
+ *
+ * @remarks
+ * **Placement rationale** — this middleware is registered *after*
+ * `express.json({ limit: "100kb" })` intentionally:
+ * 1. `express.json()` runs first. A request that declares
+ *    `Content-Type: application/json` but exceeds the 100 kB limit is
+ *    rejected by the body parser **before** this guard even fires, so a
+ *    forged content-type cannot be used to smuggle an oversized body into
+ *    a route handler.
+ * 2. `express.json()` only parses bodies whose declared type is JSON; it
+ *    leaves `req.body` undefined for any other type. This guard then
+ *    catches those cases and returns a human-readable 415 instead of
+ *    allowing the missing `req.body` to fall through to handler-level
+ *    validation and produce a confusing 400.
+ *
+ * **Skipped for safe methods and empty bodies** — `GET`, `HEAD`, `DELETE`,
+ * and `OPTIONS` are passed through unconditionally. For body-bearing methods,
+ * the check is skipped when both `Content-Length` is absent (or zero) *and*
+ * `Transfer-Encoding` is absent, because there is no payload to validate.
+ *
+ * @param req  - Incoming Express request.
+ * @param res  - Outgoing Express response.
+ * @param next - Express next-function; called when the request may proceed.
+ */
+export const requireJsonContentType = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
   const method = req.method.toUpperCase();
   if (method === "GET" || method === "HEAD" || method === "DELETE" || method === "OPTIONS") {
-    return next();
+    next();
+    return;
   }
   const hasBody =
     (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0") ||
     req.headers["transfer-encoding"] !== undefined;
-  if (!hasBody) return next();
+  if (!hasBody) {
+    next();
+    return;
+  }
   const contentType = (req.headers["content-type"] ?? "").toLowerCase();
-  if (contentType.includes("application/json")) return next();
-  return sendError(
+  if (contentType.includes("application/json")) {
+    next();
+    return;
+  }
+  sendError(
     res,
     req,
     415,
     "unsupported_media_type",
     "Content-Type must be application/json"
   );
-});
+};
+
+app.use(requireJsonContentType);
 
 // Pause guard: refuses non-idempotent methods with 503 except
 // /admin/unpause, so an operator can always recover.

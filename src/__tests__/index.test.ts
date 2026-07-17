@@ -2685,4 +2685,212 @@ describe("StableRoute Backend", () => {
       });
     });
   });
+
+  describe("strict body key validation (rejectUnknownKeys)", () => {
+    const expectUnknownKeyError = async (
+      method: "post" | "patch",
+      url: string,
+      body: Record<string, unknown>,
+    ) => {
+      const res = await request(app)
+        [method](url)
+        .set("X-Request-Id", "strict-keys")
+        .send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/unknown field/);
+      expect(res.body.requestId).toBe("strict-keys");
+    };
+
+    describe("POST /api/v1/api-keys", () => {
+      beforeEach(() => {
+        resetStores();
+      });
+
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError("post", "/api/v1/api-keys", {
+          label: "test",
+          unknownField: "xyz",
+        });
+      });
+
+      it("still succeeds with only valid keys", async () => {
+        const res = await request(app)
+          .post("/api/v1/api-keys")
+          .send({ label: "good-key" });
+        expect(res.status).toBe(201);
+        expect(res.body.key).toMatch(/^srk_/);
+      });
+
+      it("empty body behaves as before (400 — missing label)", async () => {
+        const res = await request(app)
+          .post("/api/v1/api-keys")
+          .send({});
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+        expect(res.body.message).toMatch(/label/);
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-api-key")
+          .send(JSON.stringify({ label: "test", __proto__: { polluted: true } }));
+        expect(res.status).toBe(201);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("POST /api/v1/pairs", () => {
+      beforeEach(() => {
+        resetStores();
+      });
+
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError("post", "/api/v1/pairs", {
+          source: "USDC",
+          destination: "EURC",
+          extraField: "nope",
+        });
+      });
+
+      it("still succeeds with only valid keys", async () => {
+        const res = await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "USDC", destination: "EURC" });
+        expect(res.status).toBe(201);
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .post("/api/v1/pairs")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-pair")
+          .send(JSON.stringify({ source: "USDC", destination: "EURC", __proto__: { polluted: true } }));
+        expect(res.status).toBe(201);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("POST /api/v1/webhooks", () => {
+      beforeEach(() => {
+        resetStores();
+      });
+
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError("post", "/api/v1/webhooks", {
+          url: "https://example.com/h",
+          events: ["pair.registered"],
+          unknownField: "xyz",
+        });
+      });
+
+      it("still succeeds with only valid keys", async () => {
+        const res = await request(app)
+          .post("/api/v1/webhooks")
+          .send({ url: "https://example.com/h", events: ["pair.registered"] });
+        expect(res.status).toBe(201);
+      });
+
+      it("empty body behaves as before (400 — missing url)", async () => {
+        const res = await request(app)
+          .post("/api/v1/webhooks")
+          .send({});
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("invalid_request");
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .post("/api/v1/webhooks")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-wh")
+          .send(JSON.stringify({
+            url: "https://example.com/h",
+            events: ["pair.registered"],
+            __proto__: { polluted: true },
+          }));
+        expect(res.status).toBe(201);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("PATCH /api/v1/config", () => {
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError("patch", "/api/v1/config", {
+          rateLimitPerWindow: 100,
+          unknownField: "xyz",
+        });
+      });
+
+      it("still succeeds with only valid keys", async () => {
+        const res = await request(app)
+          .patch("/api/v1/config")
+          .send({ rateLimitPerWindow: 150 });
+        expect(res.status).toBe(200);
+        expect(res.body.config.rateLimitPerWindow).toBe(150);
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .patch("/api/v1/config")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-config")
+          .send(JSON.stringify({ rateLimitPerWindow: 100, __proto__: { polluted: true } }));
+        expect(res.status).toBe(200);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
+      beforeEach(async () => {
+        resetStores();
+        await request(app).post("/api/v1/pairs").send({ source: "ENAB", destination: "TEST" });
+      });
+
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError(
+          "patch",
+          "/api/v1/pairs/ENAB/TEST/enabled",
+          { enabled: true, extra: "nope" },
+        );
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .patch("/api/v1/pairs/ENAB/TEST/enabled")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-enabled")
+          .send(JSON.stringify({ enabled: true, __proto__: { polluted: true } }));
+        expect(res.status).toBe(200);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("pair-meta PATCH (liquidity)", () => {
+      beforeEach(async () => {
+        resetStores();
+        await request(app).post("/api/v1/pairs").send({ source: "LIQ", destination: "TEST" });
+      });
+
+      it("rejects an extra unknown key", async () => {
+        await expectUnknownKeyError(
+          "patch",
+          "/api/v1/pairs/LIQ/TEST/liquidity",
+          { liquidity: "500", extra: "nope" },
+        );
+      });
+
+      it("__proto__ in body does not pollute Object.prototype", async () => {
+        const res = await request(app)
+          .patch("/api/v1/pairs/LIQ/TEST/liquidity")
+          .set("Content-Type", "application/json")
+          .set("X-Request-Id", "proto-liq")
+          .send(JSON.stringify({ liquidity: "500", __proto__: { polluted: true } }));
+        expect(res.status).toBe(200);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+  });
 });

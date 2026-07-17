@@ -441,6 +441,28 @@ content-type guard, so an oversized body is rejected with `413 payload_too_large
 before the guard even fires — a forged content-type header cannot smuggle raw
 bytes into a route handler.
 
+### Strict body validation
+
+Create (`POST`) and patch (`PATCH`) endpoints enforce an allowlist of permitted
+top-level JSON body keys. A request whose body carries keys outside the
+allowlist for that route is rejected with `400 invalid_request`, listing the
+offending key names:
+
+```json
+{
+  "error": "invalid_request",
+  "message": "unknown field(s): someUnknownKey",
+  "unknownKeys": ["someUnknownKey"],
+  "requestId": "..."
+}
+```
+
+An absent or empty body passes through unmodified. The check runs before
+per-field validation, so invalid-key errors always take precedence. Own
+enumerable keys (including `__proto__` or `constructor`) from the parsed JSON
+are detected as unknown and never assigned onto objects, preventing prototype
+pollution.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, branch naming, local checks, and PR expectations.

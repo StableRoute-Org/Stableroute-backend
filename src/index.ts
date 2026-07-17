@@ -985,6 +985,7 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
 });
 
 app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["label", "scopes", "expiresInSeconds"])) return;
   const { label, scopes, expiresInSeconds } = req.body ?? {};
   if (typeof label !== "string" || label.length === 0 || label.length > 64) {
     sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
@@ -1760,6 +1761,7 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
  * Returns 201 on first-write, 200 on idempotent re-write.
  */
 app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["source", "destination"])) return;
   const { source: rawSource, destination: rawDestination } = req.body ?? {};
   const source = normalizeAsset(rawSource);
   const destination = normalizeAsset(rawDestination);

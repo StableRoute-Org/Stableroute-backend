@@ -40,6 +40,7 @@ describe("stores module", () => {
       expect(meta.minAmount).toBe("0");
       expect(meta.maxAmount).toBe("0");
       expect(meta.liquidity).toBe("0");
+      expect(meta.rate).toBe("1.0");
     });
 
     it("returns a fresh object each time", () => {

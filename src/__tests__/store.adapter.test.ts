@@ -25,6 +25,8 @@ const sampleMeta = (): PairMeta => ({
   minAmount: "100",
   maxAmount: "1000",
   liquidity: "5000",
+  rate: "0.85",
+  enabled: true,
 });
 
 const sampleKey = (): ApiKeyRecord => ({ label: "test-key", createdAt: Date.now() });

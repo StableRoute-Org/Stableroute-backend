@@ -336,6 +336,18 @@ non-zero value.
 | Violation | `"100"` | `"999"` | No — `400` returned |
 | Unset liquidity | `"0"` | `"999"` | Yes — liquidity is unset |
 
+### `PATCH /api/v1/pairs/:source/:destination/rate`
+
+Set the per-pair base quote rate returned by single, reverse, and bulk quote
+responses as `estimated_rate`.
+
+- **Body:** `{ "rate": "0.85" }`
+- **Validation:** positive decimal string, max 20 characters, max 8 decimal
+  places.
+- **Response 200:** updated pair metadata, including `rate`.
+- **Errors:** `400 invalid_request` for invalid values; `404 not_found` if the
+  pair is not registered.
+
 ### `POST /api/v1/pairs/bulk`
 
 Register many pairs in a single request. Each item is validated independently;
@@ -359,7 +371,8 @@ curl -X POST http://localhost:3001/api/v1/pairs/bulk \
 ### `POST /api/v1/pairs/:source/:destination/reset`
 
 Reset all metadata for a registered pair back to factory defaults
-(`feeBps: 0`, `minAmount: "0"`, `maxAmount: "0"`, `liquidity: "0"`).
+(`feeBps: 0`, `minAmount: "0"`, `maxAmount: "0"`, `liquidity: "0"`,
+`rate: "1.0"`).
 Use this to undo a misconfigured `feeBps`, `maxAmount`, or other field
 without unregistering the pair (which would emit spurious lifecycle
 events).
@@ -373,7 +386,8 @@ events).
     "feeBps": 0,
     "minAmount": "0",
     "maxAmount": "0",
-    "liquidity": "0"
+    "liquidity": "0",
+    "rate": "1.0"
   }
   ```
 - **Errors:** `404 not_found` if the pair is not registered;
@@ -409,6 +423,9 @@ Get a single route quote. All three params are query-string params.
 
 #### Fee breakdown fields
 
+`estimated_rate` is sourced from the registered pair's `rate` metadata and
+defaults to `"1.0"` until configured with `PATCH /rate`.
+
 | Field        | Type   | Description                                                                                           |
 |--------------|--------|-------------------------------------------------------------------------------------------------------|
 | `feeBps`     | number | The fee rate applied in basis points (100 bps = 1 %). Sourced from the registered pair's metadata; defaults to `0` if no metadata exists. |
@@ -441,9 +458,9 @@ Response:
 }
 ```
 
-> **Note:** `amount`, `estimated_rate`, and `route` are unchanged for
-> backward compatibility. New integrations should use `netAmount` as the
-> authoritative receivable figure.
+> **Note:** `amount` and `route` are unchanged for backward compatibility.
+> `estimated_rate` now reflects the registered pair metadata. New integrations
+> should use `netAmount` as the authoritative receivable figure.
 
 ### `GET /api/v1/quote/reverse`
 

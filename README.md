@@ -164,10 +164,10 @@ paused, the existing pause behavior (`503 service_paused`) wins.
 
 ## Quote amount bounds
 
-Registered pairs can carry `minAmount`, `maxAmount`, and `liquidity` metadata
-through the pair metadata PATCH endpoints. Quote handlers compare the parsed
-base-unit amount with those values using `BigInt`; the string value `"0"` means
-that bound is unset.
+Registered pairs can carry `minAmount`, `maxAmount`, `liquidity`, and `rate`
+metadata through the pair metadata PATCH endpoints. Quote handlers compare the
+parsed base-unit amount with the bound fields using `BigInt`; the string value
+`"0"` means that bound is unset.
 
 - `GET /api/v1/quote` returns `400 invalid_request` when `amount < minAmount`
   or `amount > maxAmount`.
@@ -175,6 +175,11 @@ that bound is unset.
   exceeds non-zero `liquidity`.
 - `POST /api/v1/quote/bulk` keeps processing the batch and reports bound
   failures per item as `{ index, ok: false, error: "out_of_bounds" }`.
+- `PATCH /api/v1/pairs/:source/:destination/rate` stores a positive decimal
+  string with up to 8 fractional digits and a 20-character maximum length.
+  `GET /api/v1/quote`, `GET /api/v1/quote/reverse`, and
+  `POST /api/v1/quote/bulk` echo the stored value as `estimated_rate`; pairs
+  default to `"1.0"` until configured.
 
 ## OpenAPI spec
 
@@ -218,7 +223,7 @@ accessors and a `resetStores()` helper for test isolation:
 | Store              | Type                  | Purpose                                           |
 | ------------------ | --------------------- | ------------------------------------------------- |
 | `pairRegistry`     | `Set<string>`         | Registered `"SOURCE::DEST"` pair keys              |
-| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity metadata        |
+| `pairMeta`         | `Map<string, PairMeta>` | Per-pair fee / amount / liquidity / rate metadata |
 | `apiKeyStore`      | `Map<string, ApiKeyRecord>` | Generated API key records                     |
 | `webhookStore`     | `Map<string, WebhookRecord>` | Registered webhook records                   |
 | `eventLog`         | `AppEvent[]`          | Bounded ring-buffer of application events          |

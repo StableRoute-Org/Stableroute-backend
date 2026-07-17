@@ -34,6 +34,7 @@ export const openApiSpec = {
     "/api/v1/pairs/{source}/{destination}/min": { patch: { summary: "Set min amount" } },
     "/api/v1/pairs/{source}/{destination}/max": { patch: { summary: "Set max amount" } },
     "/api/v1/pairs/{source}/{destination}/liquidity": { patch: { summary: "Set liquidity" } },
+    "/api/v1/pairs/{source}/{destination}/rate": { patch: { summary: "Set base rate" } },
     "/api/v1/pairs/{source}/{destination}/reset": { post: { summary: "Reset pair metadata to defaults" } },
     "/api/v1/quote": { get: { summary: "Get a route quote" } },
     "/api/v1/quote/reverse": { get: { summary: "Reverse quote: solve required input for a target output" } },

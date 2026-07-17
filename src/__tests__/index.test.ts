@@ -492,6 +492,7 @@ describe("StableRoute Backend", () => {
         minAmount: "0",
         maxAmount: "0",
         liquidity: "0",
+        rate: "1.0",
         enabled: true,
       });
     });
@@ -508,6 +509,61 @@ describe("StableRoute Backend", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.feeBps).toBe(feeBps);
+    });
+
+    it("patches rate and echoes it from single, reverse, and bulk quotes", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "RATE", destination: "DST" });
+
+      const set = await request(app)
+        .patch("/api/v1/pairs/RATE/DST/rate")
+        .send({ rate: "0.85" });
+      expect(set.status).toBe(200);
+      expect(set.body.rate).toBe("0.85");
+
+      const info = await request(app).get("/api/v1/pairs/RATE/DST/info");
+      expect(info.status).toBe(200);
+      expect(info.body.rate).toBe("0.85");
+
+      const quote = await request(app)
+        .get("/api/v1/quote")
+        .query({ source_asset: "RATE", dest_asset: "DST", amount: "1000" });
+      expect(quote.status).toBe(200);
+      expect(quote.body.estimated_rate).toBe("0.85");
+
+      const reverse = await request(app)
+        .get("/api/v1/quote/reverse")
+        .query({ source_asset: "RATE", dest_asset: "DST", target_amount: "900" });
+      expect(reverse.status).toBe(200);
+      expect(reverse.body.estimated_rate).toBe("0.85");
+
+      const bulk = await request(app)
+        .post("/api/v1/quote/bulk")
+        .send({ items: [{ source_asset: "RATE", dest_asset: "DST", amount: "1000" }] });
+      expect(bulk.status).toBe(200);
+      expect(bulk.body.results[0].estimated_rate).toBe("0.85");
+    });
+
+    it.each([
+      ["zero", "0"],
+      ["negative", "-1"],
+      ["non-numeric", "abc"],
+      ["empty", ""],
+      ["too many decimals", "1.123456789"],
+      ["too long", "123456789012345678901"],
+      ["array", ["1.0"]],
+    ])("rejects rate that is %s", async (_label, rate) => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BADRATE", destination: "DST" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/BADRATE/DST/rate")
+        .set("X-Request-Id", "bad-rate")
+        .send({ rate });
+      expect(res.status).toBe(400);
+      expectPairMetaError(res.body, "bad-rate", "invalid_request");
     });
 
     it.each([
@@ -967,6 +1023,13 @@ describe("StableRoute Backend", () => {
         .send({ minAmount: "10" });
       expect(min.status).toBe(404);
       expectCanonicalError(min.body, "missing-min-pair", "not_found");
+
+      const rate = await request(app)
+        .patch("/api/v1/pairs/GONE/ONE/rate")
+        .set("X-Request-Id", "missing-rate-pair")
+        .send({ rate: "1.0" });
+      expect(rate.status).toBe(404);
+      expectCanonicalError(rate.body, "missing-rate-pair", "not_found");
     });
 
     it("returns info with default values for unregistered pair", async () => {
@@ -977,6 +1040,7 @@ describe("StableRoute Backend", () => {
       expect(res.body.minAmount).toBe("0");
       expect(res.body.maxAmount).toBe("0");
       expect(res.body.liquidity).toBe("0");
+      expect(res.body.rate).toBe("1.0");
       expect(res.body.enabled).toBe(true);
     });
   });

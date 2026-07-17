@@ -85,17 +85,22 @@ Using `Number` instead of `BigInt` would silently corrupt both values
 `Number.MAX_SAFE_INTEGER`), which is exactly why `BigInt` is required.
 
 > **Current status — placeholder:** the `POST /api/v1/quote` and
-> `GET /api/v1/quote` handlers return `estimated_rate: "1.0"` and do
+> `GET /api/v1/quote` handlers return the pair's configured `estimated_rate` and do
 > **not** deduct a fee from the quoted amount yet. The `feeBps` field is
 > stored per-pair via `PATCH /api/v1/pairs/:source/:destination/fee_bps`
 > and will be applied once the rate oracle lands. The formula above is
 > the intended contract.
 
+> Pair-level base rates can now be configured with
+> `PATCH /api/v1/pairs/:source/:destination/rate`; newly registered pairs keep
+> the `"1.0"` default until configured.
+
 ---
 
 ## 3. Exchange rate
 
-The quote endpoint currently returns a flat `"1.0"` placeholder rate:
+The quote endpoint returns the pair's configured base rate, defaulting to
+`"1.0"` for newly registered pairs:
 
 ```json
 {
@@ -107,9 +112,8 @@ The quote endpoint currently returns a flat `"1.0"` placeholder rate:
 }
 ```
 
-When the live rate oracle is integrated, `estimated_rate` will be a
-decimal string representing **dest units per source unit**. The quoted
-destination amount will be:
+`estimated_rate` is a positive decimal string representing **dest units per
+source unit**. When destination amount conversion is integrated, it will be:
 
 ```
 dest_amount = floor( net_amount × rate )

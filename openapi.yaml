@@ -81,6 +81,11 @@ components:
           maximum: 1000
           description: Fee in basis points (0–1000).
           example: 30
+        rate:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,8})?$"
+          description: Per-pair base quote rate, returned as estimated_rate.
+          example: "0.85"
 
     ApiKeyRecord:
       type: object
@@ -732,6 +737,49 @@ paths:
                 type: object
         "400":
           description: Invalid liquidity value.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /api/v1/pairs/{source}/{destination}/rate:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/AssetCode"
+      - name: destination
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/AssetCode"
+    patch:
+      summary: Set base rate
+      operationId: patchPairRate
+      security:
+        - ApiKeyBearer: [pairs:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rate]
+              properties:
+                rate:
+                  type: string
+                  pattern: "^[0-9]+(\\.[0-9]{1,8})?$"
+                  example: "0.85"
+      responses:
+        "200":
+          description: Updated pair metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Invalid rate value.
           content:
             application/json:
               schema:

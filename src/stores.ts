@@ -51,6 +51,8 @@ export type PairMeta = {
   minAmount: string;
   maxAmount: string;
   liquidity: string;
+  /** Base exchange rate returned by quote endpoints for this pair. */
+  rate: string;
   /** Whether this pair is enabled for quoting. Default true. */
   enabled: boolean;
 };
@@ -126,6 +128,7 @@ export const defaultMeta = (): PairMeta => ({
   minAmount: "0",
   maxAmount: "0",
   liquidity: "0",
+  rate: "1.0",
   enabled: true,
 });
 

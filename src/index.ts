@@ -1288,6 +1288,19 @@ const checkMinAgainstLiquidity = (value: unknown, meta: PairMeta): string | null
 };
 
 /**
+ * Validate a per-pair base rate stored as a decimal string.
+ *
+ * The backend stores and echoes this field for pricing consumers rather than
+ * doing decimal arithmetic on it. The shape is still bounded to avoid
+ * precision-abuse inputs and accidental non-decimal values in quote responses.
+ */
+const isValidPairRate = (value: unknown): boolean => {
+  if (typeof value !== "string") return false;
+  if (value.length > 20) return false;
+  return /^[0-9]+(\.[0-9]{1,8})?$/.test(value) && Number(value) > 0;
+};
+
+/**
  * Descriptor table driving the four per-pair PATCH routes.
  * Each entry maps a URL suffix to its PairMeta field, body key, validator, and
  * error message — the only dimensions that differ between the four handlers.
@@ -1337,11 +1350,7 @@ const pairMetaPatchDescriptors: Array<{
     suffix: "rate",
     field: "rate",
     bodyKey: "rate",
-    validate: (v) => {
-      if (typeof v !== "string") return false;
-      if (v.length > 20) return false; // bound precision
-      return /^[0-9]+(\.[0-9]{1,8})?$/.test(v) && parseFloat(v) > 0;
-    },
+    validate: isValidPairRate,
     errorMessage:
       'rate must be a positive decimal string (e.g. "1.0", "0.85"), max 8 decimal places',
   },
@@ -2121,7 +2130,7 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
     dest_asset,
     target_amount: parsedOutput.toString(),
     required_input: requiredInput.toString(),
-    estimated_rate: "1.0",
+    estimated_rate: meta.rate,
     route: [source_asset, dest_asset],
     // legacy fields kept for backward compatibility
     output: parsedOutput.toString(),

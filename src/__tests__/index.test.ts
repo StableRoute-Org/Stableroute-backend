@@ -1418,6 +1418,124 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.items.length).toBeLessThanOrEqual(3);
     });
+
+    // --- since param validation ---
+
+    it("returns 400 invalid_request for non-numeric since", async () => {
+      const res = await request(app).get("/api/v1/events").query({ since: "abc" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for since=NaN", async () => {
+      const res = await request(app).get("/api/v1/events").query({ since: "NaN" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for since=Infinity", async () => {
+      const res = await request(app).get("/api/v1/events").query({ since: "Infinity" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("returns 400 invalid_request for a negative since", async () => {
+      const res = await request(app).get("/api/v1/events").query({ since: "-1" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/since/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for array-form since", async () => {
+      // supertest serialises repeated keys as an array in the query string
+      const res = await request(app).get("/api/v1/events?since=1&since=2");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for a floating-point since", async () => {
+      const res = await request(app).get("/api/v1/events").query({ since: "1.5" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("accepts since=0 and returns all events", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "SNC0", destination: "TST" });
+      const res = await request(app).get("/api/v1/events").query({ since: "0" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeGreaterThan(0);
+    });
+
+    it("accepts a valid positive since and filters events", async () => {
+      const before = Date.now() - 1;
+      await request(app).post("/api/v1/pairs").send({ source: "SNCP", destination: "TST" });
+      const res = await request(app).get("/api/v1/events").query({ since: String(before) });
+      expect(res.status).toBe(200);
+      expect(res.body.items.every((e: { ts: number }) => e.ts >= before)).toBe(true);
+    });
+
+    // --- limit param validation ---
+
+    it("returns 400 invalid_request for non-numeric limit", async () => {
+      const res = await request(app).get("/api/v1/events").query({ limit: "abc" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.message).toMatch(/limit/);
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for array-form limit", async () => {
+      const res = await request(app).get("/api/v1/events?limit=5&limit=10");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    });
+
+    it("returns 400 invalid_request for a floating-point limit", async () => {
+      const res = await request(app).get("/api/v1/events").query({ limit: "2.5" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("returns 400 invalid_request for limit=NaN", async () => {
+      const res = await request(app).get("/api/v1/events").query({ limit: "NaN" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("clamps limit=0 up to 1", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "CLMP", destination: "TST" });
+      const res = await request(app).get("/api/v1/events").query({ limit: "0" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeLessThanOrEqual(1);
+    });
+
+    it("clamps limit=-5 up to 1", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "CLMN", destination: "TST" });
+      const res = await request(app).get("/api/v1/events").query({ limit: "-5" });
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeLessThanOrEqual(1);
+    });
+
+    it("clamps limit above EVENT_LOG_CAP down to EVENT_LOG_CAP", async () => {
+      const res = await request(app).get("/api/v1/events").query({ limit: "99999" });
+      expect(res.status).toBe(200);
+      // Can't assert exact count without filling the log, but the request must succeed
+      expect(res.body.items).toBeDefined();
+    });
+
+    it("returns defaults when since and limit are omitted", async () => {
+      await request(app).post("/api/v1/pairs").send({ source: "DFLT", destination: "TST" });
+      const res = await request(app).get("/api/v1/events");
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeGreaterThan(0);
+      expect(res.body.nextCursor).toBeDefined();
+    });
   });
 
   describe("api-keys edge cases", () => {

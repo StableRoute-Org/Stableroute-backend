@@ -22,7 +22,8 @@ Consistent pagination is supported across all four list endpoints:
 
 #### Query Parameters
 
-- `limit` (optional): The maximum number of items to return. Defaults to `100`. Clamped to `[1, 500]` for pairs, API keys, and webhooks, and `[1, 10000]` for events.
+- `limit` (optional): The maximum number of items to return. Defaults to `100`. Clamped to `[1, 500]` for pairs, API keys, and webhooks, and `[1, 10000]` for events. Must be a single integer value — a non-numeric value or a repeated `limit` key (array form) is rejected with `400 invalid_request`.
+- `since` (optional, events endpoint only): Return only events whose `ts` (millisecond epoch timestamp) is greater than or equal to this value. Defaults to `0` (all events). Must be a non-negative integer — a non-numeric value, a floating-point value, a negative integer, or a repeated `since` key (array form) is rejected with `400 invalid_request`.
 - `cursor` (optional): An opaque, base64-encoded string representing the pagination offset. Omit this parameter to retrieve the first page.
 
 #### Response Envelope
@@ -51,7 +52,11 @@ If the collection is exhausted (i.e. there are no more items to fetch), `nextCur
 
 #### Error Handling
 
-If an invalid or malformed cursor is supplied, the endpoints will reject the request with `400 invalid_request` and include the canonical `requestId`.
+The following conditions cause a `400 invalid_request` response containing the canonical `requestId`:
+
+- An invalid or malformed `cursor` value.
+- A `limit` value that is non-numeric, a floating-point number, or supplied as a repeated query key (array form).
+- A `since` value (events only) that is non-numeric, a floating-point number, a negative integer, or supplied as a repeated query key (array form).
 
 ### API-key expiry and last-used tracking
 

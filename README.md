@@ -334,6 +334,32 @@ and events. Adding a new durable backend (e.g. SQLite) only requires
 implementing the interface and registering the backend in the `createAdapter`
 factory.
 
+## Prometheus metrics
+
+`GET /api/v1/metrics` returns a Prometheus text exposition (content-type
+`text/plain; version=0.0.4`). Each metric is emitted with `# HELP` and
+`# TYPE` comment lines. All store-state gauges are label-free so scrape
+cardinality stays constant regardless of how many keys or webhooks exist.
+No raw secrets or URLs are ever included — only counts and configured integers.
+
+| Metric name                          | Type  | Description                                                  |
+| ------------------------------------ | ----- | ------------------------------------------------------------ |
+| `stableroute_pairs_total`            | gauge | Number of registered trading pairs.                          |
+| `stableroute_paused`                 | gauge | `1` if the service is paused, `0` otherwise.                 |
+| `stableroute_events_total`           | gauge | Total number of entries in the in-memory audit log.          |
+| `stableroute_events_by_type`         | gauge | Per-type counts from the audit log (label: `type`).          |
+| `stableroute_api_keys_total`         | gauge | Number of API key records currently in the store.            |
+| `stableroute_webhooks_total`         | gauge | Number of webhook records currently in the store.            |
+| `stableroute_event_log_size`         | gauge | Current number of entries in the event log (mirrors `stableroute_events_total`). |
+| `stableroute_rate_limit_per_window`  | gauge | Configured request limit per rate-limit window (`config.rateLimitPerWindow`). |
+
+The four store-state and config gauges (`stableroute_api_keys_total`,
+`stableroute_webhooks_total`, `stableroute_event_log_size`,
+`stableroute_rate_limit_per_window`) are derived from the live in-memory
+stores and `config` on every scrape, so they reflect mutations made via
+`DELETE /api/v1/api-keys/:prefix`, `DELETE /api/v1/webhooks/:id`, and
+`PATCH /api/v1/config` immediately.
+
 ## In-memory stores
 
 All runtime state lives in `src/stores.ts` — a typed module with explicit

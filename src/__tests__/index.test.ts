@@ -614,6 +614,217 @@ describe("StableRoute Backend", () => {
     });
   });
 
+  describe("GET /api/v1/metrics — store-size and config gauges", () => {
+    beforeEach(() => {
+      resetStores();
+      clearIdempotencyCache();
+    });
+
+    it("emits # HELP and # TYPE lines for all four new gauges", async () => {
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/plain.*version=0\.0\.4/);
+
+      expect(res.text).toMatch(/# HELP stableroute_api_keys_total /);
+      expect(res.text).toMatch(/# TYPE stableroute_api_keys_total gauge/);
+      expect(res.text).toMatch(/# HELP stableroute_webhooks_total /);
+      expect(res.text).toMatch(/# TYPE stableroute_webhooks_total gauge/);
+      expect(res.text).toMatch(/# HELP stableroute_event_log_size /);
+      expect(res.text).toMatch(/# TYPE stableroute_event_log_size gauge/);
+      expect(res.text).toMatch(/# HELP stableroute_rate_limit_per_window /);
+      expect(res.text).toMatch(/# TYPE stableroute_rate_limit_per_window gauge/);
+    });
+
+    it("reports 0 for all store-size gauges when stores are empty", async () => {
+      // beforeEach calls resetStores(), so stores are pristine.
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const apiKeysMatch = res.text.match(/^stableroute_api_keys_total (\d+)$/m);
+      expect(apiKeysMatch).not.toBeNull();
+      expect(Number(apiKeysMatch![1])).toBe(0);
+
+      const webhooksMatch = res.text.match(/^stableroute_webhooks_total (\d+)$/m);
+      expect(webhooksMatch).not.toBeNull();
+      expect(Number(webhooksMatch![1])).toBe(0);
+
+      const eventLogMatch = res.text.match(/^stableroute_event_log_size (\d+)$/m);
+      expect(eventLogMatch).not.toBeNull();
+      expect(Number(eventLogMatch![1])).toBe(0);
+    });
+
+    it("stableroute_api_keys_total reflects the number of stored API keys", async () => {
+      // Create two API keys.
+      await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "key-alpha", scopes: ["pairs:write"] });
+      await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "key-beta", scopes: [] });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const match = res.text.match(/^stableroute_api_keys_total (\d+)$/m);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBe(2);
+    });
+
+    it("stableroute_api_keys_total decrements when a key is deleted", async () => {
+      const createRes = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "temp-key", scopes: [] });
+      expect(createRes.status).toBe(201);
+      const prefix = (createRes.body.key as string).slice(0, 8);
+
+      // Before delete: 1
+      const before = await request(app).get("/api/v1/metrics");
+      const beforeMatch = before.text.match(/^stableroute_api_keys_total (\d+)$/m);
+      expect(Number(beforeMatch![1])).toBe(1);
+
+      await request(app).delete(`/api/v1/api-keys/${prefix}`);
+
+      // After delete: 0
+      const after = await request(app).get("/api/v1/metrics");
+      const afterMatch = after.text.match(/^stableroute_api_keys_total (\d+)$/m);
+      expect(Number(afterMatch![1])).toBe(0);
+    });
+
+    it("stableroute_webhooks_total reflects the number of registered webhooks", async () => {
+      await request(app).post("/api/v1/webhooks").send({
+        url: "https://example.com/hook1",
+        events: ["pair.registered"],
+      });
+      await request(app).post("/api/v1/webhooks").send({
+        url: "https://example.com/hook2",
+        events: ["pair.unregistered"],
+      });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const match = res.text.match(/^stableroute_webhooks_total (\d+)$/m);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBe(2);
+    });
+
+    it("stableroute_webhooks_total decrements when a webhook is deleted", async () => {
+      const createRes = await request(app).post("/api/v1/webhooks").send({
+        url: "https://example.com/hook-temp",
+        events: ["pair.registered"],
+      });
+      expect(createRes.status).toBe(201);
+      const webhookId: string = createRes.body.id;
+
+      const before = await request(app).get("/api/v1/metrics");
+      const beforeMatch = before.text.match(/^stableroute_webhooks_total (\d+)$/m);
+      expect(Number(beforeMatch![1])).toBe(1);
+
+      await request(app).delete(`/api/v1/webhooks/${webhookId}`);
+
+      const after = await request(app).get("/api/v1/metrics");
+      const afterMatch = after.text.match(/^stableroute_webhooks_total (\d+)$/m);
+      expect(Number(afterMatch![1])).toBe(0);
+    });
+
+    it("stableroute_event_log_size grows as events are recorded", async () => {
+      // Register a pair to emit a pair.registered event.
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ELS", destination: "TST" });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const match = res.text.match(/^stableroute_event_log_size (\d+)$/m);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBeGreaterThanOrEqual(1);
+    });
+
+    it("stableroute_event_log_size matches stableroute_events_total", async () => {
+      // Both gauges should reflect the same eventLog.length value.
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "SYN", destination: "CHK" });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const sizeMatch = res.text.match(/^stableroute_event_log_size (\d+)$/m);
+      const totalMatch = res.text.match(/^stableroute_events_total (\d+)$/m);
+      expect(sizeMatch).not.toBeNull();
+      expect(totalMatch).not.toBeNull();
+      expect(Number(sizeMatch![1])).toBe(Number(totalMatch![1]));
+    });
+
+    it("stableroute_rate_limit_per_window reflects the default config value", async () => {
+      // Default rateLimitPerWindow is 60.
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const match = res.text.match(/^stableroute_rate_limit_per_window (\d+)$/m);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBe(60);
+    });
+
+    it("stableroute_rate_limit_per_window updates after PATCH /api/v1/config", async () => {
+      await request(app)
+        .patch("/api/v1/config")
+        .send({ rateLimitPerWindow: 120 });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      const match = res.text.match(/^stableroute_rate_limit_per_window (\d+)$/m);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBe(120);
+    });
+
+    it("gauge values are never raw secrets or URLs — only counts and integers", async () => {
+      // Create a key and a webhook with a URL to ensure they are in the stores.
+      await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "secret-key", scopes: [] });
+      await request(app).post("/api/v1/webhooks").send({
+        url: "https://private.internal/sensitive-endpoint",
+        events: ["pair.registered"],
+      });
+
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      // The raw key prefix (srk_) must never appear in the metrics body.
+      expect(res.text).not.toMatch(/srk_/);
+      // The webhook URL must never appear in the metrics body.
+      expect(res.text).not.toMatch(/https?:\/\//);
+      // All gauge value lines must match the label-free integer pattern.
+      const gaugeLines = res.text
+        .split("\n")
+        .filter((l) => /^stableroute_/.test(l) && !l.startsWith("#") && !l.includes("{"));
+      for (const line of gaugeLines) {
+        expect(line).toMatch(/^stableroute_\w+ \d+$/);
+      }
+    });
+
+    it("all four new gauges are present alongside the existing pair and paused gauges", async () => {
+      const res = await request(app).get("/api/v1/metrics");
+      expect(res.status).toBe(200);
+
+      // Existing gauges must still be emitted.
+      expect(res.text).toMatch(/^stableroute_pairs_total \d+$/m);
+      expect(res.text).toMatch(/^stableroute_paused [01]$/m);
+
+      // New store-size and config gauges must be present.
+      expect(res.text).toMatch(/^stableroute_api_keys_total \d+$/m);
+      expect(res.text).toMatch(/^stableroute_webhooks_total \d+$/m);
+      expect(res.text).toMatch(/^stableroute_event_log_size \d+$/m);
+      expect(res.text).toMatch(/^stableroute_rate_limit_per_window \d+$/m);
+
+      // Prometheus format: body must end with a newline.
+      expect(res.text.endsWith("\n")).toBe(true);
+    });
+  });
+
   it("admin/pause blocks writes and unpause restores", async () => {
     await request(app).post("/api/v1/admin/pause");
     const blocked = await request(app)

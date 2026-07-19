@@ -1130,27 +1130,7 @@ app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => 
     sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
     return;
   }
-  for (const name of events as string[]) {
-    if (name.trim().length === 0) {
-      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
-      return;
-    }
-    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
-      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
-      return;
-    }
-    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
-      return;
-    }
-    // Event names must be either "*" (wildcard) or follow the "namespace.action"
-    // convention (exactly one dot, alphanumeric segments). Names with multiple
-    // dots are rejected as they indicate a typo or unsupported format.
-    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
-      return;
-    }
-  }
+  if (validateWebhookEvents(events as string[], req, res)) return;
   // Deduplicate event names before storing
   const deduped = [...new Set(events as string[])];
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -1179,14 +1159,63 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
 });
 
 /**
+ * Validate an array of webhook event-type names against the shared rules used
+ * by both the create and update handlers.
+ *
+ * Each name must:
+ * - Be a non-empty string (after trimming);
+ * - Not exceed {@link WEBHOOK_MAX_EVENT_LENGTH} characters;
+ * - Not start with a reserved prefix (`internal.`, `system.`, `admin.`);
+ * - Be either `"*"` (wildcard) or follow `"namespace.action"` format
+ *   (exactly one dot, alphanumeric segments starting with a letter).
+ *
+ * When any name fails validation a `400 invalid_request` is sent and the
+ * function returns `true` so the caller can `return` immediately. When all
+ * names are valid it returns `false`.
+ *
+ * @param events - The raw event-name strings to validate.
+ * @param req    - The incoming request (for the request id).
+ * @param res    - The response used to emit errors.
+ * @returns `true` when an error was sent, else `false`.
+ */
+const validateWebhookEvents = (
+  events: string[],
+  req: Request,
+  res: Response
+): boolean => {
+  for (const name of events) {
+    if (name.trim().length === 0) {
+      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      return true;
+    }
+    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
+      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      return true;
+    }
+    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return true;
+    }
+    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
  * Update a registered webhook's subscribed `events` in place.
  *
  * The `url` is intentionally immutable on PATCH: changing the destination
  * should go through delete/recreate so the SSRF-validation provenance of the
- * URL is preserved. The new `events` value is validated with the same
- * non-empty-string-array rule used by the create handler and deduplicated
- * before being stored. Returns the updated webhook, or `404 not_found` when
- * the id is unknown.
+ * URL is preserved. Only the `events` key is accepted in the request body;
+ * any other top-level key (including `url`) is rejected immediately via
+ * {@link rejectUnknownKeys}.
+ *
+ * The new `events` value is validated through {@link validateWebhookEvents}
+ * (same rules as the create handler) and deduplicated before being stored.
+ * Returns the updated webhook, or `404 not_found` when the id is unknown.
  *
  * @route PATCH /api/v1/webhooks/:id
  */
@@ -1197,11 +1226,18 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
+  // Reject unknown body keys — notably `url`, which is deliberately immutable.
+  if (rejectUnknownKeys(req, res, ["events"])) return;
   const { events } = req.body ?? {};
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
     sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
     return;
   }
+  if (events.length > WEBHOOK_MAX_EVENTS) {
+    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    return;
+  }
+  if (validateWebhookEvents(events as string[], req, res)) return;
   const deduped = [...new Set(events as string[])];
   // url is preserved; only events are mutated.
   const updated = { ...record, events: deduped };

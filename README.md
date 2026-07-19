@@ -80,6 +80,52 @@ Mutating create endpoints — `POST /api/v1/api-keys`, `POST /api/v1/webhooks`, 
 - **Cache Bounding:** The cache size is capped at `10,000` entries (configurable via `IDEMPOTENCY_CACHE_MAX`) to prevent unbounded memory growth. The oldest entries are evicted first if capacity is reached.
 - When no `Idempotency-Key` is provided, requests behave normally without caching.
 
+### Webhook single-read and events PATCH
+
+In addition to the list, create, and delete endpoints, the webhook surface
+supports reading a single webhook by id and patching its subscribed events
+without deleting and recreating (which would churn the id).
+
+#### `GET /api/v1/webhooks/:id`
+
+Returns the webhook record for a known id:
+
+```json
+{
+  "id": "wh_a1b2c3d4e5f6a7b8",
+  "url": "https://example.com/hook",
+  "events": ["pair.registered", "quote.fulfilled"],
+  "createdAt": 1710000000000
+}
+```
+
+An unknown id responds with `404 not_found` (canonical `{ error, message, requestId }` envelope).
+
+#### `PATCH /api/v1/webhooks/:id`
+
+Updates the subscribed `events` for an existing webhook **in place**. The `url`
+is intentionally **immutable** on PATCH — changing the destination must go
+through delete/recreate so the SSRF-validation provenance of the URL is
+preserved.
+
+**Request body:** `{ "events": ["pair.registered", "quote.fulfilled"] }`
+
+- Only the `events` key is accepted; any other top-level key (including `url`)
+  is rejected with `400 invalid_request` (unknown field).
+- Event names are validated with the same rules used by the create handler:
+  non-empty strings, `<= 128` chars, `"*"` wildcard or `"namespace.action"`
+  format, no reserved prefixes (`internal.`, `system.`, `admin.`), at most 20
+  entries.
+- Duplicate event names are silently deduplicated before storage.
+- Returns `200` with the updated webhook record, or `404 not_found` for an
+  unknown id.
+
+```bash
+curl -X PATCH http://localhost:3001/api/v1/webhooks/wh_a1b2c3d4e5f6a7b8 \
+  -H "Content-Type: application/json" \
+  -d '{"events": ["pair.registered", "quote.fulfilled"]}'
+```
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

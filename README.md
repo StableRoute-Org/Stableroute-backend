@@ -80,6 +80,41 @@ Mutating create endpoints — `POST /api/v1/api-keys`, `POST /api/v1/webhooks`, 
 - **Cache Bounding:** The cache size is capped at `10,000` entries (configurable via `IDEMPOTENCY_CACHE_MAX`) to prevent unbounded memory growth. The oldest entries are evicted first if capacity is reached.
 - When no `Idempotency-Key` is provided, requests behave normally without caching.
 
+### Batch pair registration
+
+`POST /api/v1/pairs/bulk` registers up to `config.bulkMaxItems` (default 100) asset pairs in a single request and returns a per-item result array. One invalid item never fails the whole batch.
+
+**Request:**
+```json
+{
+  "pairs": [
+    { "source": "USDC", "destination": "EURC" },
+    { "source": "xlm",  "destination": "usdc" }
+  ]
+}
+```
+
+**Response `200`:**
+```json
+{
+  "results": [
+    { "index": 0, "ok": true, "source": "USDC", "destination": "EURC", "registered": true },
+    { "index": 1, "ok": true, "source": "XLM",  "destination": "USDC", "registered": true }
+  ]
+}
+```
+
+Per-item failure shape:
+```json
+{ "index": 2, "ok": false, "error": "invalid_asset_code" }
+{ "index": 3, "ok": false, "error": "same_asset" }
+```
+
+- Asset codes are normalized to uppercase (same as the single-pair endpoint).
+- A `pair.registered` event is recorded for new pairs; `pair.refreshed` for re-registrations.
+- Returns `400 invalid_request` only when the top-level `pairs` array is missing, empty, or exceeds `bulkMaxItems`. Per-item errors are always reported inline.
+- The endpoint is blocked in read-only mode (`503 read_only_mode`) and when the service is paused (`503 service_paused`).
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

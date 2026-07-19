@@ -1788,19 +1788,30 @@ app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
  * Register many pairs in a single request, returning a per-item outcome.
  *
  * Body: `{ pairs: [{ source, destination }, ...] }` with 1–`config.bulkMaxItems`
- * entries. Each item is validated independently with the same `isAssetCode` and
- * same-asset rules as the single-pair endpoint; one bad item never fails the
- * whole batch. A `pair.registered` / `pair.refreshed` event is recorded for
- * each successfully registered item exactly as the single endpoint does.
+ * entries (driven by the runtime-configurable `config.bulkMaxItems`; default 100).
+ *
+ * Each item is validated independently using the same {@link normalizeAsset}
+ * canonicalization and same-asset checks as the single-pair endpoint; one bad
+ * item never fails the whole batch. Non-object items (strings, numbers, null)
+ * are safely rejected per-item as `invalid_asset_code`. Asset codes are
+ * trimmed and normalized to uppercase, matching the single-pair behavior.
+ *
+ * A `pair.registered` event is recorded for genuinely new pairs; a
+ * `pair.refreshed` event is recorded for re-registrations — identical to
+ * what the single-pair endpoint emits.
  *
  * Per-item result shape:
- *   - success: `{ index, ok: true, source, destination, registered: true }`
- *   - failure: `{ index, ok: false, error }`
+ *   - success:  `{ index, ok: true, source, destination, registered: true }`
+ *   - failure:  `{ index, ok: false, error: "invalid_asset_code" | "same_asset" }`
  *
  * Returns `400 invalid_request` only when the `pairs` array itself is missing,
- * empty, or exceeds the configured cap.
+ * empty, or exceeds the configured cap. All other errors are reported per-item
+ * so the caller can identify exactly which entries failed.
  *
  * @route POST /api/v1/pairs/bulk
+ * @param req - Express request. Body: `{ pairs: Array<{ source: string; destination: string }> }`
+ * @param res - Express response. `200 { results: BulkPairResult[] }` on success;
+ *   `400 invalid_request` when the top-level array is invalid or over-cap.
  */
 app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   const { pairs } = req.body ?? {};
@@ -1809,39 +1820,27 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
     sendError(res, req, 400, "invalid_request", `pairs must be 1-${maxItems} entries`);
     return;
   }
-  const results = pairs.map(
-    (it: { source?: unknown; destination?: unknown }, index: number) => {
-      const { source, destination } = it ?? {};
-      if (!isAssetCode(source) || !isAssetCode(destination)) {
-        return { index, ok: false as const, error: "invalid_asset_code" };
-      }
-      if (source === destination) {
-        return { index, ok: false as const, error: "same_asset" };
-      }
-      const key = pairKey(source, destination);
-      const isNew = !pairRegistry.has(key);
-      pairRegistry.add(key);
-      recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
-      return { index, ok: true as const, source, destination, registered: true };
+  const results = pairs.map((it: unknown, index: number) => {
+    // Safely extract fields from each item; non-objects yield undefined → rejected below.
+    const raw = it !== null && typeof it === "object" && !Array.isArray(it)
+      ? (it as Record<string, unknown>)
+      : {};
+    const source = normalizeAsset(raw.source);
+    const destination = normalizeAsset(raw.destination);
+    if (source === null || destination === null) {
+      return { index, ok: false as const, error: "invalid_asset_code" };
     }
-  );
+    if (source === destination) {
+      return { index, ok: false as const, error: "same_asset" };
+    }
+    const key = pairKey(source, destination);
+    const isNew = !pairRegistry.has(key);
+    pairRegistry.add(key);
+    recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
+    return { index, ok: true as const, source, destination, registered: true };
+  });
   res.json({ results });
 });
-
-// Asset symbols are short uppercase identifiers (USDC, EURC, XLM, …).
-// Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
-// anything that is not a single string so an array param can't smuggle
-// through as a "truthy" value.
-//
-// Codes beginning with "__health" are explicitly rejected to prevent a
-// caller from registering a pair whose derived pairKey could collide with
-// the deep-probe's reserved scratch namespace (HEALTH_PROBE_KEY), which
-// would allow a concurrent probe delete to silently drop operator data.
-const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" &&
-  v.length > 0 &&
-  v.length <= 12 &&
-  !v.startsWith("__health");
 
 /**
  * Canonicalize an asset code so that casing and surrounding whitespace never

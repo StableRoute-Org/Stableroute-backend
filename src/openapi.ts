@@ -424,10 +424,11 @@ export const openApiSpec = {
           },
         },
         responses: {
-          "201": { description: "Bulk registration result (partial failures reported per-item)" },
+          "200": { description: "Bulk registration result (partial failures reported per-item)" },
           "400": { description: "Invalid request format or exceeds `bulkMaxItems` ceiling" },
           "413": { description: "Request body exceeds 100 kB limit" },
           "415": { description: "Content-Type is not `application/json`" },
+          "503": { description: "Service is paused or in read-only mode" },
         },
       },
     },

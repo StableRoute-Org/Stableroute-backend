@@ -244,6 +244,57 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
     }
   });
 
+  // ─── array-form param rejection ──────────────────────────────────────────
+
+  it("returns 400 when since is supplied as an array (?since=1&since=2)", async () => {
+    // supertest sends repeated keys as an array to Express, which sets
+    // req.query.since to ["1", "2"] — parseIntegerQueryParam rejects non-strings.
+    const res = await request(app).get("/api/v1/events?since=1&since=2");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/since/);
+    expect(res.body.requestId).toBeDefined();
+  });
+
+  it("returns 400 when limit is supplied as an array (?limit=5&limit=10)", async () => {
+    const res = await request(app).get("/api/v1/events?limit=5&limit=10");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/limit/);
+    expect(res.body.requestId).toBeDefined();
+  });
+
+  it("returns 400 for a float since (since=1.5)", async () => {
+    const res = await request(app).get("/api/v1/events").query({ since: "1.5" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+  });
+
+  it("returns 400 for a float limit (limit=2.7)", async () => {
+    const res = await request(app).get("/api/v1/events").query({ limit: "2.7" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+  });
+
+  it("treats absent since as default (0) and returns all events", async () => {
+    recordEvent("pair.registered", { source: "DEF", destination: "TST" });
+    const res = await request(app).get("/api/v1/events");
+    expect(res.status).toBe(200);
+    expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("treats absent limit as default (100) and returns up to 100 items", async () => {
+    // Seed 3 events
+    for (let i = 0; i < 3; i++) {
+      recordEvent("pair.registered", { source: `DL${i}`, destination: "TST" });
+    }
+    const res = await request(app).get("/api/v1/events");
+    expect(res.status).toBe(200);
+    // Default limit is 100; with only 3 events we get all 3
+    expect(res.body.items.length).toBeLessThanOrEqual(100);
+    expect(res.body.items.length).toBeGreaterThanOrEqual(3);
+  });
+
   // ─── config-driven eventLogCap ────────────────────────────────────────────
 
   it("respects a lower eventLogCap set via PATCH /api/v1/config", async () => {

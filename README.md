@@ -372,6 +372,17 @@ Payloads never include secret material — the raw API key and any webhook
 secret are deliberately excluded. The existing `EVENT_LOG_CAP` eviction applies
 unchanged.
 
+### Query parameters
+
+| Parameter | Type    | Default | Constraints                                                                                                 |
+|-----------|---------|---------|-------------------------------------------------------------------------------------------------------------|
+| `since`   | integer | `0`     | Must be a single, non-negative integer (epoch-ms). Only events with `ts >= since` are returned. Negative values, non-numeric strings, floats, and array-form (`?since=1&since=2`) are rejected with `400 invalid_request`. |
+| `limit`   | integer | `100`   | Must be a single integer. Clamped to `[1, EVENT_LOG_CAP]` (default cap: 10 000). Non-numeric strings, floats, and array-form (`?limit=5&limit=10`) are rejected with `400 invalid_request`. |
+| `cursor`  | string  | _(none)_ | Opaque base64-encoded pagination cursor returned as `nextCursor` in the previous response. Omit to start from the first page. |
+| `type`    | string  | _(none)_ | Filter by event type (e.g. `pair.registered`). Must be one of the known event types; any other value is rejected with `400 invalid_request`. |
+
+All validation errors include the canonical `{ error, message, requestId }` envelope.
+
 ## Request correlation (`X-Request-Id`)
 
 Every request is assigned a correlation id that is echoed in the `X-Request-Id`

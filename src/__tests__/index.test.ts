@@ -1,7 +1,15 @@
 import request from "supertest";
 import { type Request, type Response } from "express";
-import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
+import app, {
+  isValidRequestId,
+  clearIdempotencyCache,
+  isKeyValid,
+  requireScope,
+  requireJsonContentType,
+} from "../index";
 import { resetStores, apiKeyStore } from "../stores";
+
+beforeEach(() => resetStores());
 
 const expectCanonicalError = (
   body: Record<string, unknown>,

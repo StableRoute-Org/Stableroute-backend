@@ -885,8 +885,17 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
 /**
  * Fixed catalog of authorization scopes an API key may carry. A key's scopes
  * are a subset of this set; unknown scope strings are rejected at creation.
+ *
+ * | Scope            | Description                                              |
+ * | ---------------- | -------------------------------------------------------- |
+ * | `pairs:write`    | Create, update, and delete trading pairs                 |
+ * | `webhooks:write` | Register and revoke webhook subscriptions                |
+ * | `keys:admin`     | Create, rotate, and revoke API keys                      |
+ *
+ * A key without any scope (i.e. an empty array) is read-only and can only call
+ * endpoints that do not require a scope.
  */
-const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
+export const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
 
 /**
  * Least-privilege default scope set applied when a key is created without an
@@ -975,6 +984,7 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
     prefix: k.slice(0, 8),
     label: m.label,
     createdAt: m.createdAt,
+    scopes: m.scopes ?? [],
     // Surface rotation metadata for predecessor records (omitted when absent).
     ...(m.rotatedAt !== undefined ? { rotatedAt: m.rotatedAt } : {}),
     ...(m.expiresAt !== undefined ? { expiresAt: m.expiresAt } : {}),
@@ -1034,7 +1044,7 @@ app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => 
   });
   // Record only the non-sensitive prefix and label — never the raw key.
   recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
-  res.status(201).json({ key, label, ...(expiresAt !== undefined ? { expiresAt } : {}) });
+  res.status(201).json({ key, label, scopes: grantedScopes, ...(expiresAt !== undefined ? { expiresAt } : {}) });
 });
 
 /**

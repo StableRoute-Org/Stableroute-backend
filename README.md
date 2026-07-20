@@ -353,6 +353,24 @@ accessors and a `resetStores()` helper for test isolation:
 Call `resetStores()` in test `beforeEach` / `afterEach` hooks to prevent
 cross-test bleed. This function is not exposed via any HTTP route.
 
+## Prometheus metrics
+
+`GET /api/v1/metrics` returns a Prometheus text exposition (Content-Type:
+`text/plain; version=0.0.4`). All gauges are label-free so scrape cardinality
+stays constant. No secrets or URLs are ever included — only counts and the
+configured rate limit.
+
+| Metric name                            | Type  | Description                                                  |
+| -------------------------------------- | ----- | ------------------------------------------------------------ |
+| `stableroute_pairs_total`              | gauge | Number of registered trading pairs.                          |
+| `stableroute_paused`                   | gauge | `1` if the service is paused, `0` otherwise.                 |
+| `stableroute_events_total`             | gauge | Total number of entries in the audit event log.              |
+| `stableroute_events_by_type`           | gauge | Per-type count of audit events (labelled by `type`).         |
+| `stableroute_api_keys_total`           | gauge | Number of stored API keys.                                   |
+| `stableroute_webhooks_total`           | gauge | Number of registered webhooks.                               |
+| `stableroute_event_log_size`           | gauge | Current depth of the in-memory event log ring-buffer.        |
+| `stableroute_rate_limit_per_window`    | gauge | Configured request limit per rate-limit window (`config.rateLimitPerWindow`). |
+
 ## Audit events
 
 `GET /api/v1/events` returns the in-memory audit log. In addition to the pair

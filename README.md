@@ -53,72 +53,6 @@ If the collection is exhausted (i.e. there are no more items to fetch), `nextCur
 
 If an invalid or malformed cursor is supplied, the endpoints will reject the request with `400 invalid_request` and include the canonical `requestId`.
 
-### API-key scopes
-
-Every API key carries a `scopes` array that restricts what the key is authorized to do. The fixed scope catalog is:
-
-| Scope            | Grants access to                                             |
-| ---------------- | ------------------------------------------------------------ |
-| `pairs:write`    | Create, update (metadata), and delete trading pairs          |
-| `webhooks:write` | Register and revoke webhook subscriptions                    |
-| `keys:admin`     | Create, rotate, and revoke API keys                          |
-
-A key with an **empty `scopes` array** (the default when `scopes` is omitted at creation) is **read-only**: it can call any endpoint that does not require a scope, but is denied write operations with `403 forbidden`.
-
-**Creating a scoped key:**
-```bash
-curl -X POST http://localhost:3001/api/v1/api-keys \
-  -H "Content-Type: application/json" \
-  -d '{"label": "pair-bot", "scopes": ["pairs:write"]}'
-```
-
-Response:
-```json
-{
-  "key": "srk_...",
-  "label": "pair-bot",
-  "scopes": ["pairs:write"]
-}
-```
-
-**Creating a read-only key (no scopes):**
-```bash
-curl -X POST http://localhost:3001/api/v1/api-keys \
-  -H "Content-Type: application/json" \
-  -d '{"label": "monitoring"}'
-```
-
-Response:
-```json
-{
-  "key": "srk_...",
-  "label": "monitoring",
-  "scopes": []
-}
-```
-
-Unknown scope strings are rejected at creation with `400 invalid_request`. Scopes are surfaced in the `GET /api/v1/api-keys` listing alongside prefix, label, and metadata; the raw key is never exposed.
-
-#### `requireScope(scope)` middleware factory
-
-`requireScope` is an Express middleware factory that protects a route by asserting the authenticated key carries a specific scope:
-
-```typescript
-import { requireScope } from "./index";
-
-// Only keys with "pairs:write" may call this route
-app.post("/api/v1/pairs", requireScope("pairs:write"), handler);
-```
-
-Behaviour:
-
-- **Missing or invalid key** → `401 unauthorized`
-- **Expired key** → `401 unauthorized`
-- **Valid key missing the required scope** → `403 forbidden` with message `"this key is missing the required scope: <scope>"`
-- **Valid key with the required scope** → calls `next()` and updates the key's `lastUsedAt` timestamp
-
-The factory accepts any string from `SCOPE_CATALOG` (`pairs:write`, `webhooks:write`, `keys:admin`). Passing an unrecognized scope string to `requireScope` is legal (the middleware simply checks membership in the key's `scopes` array) but no valid key will ever carry it, so the route will always return `403` for authenticated callers — use this deliberately as a kill-switch if needed.
-
 ### API-key expiry and last-used tracking
 
 - **Creation Expiry:** `POST /api/v1/api-keys` accepts an optional `expiresInSeconds` parameter (positive integer, max 31,536,000 / 1 year) in the request body. If specified, the server computes and stores an absolute epoch-ms expiration timestamp `expiresAt`. The response returns `expiresAt` along with the raw key and label.
@@ -453,6 +387,24 @@ accessors and a `resetStores()` helper for test isolation:
 
 Call `resetStores()` in test `beforeEach` / `afterEach` hooks to prevent
 cross-test bleed. This function is not exposed via any HTTP route.
+
+## Prometheus metrics
+
+`GET /api/v1/metrics` returns a Prometheus text exposition (Content-Type:
+`text/plain; version=0.0.4`). All gauges are label-free so scrape cardinality
+stays constant. No secrets or URLs are ever included — only counts and the
+configured rate limit.
+
+| Metric name                            | Type  | Description                                                  |
+| -------------------------------------- | ----- | ------------------------------------------------------------ |
+| `stableroute_pairs_total`              | gauge | Number of registered trading pairs.                          |
+| `stableroute_paused`                   | gauge | `1` if the service is paused, `0` otherwise.                 |
+| `stableroute_events_total`             | gauge | Total number of entries in the audit event log.              |
+| `stableroute_events_by_type`           | gauge | Per-type count of audit events (labelled by `type`).         |
+| `stableroute_api_keys_total`           | gauge | Number of stored API keys.                                   |
+| `stableroute_webhooks_total`           | gauge | Number of registered webhooks.                               |
+| `stableroute_event_log_size`           | gauge | Current depth of the in-memory event log ring-buffer.        |
+| `stableroute_rate_limit_per_window`    | gauge | Configured request limit per rate-limit window (`config.rateLimitPerWindow`). |
 
 ## Audit events
 

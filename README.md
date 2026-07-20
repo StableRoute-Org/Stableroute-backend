@@ -80,51 +80,40 @@ Mutating create endpoints — `POST /api/v1/api-keys`, `POST /api/v1/webhooks`, 
 - **Cache Bounding:** The cache size is capped at `10,000` entries (configurable via `IDEMPOTENCY_CACHE_MAX`) to prevent unbounded memory growth. The oldest entries are evicted first if capacity is reached.
 - When no `Idempotency-Key` is provided, requests behave normally without caching.
 
-### Webhook single-read and events PATCH
+### Batch pair registration
 
-In addition to the list, create, and delete endpoints, the webhook surface
-supports reading a single webhook by id and patching its subscribed events
-without deleting and recreating (which would churn the id).
+`POST /api/v1/pairs/bulk` registers up to `config.bulkMaxItems` (default 100) asset pairs in a single request and returns a per-item result array. One invalid item never fails the whole batch.
 
-#### `GET /api/v1/webhooks/:id`
-
-Returns the webhook record for a known id:
-
+**Request:**
 ```json
 {
-  "id": "wh_a1b2c3d4e5f6a7b8",
-  "url": "https://example.com/hook",
-  "events": ["pair.registered", "quote.fulfilled"],
-  "createdAt": 1710000000000
+  "pairs": [
+    { "source": "USDC", "destination": "EURC" },
+    { "source": "xlm",  "destination": "usdc" }
+  ]
 }
 ```
 
-An unknown id responds with `404 not_found` (canonical `{ error, message, requestId }` envelope).
-
-#### `PATCH /api/v1/webhooks/:id`
-
-Updates the subscribed `events` for an existing webhook **in place**. The `url`
-is intentionally **immutable** on PATCH — changing the destination must go
-through delete/recreate so the SSRF-validation provenance of the URL is
-preserved.
-
-**Request body:** `{ "events": ["pair.registered", "quote.fulfilled"] }`
-
-- Only the `events` key is accepted; any other top-level key (including `url`)
-  is rejected with `400 invalid_request` (unknown field).
-- Event names are validated with the same rules used by the create handler:
-  non-empty strings, `<= 128` chars, `"*"` wildcard or `"namespace.action"`
-  format, no reserved prefixes (`internal.`, `system.`, `admin.`), at most 20
-  entries.
-- Duplicate event names are silently deduplicated before storage.
-- Returns `200` with the updated webhook record, or `404 not_found` for an
-  unknown id.
-
-```bash
-curl -X PATCH http://localhost:3001/api/v1/webhooks/wh_a1b2c3d4e5f6a7b8 \
-  -H "Content-Type: application/json" \
-  -d '{"events": ["pair.registered", "quote.fulfilled"]}'
+**Response `200`:**
+```json
+{
+  "results": [
+    { "index": 0, "ok": true, "source": "USDC", "destination": "EURC", "registered": true },
+    { "index": 1, "ok": true, "source": "XLM",  "destination": "USDC", "registered": true }
+  ]
+}
 ```
+
+Per-item failure shape:
+```json
+{ "index": 2, "ok": false, "error": "invalid_asset_code" }
+{ "index": 3, "ok": false, "error": "same_asset" }
+```
+
+- Asset codes are normalized to uppercase (same as the single-pair endpoint).
+- A `pair.registered` event is recorded for new pairs; `pair.refreshed` for re-registrations.
+- Returns `400 invalid_request` only when the top-level `pairs` array is missing, empty, or exceeds `bulkMaxItems`. Per-item errors are always reported inline.
+- The endpoint is blocked in read-only mode (`503 read_only_mode`) and when the service is paused (`503 service_paused`).
 
 ## Architecture & request lifecycle
 

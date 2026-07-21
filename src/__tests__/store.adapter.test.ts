@@ -29,7 +29,12 @@ const sampleMeta = (): PairMeta => ({
   rate: "1.0",
 });
 
-const sampleKey = (): ApiKeyRecord => ({ label: "test-key", createdAt: 1784200000000 });
+const sampleKey = (): ApiKeyRecord => ({
+  label: "test-key",
+  createdAt: 1784200000000,
+  salt: "test-salt",
+  hash: "test-hash",
+});
 
 const sampleWebhook = (): WebhookRecord => ({
   url: "https://example.com/hook",
@@ -125,7 +130,7 @@ function runAdapterSuite(label: string, factory: () => StorageAdapter): void {
 
       it("keysAll returns all entries", () => {
         adapter.keysSet("srk_aaa", sampleKey());
-        adapter.keysSet("srk_bbb", { label: "b", createdAt: 1 });
+        adapter.keysSet("srk_bbb", { label: "b", createdAt: 1, salt: "s", hash: "h" });
         expect(adapter.keysAll().size).toBe(2);
       });
 

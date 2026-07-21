@@ -9,9 +9,10 @@
  * @module stores
  */
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { loadPausedState, savePausedState } from "./pauseState";
 import { getStoreAdapter } from "./persistence";
+import { logger } from "./logger";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -69,7 +70,15 @@ export type AppEvent = {
   payload: Record<string, unknown>;
 };
 
-/** Record stored for each generated API key. */
+/**
+ * Record stored for each generated API key.
+ *
+ * The raw key is never retained. Only a per-key random `salt` and the
+ * resulting keyed hash (`hash`) are stored — see {@link hashApiKeySecret} and
+ * {@link verifyApiKeySecret}. `apiKeyStore` is keyed by the key's non-secret
+ * `prefix` (see {@link apiKeyPrefix}), not by the raw key itself, so a leaked
+ * snapshot never exposes usable credentials.
+ */
 export type ApiKeyRecord = {
   label: string;
   createdAt: number;
@@ -90,6 +99,51 @@ export type ApiKeyRecord = {
   expiresAt?: number;
   /** Epoch-ms of last successful authentication; absent until first use. */
   lastUsedAt?: number;
+  /** Per-key random salt (hex-encoded) used to derive {@link hash}. */
+  salt: string;
+  /** Keyed hash of the raw key, derived via {@link hashApiKeySecret}. */
+  hash: string;
+};
+
+/**
+ * Number of leading characters of a raw API key used as its non-secret
+ * lookup handle (the `apiKeyStore` map key, and the value returned in list /
+ * delete / rotate routes as `prefix`).
+ */
+export const API_KEY_PREFIX_LENGTH = 8;
+
+/** Derive the non-secret lookup prefix from a raw API key. */
+export const apiKeyPrefix = (rawKey: string): string => rawKey.slice(0, API_KEY_PREFIX_LENGTH);
+
+/** Generate a fresh random salt (hex-encoded) for hashing a new API key. */
+export const generateApiKeySalt = (): string => randomBytes(16).toString("hex");
+
+/**
+ * Derive the storable hash for a raw API key, keyed by a per-record random
+ * salt via HMAC-SHA256.
+ *
+ * API keys are high-entropy random tokens (128 bits from `randomUUID`), not
+ * human-chosen secrets, so a fast keyed hash is the right tool here: unlike
+ * password hashing, a slow KDF (scrypt/bcrypt/argon2) buys no meaningful
+ * resistance against brute force over this input space and would add
+ * needless CPU cost to every authenticated request.
+ */
+export const hashApiKeySecret = (rawKey: string, salt: string): string =>
+  createHmac("sha256", salt).update(rawKey).digest("hex");
+
+/**
+ * Constant-time check that `rawKey` hashes to the salt/hash pair on `record`.
+ *
+ * Comparing with `timingSafeEqual` (rather than `===`) avoids leaking the
+ * position of the first mismatched byte through response-time variance.
+ */
+export const verifyApiKeySecret = (
+  rawKey: string,
+  record: Pick<ApiKeyRecord, "salt" | "hash">
+): boolean => {
+  const candidate = Buffer.from(hashApiKeySecret(rawKey, record.salt), "hex");
+  const stored = Buffer.from(record.hash, "hex");
+  return candidate.length === stored.length && timingSafeEqual(candidate, stored);
 };
 
 /** Record stored for each registered webhook. */
@@ -359,10 +413,27 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
 
       apiKeyStore.clear();
       if (Array.isArray(snap.apiKeyStore)) {
+        let invalidatedLegacyKeys = 0;
         for (const item of snap.apiKeyStore) {
           if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
-            apiKeyStore.set(item[0], item[1] as ApiKeyRecord);
+            const record = item[1] as Partial<ApiKeyRecord> | null;
+            // Migration guard: pre-existing snapshots keyed by the raw API
+            // key (with a record that predates the salt/hash fields) held
+            // recoverable credential material. Rather than trust and
+            // silently re-hash a value that may already have been read from
+            // a leaked snapshot, drop it — the key must be recreated.
+            if (!record || typeof record.salt !== "string" || typeof record.hash !== "string") {
+              invalidatedLegacyKeys += 1;
+              continue;
+            }
+            apiKeyStore.set(item[0], record as ApiKeyRecord);
           }
+        }
+        if (invalidatedLegacyKeys > 0) {
+          logger.warn(
+            { invalidatedLegacyKeys },
+            "[stores] discarded pre-migration API key record(s) lacking salt/hash during snapshot hydration; affected keys must be recreated"
+          );
         }
       }
 

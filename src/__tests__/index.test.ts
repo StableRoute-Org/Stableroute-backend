@@ -1,7 +1,27 @@
 import request from "supertest";
 import { type Request, type Response } from "express";
 import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
-import { resetStores, apiKeyStore, webhookStore, config } from "../stores";
+import {
+  resetStores,
+  apiKeyStore,
+  webhookStore,
+  config,
+  apiKeyPrefix,
+  generateApiKeySalt,
+  hashApiKeySecret,
+} from "../stores";
+
+/** Build a valid, hashed store record for a raw key injected directly into apiKeyStore. */
+const recordFor = (rawKey: string, overrides: Record<string, unknown> = {}) => {
+  const salt = generateApiKeySalt();
+  return {
+    label: "injected",
+    createdAt: Date.now(),
+    salt,
+    hash: hashApiKeySecret(rawKey, salt),
+    ...overrides,
+  };
+};
 
 beforeEach(() => resetStores());
 
@@ -354,6 +374,8 @@ describe("StableRoute Backend", () => {
         label: "test-expiry",
         createdAt: Date.now(),
         expiresAt: Date.now() + 10, // 10ms in the future
+        salt: "s",
+        hash: "h",
       };
       expect(isKeyValid(record)).toBe(true);
 
@@ -364,13 +386,15 @@ describe("StableRoute Backend", () => {
 
     it("requireScope middleware rejects expired keys with 401", () => {
       const rawKey = "srk_test_auth_expired";
-      const record = {
-        label: "test-auth-expired",
-        createdAt: Date.now(),
-        expiresAt: Date.now() - 1000, // expired 1s ago
-        scopes: ["pairs:write"],
-      };
-      apiKeyStore.set(rawKey, record);
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey),
+        recordFor(rawKey, {
+          label: "test-auth-expired",
+          createdAt: Date.now(),
+          expiresAt: Date.now() - 1000, // expired 1s ago
+          scopes: ["pairs:write"],
+        })
+      );
 
       const middleware = requireScope("pairs:write");
       
@@ -397,13 +421,15 @@ describe("StableRoute Backend", () => {
 
     it("requireScope middleware accepts valid keys with required scope and updates lastUsedAt", () => {
       const rawKey = "srk_test_auth_valid";
-      const record = {
-        label: "test-auth-valid",
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 3600 * 1000,
-        scopes: ["pairs:write"],
-      };
-      apiKeyStore.set(rawKey, record);
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey),
+        recordFor(rawKey, {
+          label: "test-auth-valid",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 3600 * 1000,
+          scopes: ["pairs:write"],
+        })
+      );
 
       const middleware = requireScope("pairs:write");
       
@@ -421,7 +447,7 @@ describe("StableRoute Backend", () => {
       expect(res.status).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalled();
       
-      const updatedRecord = apiKeyStore.get(rawKey);
+      const updatedRecord = apiKeyStore.get(apiKeyPrefix(rawKey));
       expect(updatedRecord!.lastUsedAt).toBeDefined();
       expect(updatedRecord!.lastUsedAt).toBeGreaterThan(0);
     });
@@ -433,6 +459,8 @@ describe("StableRoute Backend", () => {
         createdAt: Date.now() - 2000,
         rotatedAt: Date.now() - 1000,
         graceExpiresAt: Date.now() + 10, // expires in 10ms
+        salt: "s",
+        hash: "h",
       };
       expect(isKeyValid(record)).toBe(true);
 
@@ -443,12 +471,14 @@ describe("StableRoute Backend", () => {
 
     it("requireScope middleware rejects keys that lack the required scope", () => {
       const rawKey = "srk_test_auth_no_scope";
-      const record = {
-        label: "test-auth-no-scope",
-        createdAt: Date.now(),
-        scopes: [], // empty scope
-      };
-      apiKeyStore.set(rawKey, record);
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey),
+        recordFor(rawKey, {
+          label: "test-auth-no-scope",
+          createdAt: Date.now(),
+          scopes: [], // empty scope
+        })
+      );
 
       const middleware = requireScope("pairs:write");
       
@@ -677,15 +707,15 @@ describe("StableRoute Backend", () => {
 
     it("stableroute_api_keys_total increments and decrements correctly", async () => {
       // Seed store directly for a controlled count
-      apiKeyStore.set("srk_testkey1", { label: "k1", createdAt: Date.now(), scopes: [] });
-      apiKeyStore.set("srk_testkey2", { label: "k2", createdAt: Date.now(), scopes: [] });
+      apiKeyStore.set("srk_key1", { label: "k1", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
+      apiKeyStore.set("srk_key2", { label: "k2", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
 
       const res1 = await request(app).get("/api/v1/metrics");
       const match1 = res1.text.match(/^stableroute_api_keys_total (\d+)$/m);
       expect(match1).not.toBeNull();
       expect(Number(match1![1])).toBe(2);
 
-      apiKeyStore.delete("srk_testkey1");
+      apiKeyStore.delete("srk_key1");
 
       const res2 = await request(app).get("/api/v1/metrics");
       const match2 = res2.text.match(/^stableroute_api_keys_total (\d+)$/m);
@@ -736,7 +766,7 @@ describe("StableRoute Backend", () => {
 
     it("gauge values never include raw API key material or webhook URLs", async () => {
       const secret = "srk_supersecretapikey12345";
-      apiKeyStore.set(secret, { label: "secret-key", createdAt: Date.now(), scopes: [] });
+      apiKeyStore.set(apiKeyPrefix(secret), { label: "secret-key", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
       webhookStore.set("wh_secure", { url: "https://internal.secret.example.com/hook", events: [], createdAt: Date.now() });
 
       const res = await request(app).get("/api/v1/metrics");

@@ -16,7 +16,19 @@ import { type Request, type Response } from "express";
 import express from "express";
 import request from "supertest";
 import app, { requireScope, SCOPE_CATALOG } from "../index";
-import { resetStores, apiKeyStore } from "../stores";
+import { resetStores, apiKeyStore, apiKeyPrefix, generateApiKeySalt, hashApiKeySecret } from "../stores";
+
+/** Build a valid, hashed store record for a raw key injected directly into apiKeyStore. */
+const recordFor = (rawKey: string, overrides: Record<string, unknown> = {}) => {
+  const salt = generateApiKeySalt();
+  return {
+    label: "injected",
+    createdAt: Date.now(),
+    salt,
+    hash: hashApiKeySecret(rawKey, salt),
+    ...overrides,
+  };
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -269,12 +281,15 @@ describe("API-key scopes", () => {
     it("returns 401 for an expired key", async () => {
       // Inject an expired key directly into the store
       const rawKey = "srk_expired_scope_test_____00000";
-      apiKeyStore.set(rawKey, {
-        label: "expired",
-        createdAt: Date.now() - 10_000,
-        expiresAt: Date.now() - 1,       // expired 1 ms ago
-        scopes: ["pairs:write"],
-      });
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey),
+        recordFor(rawKey, {
+          label: "expired",
+          createdAt: Date.now() - 10_000,
+          expiresAt: Date.now() - 1, // expired 1 ms ago
+          scopes: ["pairs:write"],
+        })
+      );
 
       const protectedApp = makeProtectedApp("pairs:write");
       const res = await request(protectedApp)
@@ -301,11 +316,10 @@ describe("API-key scopes", () => {
       // it won't have the full error middleware. Instead we mount requireScope
       // as pure Express middleware and inspect the json call via mocks.
       const rawKey = "srk_noscopemock__000000000000000";
-      apiKeyStore.set(rawKey, {
-        label: "no-scope",
-        createdAt: Date.now(),
-        scopes: [],
-      });
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey),
+        recordFor(rawKey, { label: "no-scope", createdAt: Date.now(), scopes: [] })
+      );
 
       const middleware = requireScope("pairs:write");
       const req = {
@@ -385,7 +399,7 @@ describe("API-key scopes", () => {
         .get("/protected")
         .set("Authorization", `Bearer ${rawKey}`);
 
-      const record = apiKeyStore.get(rawKey);
+      const record = apiKeyStore.get(apiKeyPrefix(rawKey));
       expect(record!.lastUsedAt).toBeDefined();
       expect(record!.lastUsedAt!).toBeGreaterThanOrEqual(beforeAuth);
     });
@@ -411,11 +425,10 @@ describe("API-key scopes", () => {
       const rawKey: string = created.body.key;
 
       const rawKey2 = "srk_bearer_case_test_0000000000";
-      apiKeyStore.set(rawKey2, {
-        label: "bearer-case",
-        createdAt: Date.now(),
-        scopes: ["pairs:write"],
-      });
+      apiKeyStore.set(
+        apiKeyPrefix(rawKey2),
+        recordFor(rawKey2, { label: "bearer-case", createdAt: Date.now(), scopes: ["pairs:write"] })
+      );
 
       const middleware = requireScope("pairs:write");
       const req = {
@@ -454,7 +467,7 @@ describe("API-key scopes", () => {
       const newKey: string = rotated.body.key;
 
       // Check that the new key has the same scopes as the predecessor
-      const newRecord = apiKeyStore.get(newKey);
+      const newRecord = apiKeyStore.get(apiKeyPrefix(newKey));
       expect(newRecord!.scopes).toEqual(
         expect.arrayContaining(["pairs:write", "webhooks:write"]),
       );

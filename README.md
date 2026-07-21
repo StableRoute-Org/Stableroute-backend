@@ -115,6 +115,12 @@ Per-item failure shape:
 - Returns `400 invalid_request` only when the top-level `pairs` array is missing, empty, or exceeds `bulkMaxItems`. Per-item errors are always reported inline.
 - The endpoint is blocked in read-only mode (`503 read_only_mode`) and when the service is paused (`503 service_paused`).
 
+### Correlation header
+
+Every response carries an `X-Request-Id` header. If the caller sends an `X-Request-Id` request header that passes both the charset and length checks below, it is echoed back verbatim; otherwise a fresh UUID v4 is generated. The same id appears in the `requestId` field of every error body, so logs and error responses can be correlated.
+
+**Accepted format:** 1–200 characters drawn exclusively from the conservative token charset `[A-Za-z0-9._-]`. Values containing control characters (including CR `\r` / LF `\n`), spaces, or any other non-token bytes are **not** echoed — a generated UUID v4 is used instead, closing the header-injection and log-injection surface while preserving correlation.
+
 ## Architecture & request lifecycle
 
 See [docs/architecture.md](docs/architecture.md) for the in-memory store model,

@@ -31,6 +31,10 @@ import {
   KNOWN_EVENT_TYPES,
   hydrateFromSnapshot,
   setHydrating,
+  apiKeyPrefix,
+  generateApiKeySalt,
+  hashApiKeySecret,
+  verifyApiKeySecret,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -940,8 +944,13 @@ export const requireScope = (scope: string) =>
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
     const rawKey = match ? match[1] : undefined;
-    const record = rawKey ? apiKeyStore.get(rawKey) : undefined;
-    if (!record || !isKeyValid(record)) {
+    if (!rawKey) {
+      sendError(res, req, 401, "unauthorized", "a valid API key is required");
+      return;
+    }
+    const prefix = apiKeyPrefix(rawKey);
+    const record = apiKeyStore.get(prefix);
+    if (!record || !isKeyValid(record) || !verifyApiKeySecret(rawKey, record)) {
       sendError(res, req, 401, "unauthorized", "a valid API key is required");
       return;
     }
@@ -949,19 +958,35 @@ export const requireScope = (scope: string) =>
       sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
       return;
     }
-    apiKeyStore.set(rawKey!, { ...record, lastUsedAt: Date.now() });
+    apiKeyStore.set(prefix, { ...record, lastUsedAt: Date.now() });
     next();
   };
 
+/**
+ * Mint a fresh `srk_` API key together with the salted-hash record fields to
+ * store for it, retrying on the (astronomically unlikely) event that the
+ * derived prefix collides with one already in `apiKeyStore` — since the
+ * prefix doubles as the store's lookup key, it must be unique.
+ */
+const mintApiKey = (): { key: string; prefix: string; salt: string; hash: string } => {
+  let key: string;
+  let prefix: string;
+  do {
+    key = `srk_${randomUUID().replace(/-/g, "")}`;
+    prefix = apiKeyPrefix(key);
+  } while (apiKeyStore.has(prefix));
+  const salt = generateApiKeySalt();
+  const hash = hashApiKeySecret(key, salt);
+  return { key, prefix, salt, hash };
+};
+
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
   const { prefix } = req.params;
-  let found: string | undefined;
-  for (const k of apiKeyStore.keys()) if (k.slice(0, 8) === prefix) { found = k; break; }
-  if (!found) {
+  if (!apiKeyStore.has(prefix)) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
   }
-  apiKeyStore.delete(found);
+  apiKeyStore.delete(prefix);
   recordEvent("apikey.deleted", { prefix });
   res.status(204).send();
 });
@@ -981,8 +1006,8 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
   }
   const offset = cursorResult ?? 0;
 
-  const allItems = Array.from(apiKeyStore.entries()).map(([k, m]) => ({
-    prefix: k.slice(0, 8),
+  const allItems = Array.from(apiKeyStore.entries()).map(([prefix, m]) => ({
+    prefix,
     label: m.label,
     createdAt: m.createdAt,
     scopes: m.scopes ?? [],
@@ -1036,15 +1061,17 @@ app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => 
     }
     expiresAt = Date.now() + expiresInSeconds * 1000;
   }
-  const key = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(key, {
+  const { key, prefix, salt, hash } = mintApiKey();
+  apiKeyStore.set(prefix, {
     label,
     createdAt: Date.now(),
     scopes: grantedScopes,
+    salt,
+    hash,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
   });
   // Record only the non-sensitive prefix and label — never the raw key.
-  recordEvent("apikey.created", { prefix: key.slice(0, 8), label });
+  recordEvent("apikey.created", { prefix, label });
   res.status(201).json({ key, label, scopes: grantedScopes, ...(expiresAt !== undefined ? { expiresAt } : {}) });
 });
 
@@ -1069,23 +1096,27 @@ const ROTATION_GRACE_MS = 60 * 60 * 1000;
  */
 app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
   const { prefix } = req.params;
-  let found: string | undefined;
-  for (const k of apiKeyStore.keys()) if (k.slice(0, 8) === prefix) { found = k; break; }
-  const predecessor = found ? apiKeyStore.get(found) : undefined;
-  if (!found || !predecessor) {
+  const predecessor = apiKeyStore.get(prefix);
+  if (!predecessor) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
   }
   const now = Date.now();
   // Stamp the predecessor with rotation metadata; it stays valid until grace expiry.
-  apiKeyStore.set(found, {
+  apiKeyStore.set(prefix, {
     ...predecessor,
     rotatedAt: now,
     graceExpiresAt: now + ROTATION_GRACE_MS,
   });
   // Mint the successor, inheriting the label and scopes.
-  const newKey = `srk_${randomUUID().replace(/-/g, "")}`;
-  apiKeyStore.set(newKey, { label: predecessor.label, createdAt: now, scopes: predecessor.scopes });
+  const { key: newKey, prefix: newPrefix, salt, hash } = mintApiKey();
+  apiKeyStore.set(newPrefix, {
+    label: predecessor.label,
+    createdAt: now,
+    scopes: predecessor.scopes,
+    salt,
+    hash,
+  });
   res.status(201).json({ key: newKey, label: predecessor.label, graceExpiresAt: now + ROTATION_GRACE_MS });
 });
 

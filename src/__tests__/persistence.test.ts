@@ -112,10 +112,12 @@ describe("Persistence Layer", () => {
         enabled: true,
         rate: "1.08",
       });
-      apiKeyStore.set("srk_testkey", {
+      apiKeyStore.set("srk_test", {
         label: "test key",
         createdAt: 12345,
         scopes: ["write"],
+        salt: "test-salt",
+        hash: "test-hash",
       });
       webhookStore.set("wh_test", {
         url: "https://example.com/webhook",
@@ -160,10 +162,12 @@ describe("Persistence Layer", () => {
         enabled: true,
         rate: "1.08",
       });
-      expect(apiKeyStore.get("srk_testkey")).toEqual({
+      expect(apiKeyStore.get("srk_test")).toEqual({
         label: "test key",
         createdAt: 12345,
         scopes: ["write"],
+        salt: "test-salt",
+        hash: "test-hash",
       });
       expect(webhookStore.get("wh_test")).toEqual({
         url: "https://example.com/webhook",
@@ -177,6 +181,77 @@ describe("Persistence Layer", () => {
         type: "pair.registered",
         payload: { source: "USDC", dest: "EURC" },
       });
+    });
+
+    it("invalidates pre-migration apiKeyStore entries lacking salt/hash on hydration", () => {
+      // Legacy snapshots stored the *raw* API key as the map key, in a record
+      // that predates the salt/hash fields -- exactly the recoverable
+      // material this store format eliminates. Hydration must discard such
+      // entries rather than trust (or silently re-hash) a value that may
+      // already have been read out of a leaked snapshot.
+      const legacySnapshot = {
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [
+          [
+            "srk_legacyrawkeyvalue00000000000",
+            { label: "legacy", createdAt: 1, scopes: ["pairs:write"] },
+          ],
+        ],
+        webhookStore: [],
+        eventLog: [],
+      };
+
+      hydrateFromSnapshot(legacySnapshot);
+
+      expect(apiKeyStore.size).toBe(0);
+    });
+
+    it("retains post-migration apiKeyStore entries carrying salt/hash on hydration", () => {
+      const snapshot = {
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [
+          ["srk_abcd", { label: "current", createdAt: 1, scopes: [], salt: "s", hash: "h" }],
+        ],
+        webhookStore: [],
+        eventLog: [],
+      };
+
+      hydrateFromSnapshot(snapshot);
+
+      expect(apiKeyStore.get("srk_abcd")).toEqual({
+        label: "current",
+        createdAt: 1,
+        scopes: [],
+        salt: "s",
+        hash: "h",
+      });
+    });
+
+    it("invalidates only the legacy entries in a mixed pre/post-migration snapshot", () => {
+      const mixedSnapshot = {
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [
+          ["srk_legacy1", { label: "legacy", createdAt: 1, scopes: [] }],
+          ["srk_currnt", { label: "current", createdAt: 2, scopes: [], salt: "s", hash: "h" }],
+        ],
+        webhookStore: [],
+        eventLog: [],
+      };
+
+      hydrateFromSnapshot(mixedSnapshot);
+
+      expect(apiKeyStore.has("srk_legacy1")).toBe(false);
+      expect(apiKeyStore.get("srk_currnt")).toEqual({
+        label: "current",
+        createdAt: 2,
+        scopes: [],
+        salt: "s",
+        hash: "h",
+      });
+      expect(apiKeyStore.size).toBe(1);
     });
 
     it("verifies atomic save (temp file created first)", async () => {
@@ -253,7 +328,7 @@ describe("Persistence Layer", () => {
 
     it("auto-saves on apiKeyStore mutations", async () => {
       process.env.PERSIST_PATH = TEST_SNAP_PATH;
-      apiKeyStore.set("srk_key1", { label: "label1", createdAt: 1 });
+      apiKeyStore.set("srk_key1", { label: "label1", createdAt: 1, salt: "s", hash: "h" });
 
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
@@ -299,7 +374,7 @@ describe("Persistence Layer", () => {
 
       pairRegistry.add("A::B");
       pairRegistry.add("C::D");
-      apiKeyStore.set("srk_1", { label: "1", createdAt: 1 });
+      apiKeyStore.set("srk_1", { label: "1", createdAt: 1, salt: "s", hash: "h" });
 
       await new Promise((resolve) => setTimeout(resolve, 150));
 

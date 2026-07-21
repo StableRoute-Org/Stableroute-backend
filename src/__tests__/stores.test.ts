@@ -163,7 +163,7 @@ describe("stores module", () => {
     });
 
     it("clears apiKeyStore", () => {
-      apiKeyStore.set("srk_abc", { label: "test", createdAt: 1 });
+      apiKeyStore.set("srk_abc0", { label: "test", createdAt: 1, salt: "s", hash: "h" });
       resetStores();
       expect(apiKeyStore.size).toBe(0);
     });

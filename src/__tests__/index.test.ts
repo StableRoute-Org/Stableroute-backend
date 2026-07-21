@@ -71,6 +71,50 @@ describe("StableRoute Backend", () => {
     expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
+  it("replaces a CRLF-containing X-Request-Id with a generated UUID", async () => {
+    const malicious = "id\r\ninjection";
+    const res = await request(app)
+      .get("/health")
+      .set("X-Request-Id", malicious);
+    expect(res.status).toBe(200);
+    const echoed = res.headers["x-request-id"];
+    expect(echoed).not.toBe(malicious);
+    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it("replaces a control-character-containing X-Request-Id with a generated UUID", async () => {
+    const malicious = "id\x00null\x1fcontrol";
+    const res = await request(app)
+      .get("/health")
+      .set("X-Request-Id", malicious);
+    expect(res.status).toBe(200);
+    const echoed = res.headers["x-request-id"];
+    expect(echoed).not.toBe(malicious);
+    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it("asserts that the response header and error body never contain control characters or CRLF from input", async () => {
+    const malicious = "id\r\ninjection\x00null";
+    const res = await request(app)
+      .get("/api/v1/this-route-does-not-exist")
+      .set("X-Request-Id", malicious);
+    expect(res.status).toBe(404);
+    
+    // Header check
+    const headerId = res.headers["x-request-id"];
+    expect(headerId).not.toContain("\r");
+    expect(headerId).not.toContain("\n");
+    expect(headerId).not.toContain("\x00");
+    expect(headerId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    // Body check
+    const bodyId = res.body.requestId;
+    expect(bodyId).not.toContain("\r");
+    expect(bodyId).not.toContain("\n");
+    expect(bodyId).not.toContain("\x00");
+    expect(bodyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
   describe("isValidRequestId", () => {
     it("accepts valid token characters", () => {
       expect(isValidRequestId("abc-123_XYZ.test")).toBe(true);

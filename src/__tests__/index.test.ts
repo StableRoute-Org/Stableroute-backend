@@ -1,5 +1,5 @@
 import request from "supertest";
-import { type Request, type Response } from "express";
+import express, { type Request, type Response } from "express";
 import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
 import { resetStores, apiKeyStore, webhookStore, config } from "../stores";
 
@@ -72,47 +72,76 @@ describe("StableRoute Backend", () => {
   });
 
   it("replaces a CRLF-containing X-Request-Id with a generated UUID", async () => {
-    const malicious = "id\r\ninjection";
-    const res = await request(app)
-      .get("/health")
-      .set("X-Request-Id", malicious);
-    expect(res.status).toBe(200);
-    const echoed = res.headers["x-request-id"];
-    expect(echoed).not.toBe(malicious);
-    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\r\ninjection";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
+
+    try {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      const echoed = res.headers["x-request-id"];
+      expect(echoed).not.toContain("\r");
+      expect(echoed).not.toContain("\n");
+      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
   });
 
   it("replaces a control-character-containing X-Request-Id with a generated UUID", async () => {
-    const malicious = "id\x00null\x1fcontrol";
-    const res = await request(app)
-      .get("/health")
-      .set("X-Request-Id", malicious);
-    expect(res.status).toBe(200);
-    const echoed = res.headers["x-request-id"];
-    expect(echoed).not.toBe(malicious);
-    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\x00null\x1fcontrol";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
+
+    try {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      const echoed = res.headers["x-request-id"];
+      expect(echoed).not.toContain("\x00");
+      expect(echoed).not.toContain("\x1f");
+      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
   });
 
   it("asserts that the response header and error body never contain control characters or CRLF from input", async () => {
-    const malicious = "id\r\ninjection\x00null";
-    const res = await request(app)
-      .get("/api/v1/this-route-does-not-exist")
-      .set("X-Request-Id", malicious);
-    expect(res.status).toBe(404);
-    
-    // Header check
-    const headerId = res.headers["x-request-id"];
-    expect(headerId).not.toContain("\r");
-    expect(headerId).not.toContain("\n");
-    expect(headerId).not.toContain("\x00");
-    expect(headerId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\r\ninjection\x00null";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
 
-    // Body check
-    const bodyId = res.body.requestId;
-    expect(bodyId).not.toContain("\r");
-    expect(bodyId).not.toContain("\n");
-    expect(bodyId).not.toContain("\x00");
-    expect(bodyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    try {
+      const res = await request(app).get("/api/v1/this-route-does-not-exist");
+      expect(res.status).toBe(404);
+      
+      // Header check
+      const headerId = res.headers["x-request-id"];
+      expect(headerId).not.toContain("\r");
+      expect(headerId).not.toContain("\n");
+      expect(headerId).not.toContain("\x00");
+      expect(headerId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      // Body check
+      const bodyId = (res.body as Record<string, unknown>).requestId as string;
+      expect(bodyId).not.toContain("\r");
+      expect(bodyId).not.toContain("\n");
+      expect(bodyId).not.toContain("\x00");
+      expect(bodyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
   });
 
   describe("isValidRequestId", () => {

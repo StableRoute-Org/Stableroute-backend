@@ -768,15 +768,6 @@ describe("StableRoute Backend", () => {
   });
 
   describe("pair-meta endpoints", () => {
-    const expectPairMetaError = (
-      body: Record<string, unknown>,
-      requestId: string,
-      error: string
-    ) => {
-      expect(body.error).toBe(error);
-      expect(body.message).toBeTruthy();
-      expect(body.requestId).toBe(requestId);
-    };
 
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
@@ -1100,7 +1091,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/BADFEE/META/fee_bps")
         .set("X-Request-Id", "bad-fee-bps")
-        .send({ feeBps: "invalid" as any });
+        .send({ feeBps: "invalid" as unknown });
 
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-fee-bps", "invalid_request");

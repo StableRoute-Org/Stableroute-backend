@@ -5,6 +5,7 @@ import {
   registerSignalHandlers,
   handleShutdown,
   parseGraceMs,
+  start,
   type ShutdownDeps,
 } from "../server";
 
@@ -174,13 +175,15 @@ describe("Server startup", () => {
 
   it("createServer(app, 0) starts on an ephemeral port and serves /health", async () => {
     server = createServer(app, 0);
-    await new Promise<void>((resolve) => server.on("listening", resolve));
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.on("listening", resolve));
+    }
 
     const addr = server.address();
     if (addr && typeof addr === "object") port = addr.port;
     expect(port).toBeGreaterThan(0);
 
-    const res = await fetch(`http://localhost:${port}/health`);
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ status: "ok", service: "stableroute-backend" });
@@ -188,12 +191,14 @@ describe("Server startup", () => {
 
   it("closes cleanly with no hanging handles", async () => {
     server = createServer(app, 0);
-    await new Promise<void>((resolve) => server.on("listening", resolve));
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.on("listening", resolve));
+    }
 
     const addr = server.address();
     if (addr && typeof addr === "object") port = addr.port;
 
-    const res = await fetch(`http://localhost:${port}/health`);
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
 
     // close() resolving without error means no hanging connections.
@@ -216,5 +221,101 @@ describe("Server startup", () => {
     expect(process.listenerCount("SIGTERM")).toBe(before.term + 1);
     expect(process.listenerCount("SIGINT")).toBe(before.int + 1);
     // NOTE: we never emit the real signal — handlers call process.exit.
+  });
+
+  it("starts on ephemeral port, responds to /health, and shuts down with an unref'd timer", async () => {
+    server = createServer(app, 0);
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.on("listening", resolve));
+    }
+
+    const addr = server.address();
+    if (addr && typeof addr === "object") port = addr.port;
+    expect(port).toBeGreaterThan(0);
+
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ status: "ok", service: "stableroute-backend" });
+
+    let exitCode: number | null = null;
+    let timerUnrefCalled = false;
+
+    const mockTimer = {
+      unref() {
+        timerUnrefCalled = true;
+      },
+    } as unknown as NodeJS.Timeout;
+
+    const deps: ShutdownDeps = {
+      exit: (code) => {
+        exitCode = code;
+      },
+      setTimeout: (_fn, _ms) => {
+        return mockTimer;
+      },
+      graceMs: 100,
+    };
+
+    handleShutdown(server, "SIGTERM", deps);
+
+    // Wait for the close callback to fire and resolve
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+
+    expect(timerUnrefCalled).toBe(true);
+    expect(exitCode).toBe(0);
+  });
+
+  it("start() starts the server with process.env.PORT override", async () => {
+    const originalPort = process.env.PORT;
+    process.env.PORT = "0";
+
+    let startedServer: http.Server | null = null;
+    try {
+      startedServer = await start();
+      expect(startedServer).not.toBeNull();
+      if (startedServer) {
+        expect(startedServer.listening).toBe(true);
+        const addr = startedServer.address();
+        const port = addr && typeof addr === "object" ? addr.port : 0;
+        expect(port).toBeGreaterThan(0);
+      }
+    } finally {
+      process.env.PORT = originalPort;
+      const s = startedServer;
+      if (s && s.listening) {
+        await new Promise<void>((resolve) => s.close(() => resolve()));
+      }
+    }
+  });
+
+  it("registerSignalHandlers responds to SIGTERM by starting graceful shutdown", async () => {
+    jest.useFakeTimers();
+
+    const server = createServer(app, 0);
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.on("listening", resolve));
+    }
+
+    registerSignalHandlers(server);
+
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation((_code) => {
+      return undefined as never;
+    });
+
+    process.emit("SIGTERM");
+
+    // Wait for the close callback to trigger process.exit(0)
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
+
+    jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 });

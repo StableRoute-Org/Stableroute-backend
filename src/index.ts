@@ -1207,10 +1207,33 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
+  if (rejectUnknownKeys(req, res, ["events"])) return;
   const { events } = req.body ?? {};
   if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
     sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
     return;
+  }
+  if (events.length > WEBHOOK_MAX_EVENTS) {
+    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    return;
+  }
+  for (const name of events as string[]) {
+    if (name.trim().length === 0) {
+      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      return;
+    }
+    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
+      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      return;
+    }
+    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return;
+    }
+    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      return;
+    }
   }
   const deduped = [...new Set(events as string[])];
   // url is preserved; only events are mutated.
@@ -1821,8 +1844,10 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   }
   const results = pairs.map(
     (it: { source?: unknown; destination?: unknown }, index: number) => {
-      const { source, destination } = it ?? {};
-      if (!isAssetCode(source) || !isAssetCode(destination)) {
+      const { source: rawSource, destination: rawDestination } = it ?? {};
+      const source = normalizeAsset(rawSource);
+      const destination = normalizeAsset(rawDestination);
+      if (source === null || destination === null) {
         return { index, ok: false as const, error: "invalid_asset_code" };
       }
       if (source === destination) {
@@ -1838,20 +1863,6 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   res.json({ results });
 });
 
-// Asset symbols are short uppercase identifiers (USDC, EURC, XLM, …).
-// Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
-// anything that is not a single string so an array param can't smuggle
-// through as a "truthy" value.
-//
-// Codes beginning with "__health" are explicitly rejected to prevent a
-// caller from registering a pair whose derived pairKey could collide with
-// the deep-probe's reserved scratch namespace (HEALTH_PROBE_KEY), which
-// would allow a concurrent probe delete to silently drop operator data.
-const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" &&
-  v.length > 0 &&
-  v.length <= 12 &&
-  !v.startsWith("__health");
 
 /**
  * Canonicalize an asset code so that casing and surrounding whitespace never

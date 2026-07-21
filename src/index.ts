@@ -309,12 +309,15 @@ const rejectUnknownKeys = (req: Request, res: Response, allowed: string[]): bool
   return false;
 };
 
-// Attach an X-Request-Id before body parsing so parser errors can still
-// return the canonical error shape with a correlation id.
-// Only echo the caller's id when it passes the strict charset + length check
-// (isValidRequestId); anything that fails — including values with control
-// characters, CR/LF, or other non-token bytes — is silently replaced with a
-// freshly generated UUID v4 to prevent header-injection and log-injection.
+/**
+ * Correlation middleware.
+ *
+ * Attaches a sanitized `X-Request-Id` to the request (`req.id`) and sets the `X-Request-Id` response header.
+ * If the client provides an `X-Request-Id` header:
+ * - It is echoed verbatim if it matches a strict pattern: 1-200 characters from `[A-Za-z0-9._-]`.
+ * - If it contains control characters, CRLF, spaces, or is over-length, it is silently replaced with a fresh UUID v4 to prevent header splitting and log injection.
+ * - If no header is provided, a fresh UUID v4 is generated.
+ */
 app.use((req: Request, res: Response, next: NextFunction) => {
   const incoming = req.header("x-request-id");
   const id = incoming !== undefined && isValidRequestId(incoming) ? incoming : randomUUID();

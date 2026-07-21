@@ -1,5 +1,5 @@
 import request from "supertest";
-import { type Request, type Response } from "express";
+import express, { type Request, type Response } from "express";
 import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
 import {
   resetStores,
@@ -89,6 +89,79 @@ describe("StableRoute Backend", () => {
     const echoed = res.headers["x-request-id"];
     expect(echoed).not.toBe(tooLong);
     expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it("replaces a CRLF-containing X-Request-Id with a generated UUID", async () => {
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\r\ninjection";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
+
+    try {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      const echoed = res.headers["x-request-id"];
+      expect(echoed).not.toContain("\r");
+      expect(echoed).not.toContain("\n");
+      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
+  });
+
+  it("replaces a control-character-containing X-Request-Id with a generated UUID", async () => {
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\x00null\x1fcontrol";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
+
+    try {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      const echoed = res.headers["x-request-id"];
+      expect(echoed).not.toContain("\x00");
+      expect(echoed).not.toContain("\x1f");
+      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
+  });
+
+  it("asserts that the response header and error body never contain control characters or CRLF from input", async () => {
+    const originalHeader = express.request.header;
+    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+      if (name.toLowerCase() === "x-request-id") {
+        return "id\r\ninjection\x00null";
+      }
+      return originalHeader.call(this, name);
+    } as unknown as typeof express.request.header;
+
+    try {
+      const res = await request(app).get("/api/v1/this-route-does-not-exist");
+      expect(res.status).toBe(404);
+      
+      // Header check
+      const headerId = res.headers["x-request-id"];
+      expect(headerId).not.toContain("\r");
+      expect(headerId).not.toContain("\n");
+      expect(headerId).not.toContain("\x00");
+      expect(headerId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      // Body check
+      const bodyId = (res.body as Record<string, unknown>).requestId as string;
+      expect(bodyId).not.toContain("\r");
+      expect(bodyId).not.toContain("\n");
+      expect(bodyId).not.toContain("\x00");
+      expect(bodyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    } finally {
+      express.request.header = originalHeader;
+    }
   });
 
   describe("isValidRequestId", () => {
@@ -797,16 +870,6 @@ describe("StableRoute Backend", () => {
   });
 
   describe("pair-meta endpoints", () => {
-    const expectPairMetaError = (
-      body: Record<string, unknown>,
-      requestId: string,
-      error: string
-    ) => {
-      expect(body.error).toBe(error);
-      expect(body.message).toBeTruthy();
-      expect(body.requestId).toBe(requestId);
-    };
-
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
         .post("/api/v1/pairs")
@@ -1129,7 +1192,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/BADFEE/META/fee_bps")
         .set("X-Request-Id", "bad-fee-bps")
-        .send({ feeBps: "invalid" as any });
+        .send({ feeBps: "invalid" as unknown });
 
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-fee-bps", "invalid_request");

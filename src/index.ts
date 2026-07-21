@@ -314,12 +314,15 @@ const rejectUnknownKeys = (req: Request, res: Response, allowed: string[]): bool
   return false;
 };
 
-// Attach an X-Request-Id before body parsing so parser errors can still
-// return the canonical error shape with a correlation id.
-// Only echo the caller's id when it passes the strict charset + length check
-// (isValidRequestId); anything that fails — including values with control
-// characters, CR/LF, or other non-token bytes — is silently replaced with a
-// freshly generated UUID v4 to prevent header-injection and log-injection.
+/**
+ * Correlation middleware.
+ *
+ * Attaches a sanitized `X-Request-Id` to the request (`req.id`) and sets the `X-Request-Id` response header.
+ * If the client provides an `X-Request-Id` header:
+ * - It is echoed verbatim if it matches a strict pattern: 1-200 characters from `[A-Za-z0-9._-]`.
+ * - If it contains control characters, CRLF, spaces, or is over-length, it is silently replaced with a fresh UUID v4 to prevent header splitting and log injection.
+ * - If no header is provided, a fresh UUID v4 is generated.
+ */
 app.use((req: Request, res: Response, next: NextFunction) => {
   const incoming = req.header("x-request-id");
   const id = incoming !== undefined && isValidRequestId(incoming) ? incoming : randomUUID();
@@ -1151,7 +1154,42 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-
+/**
+ * Validate a set of webhook events. Sends error if invalid and returns null,
+ * otherwise returns deduplicated array of valid event names.
+ */
+const validateWebhookEvents = (res: Response, req: Request, events: unknown): string[] | null => {
+  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
+    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
+    return null;
+  }
+  if (events.length > WEBHOOK_MAX_EVENTS) {
+    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    return null;
+  }
+  for (const name of events as string[]) {
+    if (name.trim().length === 0) {
+      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      return null;
+    }
+    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
+      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      return null;
+    }
+    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return null;
+    }
+    // Event names must be either "*" (wildcard) or follow the "namespace.action"
+    // convention (exactly one dot, alphanumeric segments). Names with multiple
+    // dots are rejected as they indicate a typo or unsupported format.
+    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      return null;
+    }
+  }
+  return [...new Set(events as string[])];
+};
 
 app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["url", "events"])) return;
@@ -1164,37 +1202,8 @@ app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => 
     sendError(res, req, 400, "invalid_request", "url host must be public");
     return;
   }
-  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
-    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
-    return;
-  }
-  if (events.length > WEBHOOK_MAX_EVENTS) {
-    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
-    return;
-  }
-  for (const name of events as string[]) {
-    if (name.trim().length === 0) {
-      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
-      return;
-    }
-    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
-      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
-      return;
-    }
-    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
-      return;
-    }
-    // Event names must be either "*" (wildcard) or follow the "namespace.action"
-    // convention (exactly one dot, alphanumeric segments). Names with multiple
-    // dots are rejected as they indicate a typo or unsupported format.
-    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
-      return;
-    }
-  }
-  // Deduplicate event names before storing
-  const deduped = [...new Set(events as string[])];
+  const deduped = validateWebhookEvents(res, req, events);
+  if (deduped === null) return;
   const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
   // Record id and url only — never any webhook secret material.
@@ -1233,6 +1242,7 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
  * @route PATCH /api/v1/webhooks/:id
  */
 app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
+  if (rejectUnknownKeys(req, res, ["events"])) return;
   const { id } = req.params;
   const record = webhookStore.get(id);
   if (!record) {
@@ -1240,11 +1250,8 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     return;
   }
   const { events } = req.body ?? {};
-  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
-    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
-    return;
-  }
-  const deduped = [...new Set(events as string[])];
+  const deduped = validateWebhookEvents(res, req, events);
+  if (deduped === null) return;
   // url is preserved; only events are mutated.
   const updated = { ...record, events: deduped };
   webhookStore.set(id, updated);
@@ -1854,36 +1861,23 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   const results = pairs.map(
     (it: { source?: unknown; destination?: unknown }, index: number) => {
       const { source, destination } = it ?? {};
-      if (!isAssetCode(source) || !isAssetCode(destination)) {
+      const normSource = normalizeAsset(source);
+      const normDest = normalizeAsset(destination);
+      if (normSource === null || normDest === null) {
         return { index, ok: false as const, error: "invalid_asset_code" };
       }
-      if (source === destination) {
+      if (normSource === normDest) {
         return { index, ok: false as const, error: "same_asset" };
       }
-      const key = pairKey(source, destination);
+      const key = pairKey(normSource, normDest);
       const isNew = !pairRegistry.has(key);
       pairRegistry.add(key);
-      recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
-      return { index, ok: true as const, source, destination, registered: true };
+      recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source: normSource, destination: normDest });
+      return { index, ok: true as const, source: normSource, destination: normDest, registered: true };
     }
   );
   res.json({ results });
 });
-
-// Asset symbols are short uppercase identifiers (USDC, EURC, XLM, …).
-// Cap at 12 chars (Stellar's max alphanumeric asset code) and reject
-// anything that is not a single string so an array param can't smuggle
-// through as a "truthy" value.
-//
-// Codes beginning with "__health" are explicitly rejected to prevent a
-// caller from registering a pair whose derived pairKey could collide with
-// the deep-probe's reserved scratch namespace (HEALTH_PROBE_KEY), which
-// would allow a concurrent probe delete to silently drop operator data.
-const isAssetCode = (v: unknown): v is string =>
-  typeof v === "string" &&
-  v.length > 0 &&
-  v.length <= 12 &&
-  !v.startsWith("__health");
 
 /**
  * Canonicalize an asset code so that casing and surrounding whitespace never

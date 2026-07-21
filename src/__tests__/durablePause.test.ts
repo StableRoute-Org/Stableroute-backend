@@ -9,6 +9,8 @@
  * - the restored state is reflected in /api/v1/admin/status, deep health, and metrics
  */
 
+process.env.PAUSE_STATE_FILE = ".pause_state_test.json";
+
 import request from "supertest";
 import { existsSync, writeFileSync, unlinkSync } from "node:fs";
 import app from "../index";

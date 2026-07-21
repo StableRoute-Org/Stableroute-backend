@@ -25,8 +25,13 @@ import { resolve } from "node:path";
  *
  * @returns Absolute path to the pause-state file.
  */
-export const pauseStateFilePath = (): string =>
-  resolve(process.env.PAUSE_STATE_FILE ?? ".pause_state.json");
+export const pauseStateFilePath = (): string => {
+  if (process.env.PAUSE_STATE_FILE) {
+    return resolve(process.env.PAUSE_STATE_FILE);
+  }
+  const suffix = process.env.JEST_WORKER_ID ? `-${process.env.JEST_WORKER_ID}` : "";
+  return resolve(`.pause_state${suffix}.json`);
+};
 
 /**
  * Read the persisted pause flag from disk.

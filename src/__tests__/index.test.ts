@@ -1,27 +1,8 @@
 import request from "supertest";
 import express, { type Request, type Response } from "express";
 import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
-import {
-  resetStores,
-  apiKeyStore,
-  webhookStore,
-  config,
-  apiKeyPrefix,
-  generateApiKeySalt,
-  hashApiKeySecret,
-} from "../stores";
-
-/** Build a valid, hashed store record for a raw key injected directly into apiKeyStore. */
-const recordFor = (rawKey: string, overrides: Record<string, unknown> = {}) => {
-  const salt = generateApiKeySalt();
-  return {
-    label: "injected",
-    createdAt: Date.now(),
-    salt,
-    hash: hashApiKeySecret(rawKey, salt),
-    ...overrides,
-  };
-};
+import { resetStores, apiKeyStore, webhookStore, config } from "../stores";
+import { logger } from "../logger";
 
 beforeEach(() => resetStores());
 
@@ -870,6 +851,7 @@ describe("StableRoute Backend", () => {
   });
 
   describe("pair-meta endpoints", () => {
+
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
         .post("/api/v1/pairs")
@@ -3121,6 +3103,90 @@ describe("StableRoute Backend", () => {
           .send(JSON.stringify({ liquidity: "500", __proto__: { polluted: true } }));
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      });
+    });
+
+    describe("Request Timeout Guard", () => {
+      let originalTimeout: number | undefined;
+
+      beforeAll(() => {
+        originalTimeout = config.requestTimeoutMs;
+      });
+
+      afterAll(() => {
+        if (originalTimeout !== undefined) {
+          config.requestTimeoutMs = originalTimeout;
+        } else {
+          delete config.requestTimeoutMs;
+        }
+      });
+
+      it("allows a request to complete normally within the deadline and clears the timer", async () => {
+        config.requestTimeoutMs = 500;
+        
+        const res = await request(app)
+          .get("/test/slow")
+          .query({ delay: 50 });
+        
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ ok: true });
+      });
+
+      it("terminates a request exceeding the configured timeout deadline with 503 request_timeout", async () => {
+        config.requestTimeoutMs = 20;
+
+        const res = await request(app)
+          .get("/test/slow")
+          .set("X-Request-Id", "timeout-test-123")
+          .query({ delay: 150 });
+
+        expect(res.status).toBe(503);
+        expect(res.body.error).toBe("request_timeout");
+        expect(res.body.message).toMatch(/Request timed out/);
+        expect(res.body.requestId).toBe("timeout-test-123");
+      });
+
+      it("respects process.env.REQUEST_TIMEOUT_MS if config.requestTimeoutMs is not set", async () => {
+        const prevConfigVal = config.requestTimeoutMs;
+        delete config.requestTimeoutMs;
+        process.env.REQUEST_TIMEOUT_MS = "30";
+
+        try {
+          const res = await request(app)
+            .get("/test/slow")
+            .set("X-Request-Id", "timeout-env-test")
+            .query({ delay: 100 });
+
+          expect(res.status).toBe(503);
+          expect(res.body.error).toBe("request_timeout");
+          expect(res.body.requestId).toBe("timeout-env-test");
+        } finally {
+          delete process.env.REQUEST_TIMEOUT_MS;
+          config.requestTimeoutMs = prevConfigVal!;
+        }
+      });
+
+      it("does not send request_timeout error or throw if headers were already sent", async () => {
+        config.requestTimeoutMs = 20;
+        
+        const spyWarn = jest.spyOn(logger, "warn").mockImplementation(() => {});
+
+        const res = await request(app)
+          .get("/test/slow-headers-sent")
+          .set("X-Request-Id", "timeout-headers-sent-test")
+          .query({ delay: 100 });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("partial");
+
+        // Wait to make sure timeout handler runs
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(spyWarn).toHaveBeenCalledWith(
+          expect.objectContaining({ requestId: "timeout-headers-sent-test" }),
+          "Request timeout triggered but headers were already sent."
+        );
+        spyWarn.mockRestore();
       });
     });
   });

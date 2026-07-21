@@ -54,6 +54,7 @@ and `path`), but `error`, `message`, and `requestId` are always present.
 | `service_paused`    | 503  | Service is paused and a non-idempotent request was made (see Admin / pause).        |
 | `internal_error`    | 500  | Unhandled exception; `message` carries the error text plus `method`/`path`.         |
 | `not_acceptable`    | 406  | `Accept` header is present and excludes `application/json` (see Content negotiation). |
+| `request_timeout`   | 503  | The request handler execution time exceeded the configured timeout deadline.       |
 
 > **Pause behaviour:** while paused, all non-`GET`/`HEAD`/`OPTIONS`
 > requests return `503 service_paused`, **except** `POST /api/v1/admin/unpause`,

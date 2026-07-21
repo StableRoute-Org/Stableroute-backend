@@ -196,6 +196,7 @@ const defaultConfig = (): Record<string, number> => ({
   bulkMaxItems: 100,
   eventLogCap: EVENT_LOG_CAP,
   quote_ttl_ms: 30_000,
+  requestTimeoutMs: 10_000,
 });
 
 // ─── Stores ──────────────────────────────────────────────────────────────────

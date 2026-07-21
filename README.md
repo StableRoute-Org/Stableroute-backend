@@ -172,6 +172,7 @@ table below lists every variable the code reads — there are no others.
 | `IDEMPOTENCY_TTL_MS` | TTL in milliseconds for the idempotency cache entries. | `86400000` (24h) | `3600000` (1h) |
 | `IDEMPOTENCY_CACHE_MAX` | Maximum number of entries kept in the idempotency cache. | `10000` | `5000` |
 | `PERSIST_PATH`       | File path for the JSON persistence snapshot. When set, hydrates stores on startup and saves them on mutations. Defaults to in-memory only. | _(unset)_ | `./snapshot.json` |
+| `REQUEST_TIMEOUT_MS` | Maximum duration in milliseconds a request is allowed to take before being aborted with a `503 request_timeout` error. | `10000` (10s) | `5000` (5s) |
 
 ### Store persistence and snapshot format
 

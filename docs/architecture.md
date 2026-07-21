@@ -38,14 +38,15 @@ Every inbound HTTP request passes through the following layers **in registration
 |---|-------|----------------------|--------|
 | 1 | **CORS** (`cors()`) | — | `app.use(cors())` |
 | 2 | **Request-ID correlation** | — | inline middleware |
-| 3 | **Body parser** (`express.json`) | 413 | `app.use(express.json(...))` |
-| 4 | **Pause guard** | 503 | inline middleware |
-| 5 | **Rate limiter** | 429 | inline middleware |
-| 6 | **Request timing** | — | inline middleware |
-| 7 | **Security headers** | — | inline middleware |
-| 8 | **Route handlers** | 200 / 201 / 204 / 400 / 404 | `app.get/post/patch/delete` |
-| 9 | **404 catch-all** | 404 | `app.use` after routes |
-| 10 | **Error handler** | 413 / 500 | 4-argument `app.use` |
+| 3 | **Request-Timeout guard** | 503 | inline middleware |
+| 4 | **Body parser** (`express.json`) | 413 | `app.use(express.json(...))` |
+| 5 | **Pause guard** | 503 | inline middleware |
+| 6 | **Rate limiter** | 429 | inline middleware |
+| 7 | **Request timing** | — | inline middleware |
+| 8 | **Security headers** | — | inline middleware |
+| 9 | **Route handlers** | 200 / 201 / 204 / 400 / 404 | `app.get/post/patch/delete` |
+| 10 | **404 catch-all** | 404 | `app.use` after routes |
+| 11 | **Error handler** | 413 / 500 | 4-argument `app.use` |
 
 ### Layer details
 
@@ -53,34 +54,37 @@ Every inbound HTTP request passes through the following layers **in registration
 Applies permissive CORS headers so browser clients can reach the API. Placed first so pre-flight OPTIONS requests are answered before any app logic runs.
 
 **2. Request-ID correlation** (defined in `src/index.ts`)  
-Reads the optional `X-Request-Id` header (max 200 chars) or generates a `randomUUID()`. Attaches the id to `req.id` and echoes it as `X-Request-Id` in the response. Runs **before** the body parser so any body-parse error (413) can still include the correlation id in the JSON response.
+Reads the optional `X-Request-Id` header (max 200 chars) or generates a `randomUUID()`. Attaches the id to `req.id` and echoes it as `X-Request-Id` in the response. Runs **before** the timeout guard and body parser so any error or timeout can still include the correlation id in the JSON response.
 
-**3. Body parser** (`express.json`, limit 100 KiB)  
+**3. Request-Timeout guard**  
+Arms a timer (defaulting to 10s, configurable via `REQUEST_TIMEOUT_MS` or `config.requestTimeoutMs`). If the request does not finish within the deadline, it short-circuits the request and responds with `503 request_timeout`. Clears the timer on response finish/close to prevent leaks.
+
+**4. Body parser** (`express.json`, limit 100 KiB)  
 Parses `application/json` bodies. If the payload exceeds 100 KiB, Express emits an `entity.too.large` error that is caught by the final error handler and translated into a 413 response (with the correlation id already set).
 
-**4. Pause guard**  
+**5. Pause guard**  
 When the `paused` flag is `true`, all non-idempotent methods (anything except `GET`, `HEAD`, `OPTIONS`) are rejected with 503 — **except** `POST /api/v1/admin/unpause`, so an operator can always recover without restarting the process.
 
-**5. Rate limiter** (per-IP sliding window)  
+**6. Rate limiter** (per-IP sliding window)  
 Enforces a default of 60 requests per 60-second window using timestamps stored in `rateBuckets`. Disabled when `NODE_ENV === "test"` so the Jest suite can make many requests freely. Returns 429 with a `Retry-After: 60` header on violation.
 
-**6. Request timing**  
+**7. Request timing**  
 Hooks `res.on("finish")` to emit a single structured JSON log line containing `requestId`, `method`, `path`, `status`, and `durationMs`. Also sets the `Server-Timing` header for browser DevTools visibility. Suppressed when `NODE_ENV === "test"` to keep test output clean.
 
-**7. Security headers**  
+**8. Security headers**  
 Sets four hardening headers on every response:
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
 - `Referrer-Policy: no-referrer`
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
 
-**8. Route handlers**  
+**9. Route handlers**  
 Registered `app.get/post/patch/delete` handlers. Each handler validates its inputs and calls `sendError` for client errors or `res.json` for success. Unhandled exceptions propagate to the error handler via `next(err)`.
 
-**9. 404 catch-all**  
+**10. 404 catch-all**  
 An `app.use` registered after all routes returns a structured 404 using `sendError` for any path/method combination that did not match a route.
 
-**10. Error handler** (4-argument `app.use`)  
+**11. Error handler** (4-argument `app.use`)  
 Catches any error passed to `next(err)` or thrown synchronously in a handler. Translates `entity.too.large` (body-parser overflow) into 413; all other errors become 500. The response always uses the canonical `{ error, message, requestId }` shape.
 
 ---
@@ -93,20 +97,23 @@ The following Mermaid diagram shows how a normal request (left) and an error req
 flowchart TD
     A([Inbound HTTP request]) --> B[1. CORS]
     B --> C[2. Request-ID: attach/generate X-Request-Id]
-    C --> D[3. Body parser: parse JSON, enforce 100 KiB limit]
+    C --> TIMEOUT[3. Request-Timeout guard]
+    TIMEOUT -->|timeout| Z0[[503 Request Timeout]]
+    TIMEOUT --> D[4. Body parser: parse JSON, enforce 100 KiB limit]
     D -->|entity.too.large| Z1[[Error handler → 413]]
-    D --> E[4. Pause guard]
+    D --> E[5. Pause guard]
     E -->|paused + non-idempotent| Z2[[503 Service Paused]]
-    E --> F[5. Rate limiter]
+    E --> F[6. Rate limiter]
     F -->|> 60 req/min| Z3[[429 Rate Limited]]
-    F --> G[6. Request timing: start timer]
-    G --> H[7. Security headers]
-    H --> I[8. Route handlers]
-    I -->|no route matched| J[9. 404 catch-all → 404]
-    I -->|next err| K[[10. Error handler → 500]]
+    F --> G[7. Request timing: start timer]
+    G --> H[8. Security headers]
+    H --> I[9. Route handlers]
+    I -->|no route matched| J[10. 404 catch-all → 404]
+    I -->|next err| K[[11. Error handler → 500]]
     I -->|success| L([Response 2xx / 4xx])
     J --> L
     K --> L
+    Z0 --> L
     Z1 --> L
     Z2 --> L
     Z3 --> L
@@ -116,15 +123,16 @@ flowchart TD
 
 ## Error Short-Circuits
 
-Two middleware layers can short-circuit the chain before any route handler runs:
+Three middleware layers can short-circuit the chain before any route handler runs:
 
 | Trigger | Layer | Status | `error` field |
 |---------|-------|--------|---------------|
+| Request duration exceeds timeout | Request-Timeout guard | 503 | `request_timeout` |
 | Body > 100 KiB | Body parser → Error handler | 413 | `payload_too_large` |
 | Service paused + mutating method | Pause guard | 503 | `service_paused` |
 | > 60 requests / 60 s from one IP | Rate limiter | 429 | `rate_limited` |
 
-In all three cases the `X-Request-Id` header is already set (layer 2 runs first), so the correlation id appears in the JSON response body and the response header.
+In all cases the `X-Request-Id` header is already set (layer 2 runs first), so the correlation id appears in the JSON response body and the response header.
 
 ---
 

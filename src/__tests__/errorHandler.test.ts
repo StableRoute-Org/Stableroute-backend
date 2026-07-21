@@ -1,7 +1,8 @@
 import request from "supertest";
-import express, { type Request, type Response, type NextFunction } from "express";
-import { randomUUID } from "node:crypto";
+import { Request, Response, NextFunction } from "express";
 import app from "../index";
+
+type RequestWithId = Request & { id?: string };
 
 describe("Error handler — 413 payload_too_large", () => {
   it("returns 413 when body exceeds 100 KiB", async () => {
@@ -138,13 +139,13 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
     // We test the shape assertion by calling the error handler directly.
     const testApp = express();
     testApp.use(express.json({ limit: "100kb" }));
-    testApp.use((req: Request, res: Response, next: NextFunction) => {
-      const id = randomUUID();
-      (req as Request & { id?: string }).id = id;
-      res.setHeader("X-Request-Id", id);
+    testApp.use((_req: Request, _res: Response, next: NextFunction) => {
+      const id = require("node:crypto").randomUUID();
+      (_req as RequestWithId).id = id;
+      _res.setHeader("X-Request-Id", id);
       next();
     });
-    testApp.get("/boom", (req: Request, res: Response, next: NextFunction) => {
+    testApp.get("/boom", (_req: Request, _res: Response, next: NextFunction) => {
       next(new Error("deliberate test error"));
     });
     // Re-use the same error handler shape from index.ts
@@ -161,7 +162,7 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
         message,
         method: req.method,
         path: req.path,
-        requestId: (req as Request & { id?: string }).id,
+        requestId: (req as RequestWithId).id,
       });
     });
 
@@ -176,11 +177,11 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
 
   it("500 response body does not include a stack trace", async () => {
     const testApp = express();
-    testApp.use((req: Request, res: Response, next: NextFunction) => {
-      (req as Request & { id?: string }).id = randomUUID();
+    testApp.use((_req: Request, _res: Response, next: NextFunction) => {
+      (_req as RequestWithId).id = require("node:crypto").randomUUID();
       next();
     });
-    testApp.get("/boom", (req: Request, res: Response, next: NextFunction) => {
+    testApp.get("/boom", (_req: Request, _res: Response, next: NextFunction) => {
       next(new Error("oops"));
     });
     testApp.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
@@ -189,7 +190,7 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
         message: err instanceof Error ? err.message : "Unexpected server error",
         method: req.method,
         path: req.path,
-        requestId: (req as Request & { id?: string }).id,
+        requestId: (req as RequestWithId).id,
       });
     });
 

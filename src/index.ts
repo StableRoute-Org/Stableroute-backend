@@ -134,7 +134,8 @@ export type ApiErrorCode =
   | "pair_not_registered"
   | "idempotency_conflict"
   | "unsupported_media_type"
-  | "insufficient_liquidity";
+  | "insufficient_liquidity"
+  | "request_timeout";
 
 /**
  * Validates an inbound X-Request-Id value.
@@ -166,6 +167,56 @@ const sendError = (
   message: string,
   extra: ErrorResponseExtra = {}
 ) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+
+/**
+ * Helper to retrieve the active request timeout in milliseconds.
+ * Checks `config.requestTimeoutMs` first, falls back to `process.env.REQUEST_TIMEOUT_MS`
+ * if it is a valid number, and defaults to 10 seconds (10,000 ms).
+ */
+const getRequestTimeoutMs = (): number => {
+  if (config.requestTimeoutMs !== undefined) {
+    return config.requestTimeoutMs;
+  }
+  if (process.env.REQUEST_TIMEOUT_MS !== undefined) {
+    const parsed = Number(process.env.REQUEST_TIMEOUT_MS);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 10000;
+};
+
+/**
+ * Express middleware that enforces a per-request timeout.
+ * Arms a timer based on the configured deadline (from `config.requestTimeoutMs` or
+ * `process.env.REQUEST_TIMEOUT_MS`, defaulting to 10s).
+ * If the response does not complete in time, it sends a `503 request_timeout`
+ * canonical error response. The timer is cleared upon request completion ('finish')
+ * or connection close ('close') to avoid resource/timer leaks.
+ *
+ * Checks `res.headersSent` to prevent a double-send / crash if headers are already sent.
+ */
+export const requestTimeoutGuard = (req: Request, res: Response, next: NextFunction): void => {
+  const timeoutMs = getRequestTimeoutMs();
+  
+  const timer = setTimeout(() => {
+    if (res.headersSent) {
+      logger.warn(
+        { requestId: getRequestId(req), method: req.method, path: req.path },
+        "Request timeout triggered but headers were already sent."
+      );
+      return;
+    }
+    sendError(res, req, 503, "request_timeout", "Request timed out");
+  }, timeoutMs);
+
+  const clearTimer = () => {
+    clearTimeout(timer);
+  };
+
+  res.on("finish", clearTimer);
+  res.on("close", clearTimer);
+
+  next();
+};
 
 /**
  * Helper to retrieve the current idempotency TTL in milliseconds.
@@ -330,6 +381,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Request-Id", id);
   next();
 });
+
+app.use(requestTimeoutGuard);
 
 app.use(express.json({ limit: "100kb" }));
 
@@ -1249,9 +1302,38 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
+  if (rejectUnknownKeys(req, res, ["events"])) return;
   const { events } = req.body ?? {};
-  const deduped = validateWebhookEvents(res, req, events);
-  if (deduped === null) return;
+  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
+    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
+    return;
+  }
+  if (events.length > WEBHOOK_MAX_EVENTS) {
+    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    return;
+  }
+  for (const name of events as string[]) {
+    if (name.trim().length === 0) {
+      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      return;
+    }
+    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
+      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      return;
+    }
+    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      return;
+    }
+    if (name !== "*") {
+      const parts = name.split(".");
+      if (parts.length !== 2 || parts.some((p) => !/^[a-z0-9]+$/i.test(p))) {
+        sendError(res, req, 400, "invalid_request", `event name "${name}" must use the namespace.action format`);
+        return;
+      }
+    }
+  }
+  const deduped = [...new Set(events as string[])];
   // url is preserved; only events are mutated.
   const updated = { ...record, events: deduped };
   webhookStore.set(id, updated);
@@ -1572,7 +1654,7 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
 
 app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms"] as const;
+  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms", "requestTimeoutMs"] as const;
   if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
@@ -1860,10 +1942,10 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   }
   const results = pairs.map(
     (it: { source?: unknown; destination?: unknown }, index: number) => {
-      const { source, destination } = it ?? {};
-      const normSource = normalizeAsset(source);
-      const normDest = normalizeAsset(destination);
-      if (normSource === null || normDest === null) {
+      const { source: rawSource, destination: rawDest } = it ?? {};
+      const source = normalizeAsset(rawSource);
+      const destination = normalizeAsset(rawDest);
+      if (source === null || destination === null) {
         return { index, ok: false as const, error: "invalid_asset_code" };
       }
       if (normSource === normDest) {
@@ -1878,6 +1960,7 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   );
   res.json({ results });
 });
+
 
 /**
  * Canonicalize an asset code so that casing and surrounding whitespace never
@@ -2129,6 +2212,26 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
     route: [source_asset, dest_asset],
   });
 });
+
+if (process.env.NODE_ENV === "test") {
+  app.get("/test/slow", (req: Request, res: Response) => {
+    const delay = Number(req.query.delay ?? 100);
+    setTimeout(() => {
+      if (!res.headersSent) {
+        res.json({ ok: true });
+      }
+    }, delay);
+  });
+
+  app.get("/test/slow-headers-sent", (req: Request, res: Response) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.write(JSON.stringify({ partial: true }));
+    const delay = Number(req.query.delay ?? 100);
+    setTimeout(() => {
+      res.end();
+    }, delay);
+  });
+}
 
 // Unknown route: structured 404 echoing the request id.
 app.use((req: Request, res: Response) => {

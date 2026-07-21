@@ -21,14 +21,14 @@ module.exports = {
   // by src/__tests__/server.test.ts without hanging Jest. The signal-handler
   // shutdown body still runs `process.exit`, so it is intentionally not
   // invoked in tests, which is why server.ts branch coverage stays partial.
-  // Thresholds are set at 90 % today with a clear path to 95 % as more
-  // edge-case branches in server.ts become testable.
+  // Thresholds are set at 92 % statements and 85 % branches today, moving closer
+  // to the 95 % target.
   coverageThreshold: {
     global: {
-      statements: 90,
-      branches: 80,
-      functions: 88,
-      lines: 90,
+      statements: 92,
+      branches: 85,
+      functions: 94,
+      lines: 92,
     },
   },
 };

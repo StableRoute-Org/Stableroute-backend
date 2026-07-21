@@ -1325,12 +1325,9 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
       sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
       return;
     }
-    if (name !== "*") {
-      const parts = name.split(".");
-      if (parts.length !== 2 || parts.some((p) => !/^[a-z0-9]+$/i.test(p))) {
-        sendError(res, req, 400, "invalid_request", `event name "${name}" must use the namespace.action format`);
-        return;
-      }
+    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
+      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      return;
     }
   }
   const deduped = [...new Set(events as string[])];
@@ -1942,9 +1939,9 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   }
   const results = pairs.map(
     (it: { source?: unknown; destination?: unknown }, index: number) => {
-      const { source: rawSource, destination: rawDest } = it ?? {};
+      const { source: rawSource, destination: rawDestination } = it ?? {};
       const source = normalizeAsset(rawSource);
-      const destination = normalizeAsset(rawDest);
+      const destination = normalizeAsset(rawDestination);
       if (source === null || destination === null) {
         return { index, ok: false as const, error: "invalid_asset_code" };
       }

@@ -281,7 +281,7 @@ On every push/PR to `main`, GitHub Actions runs:
 - `npm run lint` — ESLint 9 flat config (`eslint.config.mjs`) targeting `src/**/*.ts`
 - `npm run build`
 - `npm test`
-- `npm run test:coverage` — enforces Jest coverage thresholds (≥ 90 % statements/lines, ≥ 88 % functions, ≥ 80 % branches) and uploads the HTML + lcov report as a CI artifact (`coverage-report`, retained 14 days).
+- `npm run test:coverage` — enforces Jest coverage thresholds (≥ 92 % statements/lines, ≥ 94 % functions, ≥ 85 % branches) and uploads the HTML + lcov report as a CI artifact (`coverage-report`, retained 14 days).
 
 Ensure these all pass locally before pushing. To run lint locally:
 
@@ -529,8 +529,8 @@ Quick checklist:
 ## Coverage
 
 Test coverage thresholds are enforced in CI via Jest's `coverageThreshold`.
-Current targets: **statements ≥ 90%**, **branches ≥ 80%**, **functions ≥ 88%**,
-**lines ≥ 90%**.
+Current targets: **statements ≥ 92%**, **branches ≥ 85%**, **functions ≥ 94%**,
+**lines ≥ 92%**.
 
 > **Note:** `server.ts` is now refactored into side-effect-free, exported
 > functions (`createServer`, `registerSignalHandlers`, `start`) with the actual

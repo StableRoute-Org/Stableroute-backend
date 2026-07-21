@@ -851,7 +851,6 @@ describe("StableRoute Backend", () => {
   });
 
   describe("pair-meta endpoints", () => {
-
     it("registers a pair then patches its fee_bps", async () => {
       await request(app)
         .post("/api/v1/pairs")

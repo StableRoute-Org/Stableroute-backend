@@ -1,4 +1,4 @@
-import request, { Response } from "supertest";
+import request, { type Response } from "supertest";
 import app from "../index";
 
 const ROUTES = [

@@ -36,6 +36,7 @@ import {
   type ApiKeyRecord,
   type EventType,
 } from "./stores";
+import { checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
 
 /** Maximum number of event-type entries per webhook subscription. */
 const WEBHOOK_MAX_EVENTS = 20;
@@ -1893,94 +1894,6 @@ const parseSlippageBps = (v: unknown): number | null => {
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1000 ? parsed : null;
 };
 
-/**
- * Compute the fee breakdown for a given amount and fee rate.
- *
- * Arithmetic is performed entirely with `BigInt` to preserve precision on
- * amounts above `Number.MAX_SAFE_INTEGER`. Fees are rounded **down** (in
- * the gateway's favour) via integer division. The resulting `netAmount` is
- * always non-negative: `netAmount = amount - feeAmount`.
- *
- * @param amount  - The gross amount in base units (must be > 0n).
- * @param feeBps  - Fee rate in basis points (0–1000, where 10000 bps = 100 %).
- * @returns An object with `feeAmount` and `netAmount` as `bigint` values.
- */
-/**
- * Compute the minimum received amount after applying slippage tolerance.
- *
- * Uses BigInt arithmetic to preserve precision on amounts above
- * Number.MAX_SAFE_INTEGER. The formula is:
- *   min_received = amount - floor(amount * slippageBps / 10_000)
- *
- * @param amount      - The output amount to apply slippage against (must be > 0n).
- * @param slippageBps - Slippage tolerance in basis points (0–1000).
- * @returns The minimum guaranteed received amount.
- */
-export const applySlippage = (amount: bigint, slippageBps: number): bigint => {
-  const slippageAmount = (amount * BigInt(slippageBps)) / 10_000n;
-  return amount - slippageAmount;
-};
-
-export const applyFee = (
-  amount: bigint,
-  feeBps: number
-): { feeAmount: bigint; netAmount: bigint } => {
-  const feeAmount = (amount * BigInt(feeBps)) / 10_000n;
-  const netAmount = amount - feeAmount;
-  return { feeAmount, netAmount };
-};
-
-type QuoteBoundsViolation = {
-  status: 400 | 422;
-  error: "invalid_request" | "insufficient_liquidity";
-  bulkError: "out_of_bounds";
-  message: string;
-};
-
-/**
- * Validate a quote amount against per-pair min/max/liquidity metadata.
- *
- * The metadata value "0" means the bound is unset. All comparisons stay in
- * BigInt space so large base-unit amounts are never coerced through Number.
- */
-export const checkQuoteBounds = (
-  meta: PairMeta,
-  amount: bigint
-): QuoteBoundsViolation | null => {
-  const minAmount = BigInt(meta.minAmount);
-  if (minAmount !== 0n && amount < minAmount) {
-    return {
-      status: 400,
-      error: "invalid_request",
-      bulkError: "out_of_bounds",
-      message: `amount (${amount}) is below minAmount (${minAmount})`,
-    };
-  }
-
-  const maxAmount = BigInt(meta.maxAmount);
-  if (maxAmount !== 0n && amount > maxAmount) {
-    return {
-      status: 400,
-      error: "invalid_request",
-      bulkError: "out_of_bounds",
-      message: `amount (${amount}) exceeds maxAmount (${maxAmount})`,
-    };
-  }
-
-  const liquidity = BigInt(meta.liquidity);
-  if (liquidity !== 0n && amount > liquidity) {
-    return {
-      status: 422,
-      error: "insufficient_liquidity",
-      bulkError: "out_of_bounds",
-      message: `amount (${amount}) exceeds available liquidity (${liquidity})`,
-    };
-  }
-
-  return null;
-};
-
-
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
   const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
@@ -2026,20 +1939,19 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
       }
     }
     const slippage_bps = 0;
-    const { feeAmount, netAmount } = applyFee(parsedAmount, bulkMeta.feeBps);
-    const min_received = applySlippage(netAmount, slippage_bps);
+    const priced = priceQuote(bulkMeta, parsedAmount, slippage_bps);
     return {
       index: i,
       ok: true as const,
       source_asset,
       dest_asset,
       amount: parsedAmount.toString(),
-      estimated_rate: bulkMeta.rate,
-      feeBps: bulkMeta.feeBps,
-      feeAmount: feeAmount.toString(),
-      netAmount: netAmount.toString(),
+      estimated_rate: priced.rate,
+      feeBps: priced.feeBps,
+      feeAmount: priced.feeAmount.toString(),
+      netAmount: priced.netAmount.toString(),
       slippage_bps,
-      min_received: min_received.toString(),
+      min_received: priced.minReceived.toString(),
     };
   });
   res.json({ results });
@@ -2112,37 +2024,21 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
   if (boundsViolation) {
     return sendError(res, req, boundsViolation.status, boundsViolation.error, boundsViolation.message);
   }
-  const { feeAmount, netAmount } = applyFee(parsedAmount, meta.feeBps);
-  const min_received = applySlippage(netAmount, slippage_bps);
+  const priced = priceQuote(meta, parsedAmount, slippage_bps);
 
   res.json({
     source_asset,
     dest_asset,
     amount: parsedAmount.toString(),
-    estimated_rate: meta.rate,
+    estimated_rate: priced.rate,
     route: [source_asset, dest_asset],
-    feeBps: meta.feeBps,
-    feeAmount: feeAmount.toString(),
-    netAmount: netAmount.toString(),
+    feeBps: priced.feeBps,
+    feeAmount: priced.feeAmount.toString(),
+    netAmount: priced.netAmount.toString(),
     slippage_bps,
-    min_received: min_received.toString(),
+    min_received: priced.minReceived.toString(),
   });
 });
-
-/**
- * Solve for the required input amount given a target output amount.
- * Performs exact-output calculation to determine what gross input is needed
- * to deliver the specified target amount to the destination.
- *
- * Currently implements a 1:1 identity mapping (input equals target), but is
- * structured to allow rates, fees, or other adjustments to be layered in later.
- *
- * @param target - The target output amount in base units.
- * @returns The required gross input amount in base units.
- */
-export const solveInput = (target: bigint): bigint => {
-  return target;
-};
 
 app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
   const { source_asset: rawSource, dest_asset: rawDest, target_amount: rawTargetAmount } = req.query;
@@ -2197,14 +2093,14 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
   }
 
   const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
-  const requiredInput = solveInput(parsedTarget);
+  const priced = priceReverseQuote(meta, parsedTarget);
 
   res.json({
     source_asset,
     dest_asset,
     target_amount: parsedTarget.toString(),
-    required_input: requiredInput.toString(),
-    estimated_rate: meta.rate,
+    required_input: priced.requiredInput.toString(),
+    estimated_rate: priced.rate,
     route: [source_asset, dest_asset],
   });
 });

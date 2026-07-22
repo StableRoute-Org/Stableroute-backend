@@ -1,6 +1,6 @@
 import { type Request, type Response } from "express";
 import request from "supertest";
-import app, { requireScope } from "../index";
+import app, { requireScope, requireAdmin, timingSafeCompare } from "../index";
 import {
   resetStores,
   apiKeyStore,
@@ -21,6 +21,141 @@ const expectCanonicalError = (
 };
 
 beforeEach(() => resetStores());
+
+describe("timingSafeCompare helper", () => {
+  it("returns true for identical strings", () => {
+    expect(timingSafeCompare("secret", "secret")).toBe(true);
+    expect(timingSafeCompare("", "")).toBe(true);
+  });
+
+  it("returns false when strings differ in content", () => {
+    expect(timingSafeCompare("secret", "wrong")).toBe(false);
+    expect(timingSafeCompare("abc", "abd")).toBe(false);
+  });
+
+  it("returns false when strings differ in length (longer vs shorter)", () => {
+    expect(timingSafeCompare("short", "verylongstring")).toBe(false);
+    expect(timingSafeCompare("verylongstring", "short")).toBe(false);
+  });
+
+  it("does not throw on empty or zero-length comparisons", () => {
+    expect(() => timingSafeCompare("", "nonempty")).not.toThrow();
+    expect(timingSafeCompare("", "nonempty")).toBe(false);
+  });
+
+  it("handles unicode strings correctly", () => {
+    const emoji = "🔑🔒";
+    expect(timingSafeCompare(emoji, emoji)).toBe(true);
+    expect(timingSafeCompare(emoji, "🔑🔓")).toBe(false);
+  });
+});
+
+describe("requireAdmin middleware — constant-time admin token check", () => {
+  const originalAdminToken = process.env.ADMIN_TOKEN;
+
+  afterEach(() => {
+    process.env.ADMIN_TOKEN = originalAdminToken;
+  });
+
+  it("passes the request when ADMIN_TOKEN is unset (dev/test mode)", async () => {
+    delete process.env.ADMIN_TOKEN;
+    const res = await request(app).get("/api/v1/admin/status");
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects requests without Authorization header when ADMIN_TOKEN is set", async () => {
+    process.env.ADMIN_TOKEN = "admin-secret-token-123";
+    const res = await request(app).get("/api/v1/admin/status");
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+  });
+
+  it("rejects requests with wrong admin token", async () => {
+    process.env.ADMIN_TOKEN = "correct-admin-token";
+    const res = await request(app)
+      .get("/api/v1/admin/status")
+      .set("Authorization", "Bearer wrong-admin-token");
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+  });
+
+  it("accepts requests with correct admin token", async () => {
+    process.env.ADMIN_TOKEN = "correct-admin-token";
+    const res = await request(app)
+      .get("/api/v1/admin/status")
+      .set("Authorization", "Bearer correct-admin-token");
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects tokens that differ only in length (timing-safe requirement)", async () => {
+    process.env.ADMIN_TOKEN = "short";
+    const res = await request(app)
+      .get("/api/v1/admin/status")
+      .set("Authorization", "Bearer shortextra");
+    expect(res.status).toBe(401);
+    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+  });
+
+  it("rejects empty bearer token", async () => {
+    process.env.ADMIN_TOKEN = "non-empty";
+    const res = await request(app)
+      .get("/api/v1/admin/status")
+      .set("Authorization", "Bearer ");
+    expect(res.status).toBe(401);
+  });
+
+  it("protects POST /api/v1/admin/pause", async () => {
+    process.env.ADMIN_TOKEN = "pause-token";
+    const wrongRes = await request(app)
+      .post("/api/v1/admin/pause")
+      .set("Authorization", "Bearer wrong");
+    expect(wrongRes.status).toBe(401);
+
+    const correctRes = await request(app)
+      .post("/api/v1/admin/pause")
+      .set("Authorization", "Bearer pause-token");
+    expect(correctRes.status).toBe(200);
+  });
+
+  it("protects POST /api/v1/admin/unpause", async () => {
+    process.env.ADMIN_TOKEN = "unpause-token";
+    const wrongRes = await request(app)
+      .post("/api/v1/admin/unpause")
+      .set("Authorization", "Bearer wrong");
+    expect(wrongRes.status).toBe(401);
+
+    const correctRes = await request(app)
+      .post("/api/v1/admin/unpause")
+      .set("Authorization", "Bearer unpause-token");
+    expect(correctRes.status).toBe(200);
+  });
+
+  it("protects POST /api/v1/admin/read-only", async () => {
+    process.env.ADMIN_TOKEN = "ro-token";
+    const wrongRes = await request(app)
+      .post("/api/v1/admin/read-only")
+      .set("Authorization", "Bearer wrong");
+    expect(wrongRes.status).toBe(401);
+
+    const correctRes = await request(app)
+      .post("/api/v1/admin/read-only")
+      .set("Authorization", "Bearer ro-token");
+    expect(correctRes.status).toBe(200);
+  });
+
+  it("protects POST /api/v1/admin/read-write", async () => {
+    process.env.ADMIN_TOKEN = "rw-token";
+    const wrongRes = await request(app)
+      .post("/api/v1/admin/read-write")
+      .set("Authorization", "Bearer wrong");
+    expect(wrongRes.status).toBe(401);
+
+    const correctRes = await request(app)
+      .post("/api/v1/admin/read-write")
+      .set("Authorization", "Bearer rw-token");
+    expect(correctRes.status).toBe(200);
+  });
+});
 
 describe("api-keys lifecycle", () => {
   describe("POST /api/v1/api-keys", () => {

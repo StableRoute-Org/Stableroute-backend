@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import express, {
   type NextFunction,
@@ -900,21 +900,21 @@ app.get("/api/v1/version", (_req: Request, res: Response) => {
   });
 });
 
-app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/pause", requireAdmin, (_req: Request, res: Response) => {
   setPaused(true);
   recordEvent("admin.paused", {});
   res.json({ paused: isPaused() });
 });
-app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/unpause", requireAdmin, (_req: Request, res: Response) => {
   setPaused(false);
   recordEvent("admin.unpaused", {});
   res.json({ paused: isPaused() });
 });
-app.post("/api/v1/admin/read-only", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/read-only", requireAdmin, (_req: Request, res: Response) => {
   setReadOnly(true);
   res.json({ readOnly: isReadOnly() });
 });
-app.post("/api/v1/admin/read-write", (_req: Request, res: Response) => {
+app.post("/api/v1/admin/read-write", requireAdmin, (_req: Request, res: Response) => {
   setReadOnly(false);
   res.json({ readOnly: isReadOnly() });
 });
@@ -1052,6 +1052,73 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   const { page, nextCursor } = paginate(items, limit, offset);
   res.json({ items: page, nextCursor });
 });
+
+/**
+ * Constant-time string comparison that never short-circuits on a length mismatch.
+ *
+ * Both inputs are encoded to UTF-8 `Buffer`s. When their byte-lengths differ the
+ * shorter buffer is padded with zeroes so the `timingSafeEqual` call always
+ * operates on equal-length buffers — the padding comparison still returns `false`,
+ * but no early exit occurs and the execution time does not reveal how many leading
+ * bytes of `a` and `b` matched before the first difference.
+ *
+ * @param a - The untrusted (caller-supplied) string.
+ * @param b - The trusted (stored/configured) string.
+ * @returns `true` only when the strings are identical in content and length.
+ */
+export const timingSafeCompare = (a: string, b: string): boolean => {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  const maxLen = Math.max(bufA.length, bufB.length);
+  // Allocate zero-filled equal-length buffers so timingSafeEqual never throws.
+  const paddedA = Buffer.alloc(maxLen);
+  const paddedB = Buffer.alloc(maxLen);
+  bufA.copy(paddedA);
+  bufB.copy(paddedB);
+  // Even when lengths differed the comparison always returns false; the alloc
+  // ensures we still do the work of a full comparison without short-circuiting.
+  return bufA.length === bufB.length && timingSafeEqual(paddedA, paddedB);
+};
+
+/**
+ * Express middleware that enforces admin bearer-token authentication.
+ *
+ * When `ADMIN_TOKEN` is set in the environment, all requests must carry:
+ *   `Authorization: Bearer <ADMIN_TOKEN>`
+ *
+ * The comparison is performed with {@link timingSafeCompare} so the response
+ * time does not reveal how many leading characters of the caller-supplied token
+ * matched the stored secret (timing-attack resistance).
+ *
+ * When `ADMIN_TOKEN` is not configured the middleware passes every request
+ * through — this preserves backwards-compatibility for local development where
+ * the variable is typically unset. A warning is emitted at startup so operators
+ * are reminded to configure it in production (see `src/server.ts`).
+ *
+ * Responses:
+ * - `401 unauthorized` — Authorization header absent or not in Bearer form.
+ * - `401 unauthorized` — Token present but does not match `ADMIN_TOKEN`.
+ */
+export const requireAdmin = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
+  const adminToken = process.env.ADMIN_TOKEN;
+  // If the operator has not configured a token, skip the guard (dev/test mode).
+  if (!adminToken) {
+    next();
+    return;
+  }
+  const auth = req.header("authorization") ?? "";
+  const match = /^Bearer\s+(\S+)$/i.exec(auth);
+  const supplied = match ? match[1] : "";
+  if (!timingSafeCompare(supplied, adminToken)) {
+    sendError(res, req, 401, "unauthorized", "valid admin token required");
+    return;
+  }
+  next();
+};
 
 /**
  * Fixed catalog of authorization scopes an API key may carry. A key's scopes
@@ -1962,7 +2029,7 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   res.json({ source, destination, registered: true });
 });
 
-app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
+app.get("/api/v1/admin/status", requireAdmin, (_req: Request, res: Response) => {
   res.json({ paused: isPaused(), readOnly: isReadOnly() });
 });
 

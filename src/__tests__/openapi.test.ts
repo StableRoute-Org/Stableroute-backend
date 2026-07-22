@@ -5,15 +5,18 @@ import app from "../index";
  * Convert an Express route path (`/api/v1/pairs/:source/:destination`) into the
  * OpenAPI templated form (`/api/v1/pairs/{source}/{destination}`).
  */
-const toOpenApiPath = (p: string): string =>
-  p.replace(/:([^/]+)/g, "{$1}");
+const toOpenApiPath = (p: string): string => p.replace(/:([^/]+)/g, "{$1}");
 
 /**
  * Enumerate every concrete route path registered on the Express app by walking
  * the router stack. Returns OpenAPI-templated path strings.
  */
 const discoverRoutePaths = (): string[] => {
-  const stack = (app as unknown as { _router: { stack: Array<{ route?: { path: string } }> } })._router.stack;
+  const stack = (
+    app as unknown as {
+      _router: { stack: Array<{ route?: { path: string } }> };
+    }
+  )._router.stack;
   const paths = new Set<string>();
   for (const layer of stack) {
     if (layer.route && typeof layer.route.path === "string") {
@@ -37,7 +40,7 @@ describe("GET /api/v1/openapi.json", () => {
     const specPaths: string[] = Object.keys(res.body.paths);
 
     const apiPaths = discoverRoutePaths().filter(
-      (p) => p.startsWith("/api/v1/") && p !== "/api/v1/openapi.json"
+      (p) => p.startsWith("/api/v1/") && p !== "/api/v1/openapi.json",
     );
 
     expect(apiPaths.length).toBeGreaterThan(0);

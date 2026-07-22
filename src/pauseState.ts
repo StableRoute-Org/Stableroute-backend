@@ -29,7 +29,9 @@ export const pauseStateFilePath = (): string => {
   if (process.env.PAUSE_STATE_FILE) {
     return resolve(process.env.PAUSE_STATE_FILE);
   }
-  const suffix = process.env.JEST_WORKER_ID ? `-${process.env.JEST_WORKER_ID}` : "";
+  const suffix = process.env.JEST_WORKER_ID
+    ? `-${process.env.JEST_WORKER_ID}`
+    : "";
   return resolve(`.pause_state${suffix}.json`);
 };
 

@@ -102,7 +102,9 @@ describe("POST /api/v1/pairs/bulk", () => {
       .send({ pairs: items });
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(100);
-    expect(res.body.results.every((r: { ok: boolean }) => r.ok === true)).toBe(true);
+    expect(res.body.results.every((r: { ok: boolean }) => r.ok === true)).toBe(
+      true,
+    );
   });
 
   // ── Per-item success ──────────────────────────────────────────────────────
@@ -175,7 +177,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ destination: "EURC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("returns ok:false with error invalid_asset_code when destination is missing", async () => {
@@ -184,7 +190,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "USDC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("returns ok:false with error invalid_asset_code when source is empty string", async () => {
@@ -193,7 +203,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "", destination: "EURC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("returns ok:false with error invalid_asset_code when source exceeds 12 chars", async () => {
@@ -202,7 +216,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "TOOLONGASSET!", destination: "EURC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("returns ok:false with error invalid_asset_code for a code with special characters", async () => {
@@ -211,7 +229,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "USD$", destination: "EURC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("returns ok:false with error same_asset when source equals destination", async () => {
@@ -220,7 +242,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "USDC", destination: "USDC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "same_asset" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "same_asset",
+    });
   });
 
   it("returns ok:false with error same_asset when source equals destination after normalization", async () => {
@@ -229,7 +255,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "usdc", destination: "USDC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "same_asset" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "same_asset",
+    });
   });
 
   // ── Non-object array items ────────────────────────────────────────────────
@@ -240,7 +270,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [null] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("rejects a string item safely as invalid_asset_code without throwing", async () => {
@@ -249,7 +283,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: ["USDC::EURC"] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("rejects a number item safely as invalid_asset_code without throwing", async () => {
@@ -258,7 +296,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [42] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   it("rejects a nested array item safely as invalid_asset_code without throwing", async () => {
@@ -267,7 +309,11 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [["USDC", "EURC"]] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: false, error: "invalid_asset_code" });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   // ── Mixed valid/invalid batch ─────────────────────────────────────────────
@@ -278,22 +324,46 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({
         pairs: [
-          { source: "USDC", destination: "EURC" },   // valid → ok:true
-          { source: "XLM",  destination: "XLM"  },   // same asset → ok:false
-          { source: "",     destination: "EURC" },   // bad source → ok:false
-          { source: "BTC",  destination: "ETH"  },   // valid → ok:true
-          null,                                       // non-object → ok:false
+          { source: "USDC", destination: "EURC" }, // valid → ok:true
+          { source: "XLM", destination: "XLM" }, // same asset → ok:false
+          { source: "", destination: "EURC" }, // bad source → ok:false
+          { source: "BTC", destination: "ETH" }, // valid → ok:true
+          null, // non-object → ok:false
         ],
       });
     expect(res.status).toBe(200);
     const results = res.body.results;
     expect(results).toHaveLength(5);
 
-    expect(results[0]).toMatchObject({ index: 0, ok: true, source: "USDC", destination: "EURC", registered: true });
-    expect(results[1]).toMatchObject({ index: 1, ok: false, error: "same_asset" });
-    expect(results[2]).toMatchObject({ index: 2, ok: false, error: "invalid_asset_code" });
-    expect(results[3]).toMatchObject({ index: 3, ok: true, source: "BTC", destination: "ETH", registered: true });
-    expect(results[4]).toMatchObject({ index: 4, ok: false, error: "invalid_asset_code" });
+    expect(results[0]).toMatchObject({
+      index: 0,
+      ok: true,
+      source: "USDC",
+      destination: "EURC",
+      registered: true,
+    });
+    expect(results[1]).toMatchObject({
+      index: 1,
+      ok: false,
+      error: "same_asset",
+    });
+    expect(results[2]).toMatchObject({
+      index: 2,
+      ok: false,
+      error: "invalid_asset_code",
+    });
+    expect(results[3]).toMatchObject({
+      index: 3,
+      ok: true,
+      source: "BTC",
+      destination: "ETH",
+      registered: true,
+    });
+    expect(results[4]).toMatchObject({
+      index: 4,
+      ok: false,
+      error: "invalid_asset_code",
+    });
   });
 
   // ── All-invalid batch ─────────────────────────────────────────────────────
@@ -304,14 +374,16 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({
         pairs: [
-          { source: "USDC", destination: "USDC" },  // same asset
-          { source: "",     destination: "EURC" },  // bad source
-          { source: "XLM",  destination: "!BAD" },  // bad destination
+          { source: "USDC", destination: "USDC" }, // same asset
+          { source: "", destination: "EURC" }, // bad source
+          { source: "XLM", destination: "!BAD" }, // bad destination
         ],
       });
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(3);
-    expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(true);
+    expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(
+      true,
+    );
   });
 
   // ── Idempotent re-registration ────────────────────────────────────────────
@@ -329,7 +401,13 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({ pairs: [{ source: "USDC", destination: "EURC" }] });
     expect(res.status).toBe(200);
-    expect(res.body.results[0]).toMatchObject({ index: 0, ok: true, source: "USDC", destination: "EURC", registered: true });
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: true,
+      source: "USDC",
+      destination: "EURC",
+      registered: true,
+    });
   });
 
   it("records pair.refreshed event (not pair.registered) when re-registering an existing pair", async () => {
@@ -348,7 +426,10 @@ describe("POST /api/v1/pairs/bulk", () => {
     const newEvents = eventLog.slice(eventsBefore);
     expect(newEvents).toHaveLength(1);
     expect(newEvents[0].type).toBe("pair.refreshed");
-    expect(newEvents[0].payload).toMatchObject({ source: "USDC", destination: "EURC" });
+    expect(newEvents[0].payload).toMatchObject({
+      source: "USDC",
+      destination: "EURC",
+    });
   });
 
   // ── Event log recording ───────────────────────────────────────────────────
@@ -362,16 +443,22 @@ describe("POST /api/v1/pairs/bulk", () => {
       .send({
         pairs: [
           { source: "USDC", destination: "EURC" },
-          { source: "XLM",  destination: "USDC" },
+          { source: "XLM", destination: "USDC" },
         ],
       });
 
     const newEvents = eventLog.slice(eventsBefore);
     expect(newEvents).toHaveLength(2);
     expect(newEvents[0].type).toBe("pair.registered");
-    expect(newEvents[0].payload).toMatchObject({ source: "USDC", destination: "EURC" });
+    expect(newEvents[0].payload).toMatchObject({
+      source: "USDC",
+      destination: "EURC",
+    });
     expect(newEvents[1].type).toBe("pair.registered");
-    expect(newEvents[1].payload).toMatchObject({ source: "XLM", destination: "USDC" });
+    expect(newEvents[1].payload).toMatchObject({
+      source: "XLM",
+      destination: "USDC",
+    });
   });
 
   it("does not record events for invalid items", async () => {
@@ -382,8 +469,8 @@ describe("POST /api/v1/pairs/bulk", () => {
       .set("Content-Type", "application/json")
       .send({
         pairs: [
-          { source: "USDC", destination: "USDC" },  // same asset — rejected
-          { source: "",     destination: "EURC" },  // invalid code — rejected
+          { source: "USDC", destination: "USDC" }, // same asset — rejected
+          { source: "", destination: "EURC" }, // invalid code — rejected
         ],
       });
 
@@ -399,7 +486,7 @@ describe("POST /api/v1/pairs/bulk", () => {
       .send({
         pairs: [
           { source: "USDC", destination: "EURC" },
-          { source: "XLM",  destination: "USDC" },
+          { source: "XLM", destination: "USDC" },
           { source: "USDC", destination: "USDC" }, // invalid — should not appear
         ],
       });
@@ -407,7 +494,8 @@ describe("POST /api/v1/pairs/bulk", () => {
     const listRes = await request(app).get("/api/v1/pairs");
     expect(listRes.status).toBe(200);
     const pairKeys = listRes.body.pairs.map(
-      (p: { source: string; destination: string }) => `${p.source}::${p.destination}`
+      (p: { source: string; destination: string }) =>
+        `${p.source}::${p.destination}`,
     );
     expect(pairKeys).toContain("USDC::EURC");
     expect(pairKeys).toContain("XLM::USDC");

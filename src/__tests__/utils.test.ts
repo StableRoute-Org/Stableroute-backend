@@ -7,7 +7,9 @@ describe("resolveClientIp", () => {
   });
 
   it("resolves from X-Forwarded-For array (first IP of first string)", () => {
-    expect(resolveClientIp(["9.10.11.12, 13.14.15.16"], undefined)).toBe("9.10.11.12");
+    expect(resolveClientIp(["9.10.11.12, 13.14.15.16"], undefined)).toBe(
+      "9.10.11.12",
+    );
   });
 
   it("falls back to remoteAddress when X-Forwarded-For is absent", () => {

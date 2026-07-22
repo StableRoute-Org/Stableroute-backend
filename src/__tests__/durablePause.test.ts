@@ -15,19 +15,31 @@ import request from "supertest";
 import { existsSync, writeFileSync, unlinkSync } from "node:fs";
 import app from "../index";
 import { resetStores, paused, setPaused, eventLog } from "../stores";
-import { loadPausedState, savePausedState, pauseStateFilePath } from "../pauseState";
+import {
+  loadPausedState,
+  savePausedState,
+  pauseStateFilePath,
+} from "../pauseState";
 
 const stateFile = pauseStateFilePath();
 
 // Ensure a clean slate before and after each test.
 beforeEach(() => {
   resetStores();
-  try { unlinkSync(stateFile); } catch { /* ignore */ }
+  try {
+    unlinkSync(stateFile);
+  } catch {
+    /* ignore */
+  }
 });
 
 afterEach(() => {
   resetStores();
-  try { unlinkSync(stateFile); } catch { /* ignore */ }
+  try {
+    unlinkSync(stateFile);
+  } catch {
+    /* ignore */
+  }
 });
 
 describe("Durable pause state — persistence helpers", () => {

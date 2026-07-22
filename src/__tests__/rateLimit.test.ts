@@ -1,5 +1,9 @@
 import request from "supertest";
-import app, { evictRateBuckets, parseTrustProxy, pruneExpiredRateBuckets } from "../index";
+import app, {
+  evictRateBuckets,
+  parseTrustProxy,
+  pruneExpiredRateBuckets,
+} from "../index";
 import { rateBuckets, RATE_BUCKETS_MAX_IPS, resetStores } from "../stores";
 
 // Each test advances the clock by 120 s relative to the previous test's

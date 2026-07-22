@@ -40,7 +40,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
     expect(res.headers.etag).toBeDefined();
   });
 
-  it("ETag header uses the weak validator format W/\"...\"", async () => {
+  it('ETag header uses the weak validator format W/"..."', async () => {
     const res = await request(app).get("/api/v1/pairs");
     expect(res.headers.etag).toMatch(/^W\/"[A-Za-z0-9+/]+=*"$/);
   });
@@ -164,8 +164,8 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
     expect(
       body.pairs.some(
         (p: { source: string; destination: string }) =>
-          p.source === SRC2 && p.destination === DST2
-      )
+          p.source === SRC2 && p.destination === DST2,
+      ),
     ).toBe(true);
   });
 

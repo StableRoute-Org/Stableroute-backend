@@ -29,7 +29,9 @@ describe("GET /api/v1/metrics — store and config gauges", () => {
     await request(app)
       .post("/api/v1/webhooks")
       .send({ url: "https://example.com/hook", events: ["pair.registered"] });
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
     config.rateLimitPerWindow = 123;
 
     const res = await request(app).get("/api/v1/metrics");

@@ -1,9 +1,20 @@
 import request from "supertest";
 import app from "../index";
-import { eventLog, resetStores, EVENT_LOG_CAP_MAX, type EventType } from "../stores";
+import {
+  eventLog,
+  resetStores,
+  EVENT_LOG_CAP_MAX,
+  type EventType,
+} from "../stores";
 
 /** All keys the config PATCH handler accepts. Must stay in sync with the handler's allowed list. */
-const ALLOWED = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms"] as const;
+const ALLOWED = [
+  "rateLimitPerWindow",
+  "rateLimitWindowMs",
+  "bulkMaxItems",
+  "eventLogCap",
+  "quote_ttl_ms",
+] as const;
 
 /** BULK_ABSOLUTE_MAX is a private constant in src/index.ts; mirror it here for validation tests. */
 const BULK_ABSOLUTE_MAX = 10_000;
@@ -40,7 +51,7 @@ describe("config GET/PATCH", () => {
         bulkMaxItems: expect.any(Number),
         eventLogCap: expect.any(Number),
         quote_ttl_ms: expect.any(Number),
-      })
+      }),
     );
   });
 
@@ -56,7 +67,9 @@ describe("config GET/PATCH", () => {
 
   it("PATCH bulkMaxItems persists on the next GET", async () => {
     const next = original.bulkMaxItems + 7;
-    const patch = await request(app).patch("/api/v1/config").send({ bulkMaxItems: next });
+    const patch = await request(app)
+      .patch("/api/v1/config")
+      .send({ bulkMaxItems: next });
     expect(patch.status).toBe(200);
     expect(patch.body.config.bulkMaxItems).toBe(next);
 
@@ -66,7 +79,9 @@ describe("config GET/PATCH", () => {
 
   it("PATCH rateLimitPerWindow persists on the next GET", async () => {
     const next = original.rateLimitPerWindow + 13;
-    const patch = await request(app).patch("/api/v1/config").send({ rateLimitPerWindow: next });
+    const patch = await request(app)
+      .patch("/api/v1/config")
+      .send({ rateLimitPerWindow: next });
     expect(patch.status).toBe(200);
     expect(patch.body.config.rateLimitPerWindow).toBe(next);
 
@@ -76,7 +91,9 @@ describe("config GET/PATCH", () => {
 
   it("PATCH rateLimitWindowMs persists on the next GET", async () => {
     const next = original.rateLimitWindowMs + 5_000;
-    const patch = await request(app).patch("/api/v1/config").send({ rateLimitWindowMs: next });
+    const patch = await request(app)
+      .patch("/api/v1/config")
+      .send({ rateLimitWindowMs: next });
     expect(patch.status).toBe(200);
     expect(patch.body.config.rateLimitWindowMs).toBe(next);
 
@@ -86,7 +103,9 @@ describe("config GET/PATCH", () => {
 
   it("PATCH quote_ttl_ms persists on the next GET", async () => {
     const next = 60_000;
-    const patch = await request(app).patch("/api/v1/config").send({ quote_ttl_ms: next });
+    const patch = await request(app)
+      .patch("/api/v1/config")
+      .send({ quote_ttl_ms: next });
     expect(patch.status).toBe(200);
     expect(patch.body.config.quote_ttl_ms).toBe(next);
 
@@ -96,7 +115,9 @@ describe("config GET/PATCH", () => {
 
   it("PATCH eventLogCap persists and is reflected in the next GET", async () => {
     const newCap = 500;
-    const patch = await request(app).patch("/api/v1/config").send({ eventLogCap: newCap });
+    const patch = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: newCap });
     expect(patch.status).toBe(200);
     expect(patch.body.config.eventLogCap).toBe(newCap);
 
@@ -130,7 +151,7 @@ describe("config GET/PATCH", () => {
         rateLimitWindowMs: original.rateLimitWindowMs,
         bulkMaxItems: original.bulkMaxItems,
         eventLogCap: original.eventLogCap,
-      })
+      }),
     );
   });
 
@@ -143,56 +164,68 @@ describe("config GET/PATCH", () => {
     ["zero", 0],
     ["negative", -1],
     ["string", "100"],
-  ])("PATCH bulkMaxItems rejects %s value with 400 invalid_request", async (_label, value) => {
-    const res = await request(app)
-      .patch("/api/v1/config")
-      .send({ bulkMaxItems: value });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("invalid_request");
-    expect(res.body.requestId).toBeTruthy();
-  });
+  ])(
+    "PATCH bulkMaxItems rejects %s value with 400 invalid_request",
+    async (_label, value) => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ bulkMaxItems: value });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    },
+  );
 
   it.each([
     ["float", 1.5],
     ["zero", 0],
     ["negative", -1],
     ["string", "100"],
-  ])("PATCH rateLimitPerWindow rejects %s value with 400 invalid_request", async (_label, value) => {
-    const res = await request(app)
-      .patch("/api/v1/config")
-      .send({ rateLimitPerWindow: value });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("invalid_request");
-    expect(res.body.requestId).toBeTruthy();
-  });
+  ])(
+    "PATCH rateLimitPerWindow rejects %s value with 400 invalid_request",
+    async (_label, value) => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ rateLimitPerWindow: value });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    },
+  );
 
   it.each([
     ["float", 1.5],
     ["zero", 0],
     ["negative", -1],
     ["string", "100"],
-  ])("PATCH rateLimitWindowMs rejects %s value with 400 invalid_request", async (_label, value) => {
-    const res = await request(app)
-      .patch("/api/v1/config")
-      .send({ rateLimitWindowMs: value });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("invalid_request");
-    expect(res.body.requestId).toBeTruthy();
-  });
+  ])(
+    "PATCH rateLimitWindowMs rejects %s value with 400 invalid_request",
+    async (_label, value) => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ rateLimitWindowMs: value });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    },
+  );
 
   it.each([
     ["float", 1.5],
     ["zero", 0],
     ["negative", -1],
     ["string", "100"],
-  ])("PATCH quote_ttl_ms rejects %s value with 400 invalid_request", async (_label, value) => {
-    const res = await request(app)
-      .patch("/api/v1/config")
-      .send({ quote_ttl_ms: value });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("invalid_request");
-    expect(res.body.requestId).toBeTruthy();
-  });
+  ])(
+    "PATCH quote_ttl_ms rejects %s value with 400 invalid_request",
+    async (_label, value) => {
+      const res = await request(app)
+        .patch("/api/v1/config")
+        .send({ quote_ttl_ms: value });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(res.body.requestId).toBeTruthy();
+    },
+  );
 
   // ────────────────────────────────────────────────────────────────
   // PATCH — type-confusion values (array, boolean, object, null)
@@ -233,14 +266,18 @@ describe("config GET/PATCH", () => {
   // ────────────────────────────────────────────────────────────────
 
   it("PATCH bulkMaxItems rejects values above BULK_ABSOLUTE_MAX (10_000) with 400", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ bulkMaxItems: BULK_ABSOLUTE_MAX + 1 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ bulkMaxItems: BULK_ABSOLUTE_MAX + 1 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
     expect(res.body.message).toContain("cannot exceed");
   });
 
   it("PATCH bulkMaxItems accepts BULK_ABSOLUTE_MAX (10_000) at the boundary", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ bulkMaxItems: BULK_ABSOLUTE_MAX });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ bulkMaxItems: BULK_ABSOLUTE_MAX });
     expect(res.status).toBe(200);
     expect(res.body.config.bulkMaxItems).toBe(BULK_ABSOLUTE_MAX);
   });
@@ -250,7 +287,9 @@ describe("config GET/PATCH", () => {
   // ────────────────────────────────────────────────────────────────
 
   it("PATCH rejects a completely unknown key with 400 invalid_request", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ unknownKey: 123 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ unknownKey: 123 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
     expect(res.body.message).toContain("unknown field");
@@ -276,12 +315,17 @@ describe("config GET/PATCH", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
-    expect(res.body.unknownKeys).toEqual(expect.arrayContaining(["foo", "bar", "baz"]));
+    expect(res.body.unknownKeys).toEqual(
+      expect.arrayContaining(["foo", "bar", "baz"]),
+    );
   });
 
   it("PATCH does not mutate config when unknown keys are rejected", async () => {
     const getBefore = await request(app).get("/api/v1/config");
-    await request(app).patch("/api/v1/config").send({ notAllowed: 999 }).expect(400);
+    await request(app)
+      .patch("/api/v1/config")
+      .send({ notAllowed: 999 })
+      .expect(400);
     const getAfter = await request(app).get("/api/v1/config");
     // Config should be unchanged after a rejected request
     expect(getAfter.body.config).toEqual(getBefore.body.config);
@@ -292,25 +336,33 @@ describe("config GET/PATCH", () => {
   // ────────────────────────────────────────────────────────────────
 
   it("PATCH eventLogCap rejects zero with 400", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 0 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: 0 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
 
   it("PATCH eventLogCap rejects negative values with 400", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: -10 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: -10 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
 
   it("PATCH eventLogCap rejects values above EVENT_LOG_CAP_MAX with 400", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: EVENT_LOG_CAP_MAX + 1 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: EVENT_LOG_CAP_MAX + 1 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
 
   it("PATCH eventLogCap rejects float value with 400", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 500.5 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: 500.5 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
@@ -318,11 +370,18 @@ describe("config GET/PATCH", () => {
   it("PATCH eventLogCap trims existing eventLog immediately when lowered", async () => {
     // Seed more events than the new cap
     for (let i = 0; i < 20; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i,
+        type: "pair.registered" as EventType,
+        payload: { i },
+      });
     }
     expect(eventLog.length).toBe(20);
 
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 5 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: 5 });
     expect(res.status).toBe(200);
     expect(eventLog.length).toBe(5);
     // oldest-first eviction: remaining entries are the 5 newest
@@ -334,7 +393,12 @@ describe("config GET/PATCH", () => {
     // Lower cap to 10 and verify limit is clamped to the new cap
     await request(app).patch("/api/v1/config").send({ eventLogCap: 10 });
     for (let i = 0; i < 10; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: {} });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i,
+        type: "pair.registered" as EventType,
+        payload: {},
+      });
     }
     // Requesting more than the cap should be clamped to the cap
     const res = await request(app).get("/api/v1/events?limit=9999");
@@ -344,9 +408,16 @@ describe("config GET/PATCH", () => {
 
   it("PATCH eventLogCap to 1 (cap-of-1 edge case) trims buffer to 1", async () => {
     for (let i = 0; i < 5; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i,
+        type: "pair.registered" as EventType,
+        payload: { i },
+      });
     }
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 1 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: 1 });
     expect(res.status).toBe(200);
     expect(eventLog.length).toBe(1);
     // Only the newest entry survives
@@ -355,9 +426,16 @@ describe("config GET/PATCH", () => {
 
   it("PATCH eventLogCap does not trim when buffer is already within new cap", async () => {
     for (let i = 0; i < 3; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i,
+        type: "pair.registered" as EventType,
+        payload: { i },
+      });
     }
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: 100 });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: 100 });
     expect(res.status).toBe(200);
     expect(eventLog.length).toBe(3);
   });
@@ -366,7 +444,12 @@ describe("config GET/PATCH", () => {
     // Lower cap to 5 and fill exactly to the new cap
     await request(app).patch("/api/v1/config").send({ eventLogCap: 5 });
     for (let i = 0; i < 5; i++) {
-      eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i,
+        type: "pair.registered" as EventType,
+        payload: { i },
+      });
     }
     expect(eventLog.length).toBe(5);
     // No trim needed; buffer is at cap
@@ -374,7 +457,9 @@ describe("config GET/PATCH", () => {
   });
 
   it("PATCH eventLogCap accepts EVENT_LOG_CAP_MAX (boundary)", async () => {
-    const res = await request(app).patch("/api/v1/config").send({ eventLogCap: EVENT_LOG_CAP_MAX });
+    const res = await request(app)
+      .patch("/api/v1/config")
+      .send({ eventLogCap: EVENT_LOG_CAP_MAX });
     expect(res.status).toBe(200);
     expect(res.body.config.eventLogCap).toBe(EVENT_LOG_CAP_MAX);
   });

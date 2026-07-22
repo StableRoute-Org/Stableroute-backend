@@ -63,7 +63,9 @@ describe("Read-only maintenance mode", () => {
     setReadOnly(true);
     const res = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: [{ source_asset: "USDC", dest_asset: "EURC", amount: "100" }] });
+      .send({
+        items: [{ source_asset: "USDC", dest_asset: "EURC", amount: "100" }],
+      });
     expect(res.status).toBe(200);
   });
 

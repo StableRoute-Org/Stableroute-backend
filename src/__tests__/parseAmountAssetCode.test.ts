@@ -7,19 +7,25 @@ import request from "supertest";
 import app from "../index";
 
 describe("isValidRequestId boundary behaviour", () => {
-  it("accepts a single character", () => expect(isValidRequestId("a")).toBe(true));
-  it("accepts 200 characters", () => expect(isValidRequestId("a".repeat(200))).toBe(true));
-  it("rejects 201 characters", () => expect(isValidRequestId("a".repeat(201))).toBe(false));
+  it("accepts a single character", () =>
+    expect(isValidRequestId("a")).toBe(true));
+  it("accepts 200 characters", () =>
+    expect(isValidRequestId("a".repeat(200))).toBe(true));
+  it("rejects 201 characters", () =>
+    expect(isValidRequestId("a".repeat(201))).toBe(false));
   it("rejects empty string", () => expect(isValidRequestId("")).toBe(false));
   it("rejects newline", () => expect(isValidRequestId("ab\ncd")).toBe(false));
   it("rejects CR", () => expect(isValidRequestId("ab\rcd")).toBe(false));
   it("rejects space", () => expect(isValidRequestId("ab cd")).toBe(false));
-  it("accepts dots, dashes, underscores", () => expect(isValidRequestId("a.b-c_d")).toBe(true));
+  it("accepts dots, dashes, underscores", () =>
+    expect(isValidRequestId("a.b-c_d")).toBe(true));
 });
 
 describe("parseAmount boundary behaviour (via quote endpoint)", () => {
   beforeAll(async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "USD", destination: "EUR" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USD", destination: "EUR" });
   });
 
   it("rejects zero amount", async () => {
@@ -53,7 +59,9 @@ describe("parseAmount boundary behaviour (via quote endpoint)", () => {
 
 describe("isAssetCode boundary behaviour (via pairs endpoint)", () => {
   it("rejects empty source asset", async () => {
-    const res = await request(app).post("/api/v1/pairs").send({ source: "", destination: "EUR" });
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "", destination: "EUR" });
     expect(res.status).toBe(400);
   });
 
@@ -65,7 +73,9 @@ describe("isAssetCode boundary behaviour (via pairs endpoint)", () => {
   });
 
   it("accepts a valid 3-char asset code", async () => {
-    const res = await request(app).post("/api/v1/pairs").send({ source: "GBP", destination: "JPY" });
+    const res = await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "GBP", destination: "JPY" });
     expect([200, 201, 409]).toContain(res.status);
   });
 });

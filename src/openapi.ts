@@ -53,7 +53,7 @@ export const openApiSpec = {
       get: {
         summary: "Deep readiness probe",
         description:
-          "Kubernetes-style readiness probe that exercises storage and clock checks. Returns `status: \"ok\"` when healthy, `\"degraded\"` with HTTP 503 when a check fails, or `\"paused\"` when the admin pause is engaged.",
+          'Kubernetes-style readiness probe that exercises storage and clock checks. Returns `status: "ok"` when healthy, `"degraded"` with HTTP 503 when a check fails, or `"paused"` when the admin pause is engaged.',
         responses: {
           "200": { description: "All checks passed (or service is paused)" },
           "503": { description: "One or more health checks failed" },
@@ -95,14 +95,38 @@ export const openApiSpec = {
         description:
           "Paginated, filterable list of application audit events. Supports `since` (epoch-ms), `limit`, `type`, and cursor-based pagination.",
         parameters: [
-          { name: "since", in: "query", schema: { type: "integer" }, description: "Return events with timestamp ≥ this epoch-ms value (default 0)" },
-          { name: "limit", in: "query", schema: { type: "integer" }, description: "Maximum items per page (default 100, clamped to eventLogCap)" },
-          { name: "type", in: "query", schema: { type: "string" }, description: "Filter by event type (e.g. `pair.registered`)" },
-          { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque base64-encoded pagination cursor" },
+          {
+            name: "since",
+            in: "query",
+            schema: { type: "integer" },
+            description:
+              "Return events with timestamp ≥ this epoch-ms value (default 0)",
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer" },
+            description:
+              "Maximum items per page (default 100, clamped to eventLogCap)",
+          },
+          {
+            name: "type",
+            in: "query",
+            schema: { type: "string" },
+            description: "Filter by event type (e.g. `pair.registered`)",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description: "Opaque base64-encoded pagination cursor",
+          },
         ],
         responses: {
           "200": { description: "Paginated event list with nextCursor" },
-          "400": { description: "Invalid `since`, `limit`, `type`, or `cursor`" },
+          "400": {
+            description: "Invalid `since`, `limit`, `type`, or `cursor`",
+          },
         },
       },
     },
@@ -142,7 +166,10 @@ export const openApiSpec = {
         },
         responses: {
           "200": { description: "Updated configuration object" },
-          "400": { description: "Unknown key, non-integer value, or value exceeds ceiling" },
+          "400": {
+            description:
+              "Unknown key, non-integer value, or value exceeds ceiling",
+          },
           "415": { description: "Content-Type is not `application/json`" },
         },
       },
@@ -157,8 +184,18 @@ export const openApiSpec = {
         description:
           "Paginated list of registered asset pairs. Supports `limit`, cursor-based pagination, and ETags.",
         parameters: [
-          { name: "limit", in: "query", schema: { type: "integer" }, description: "Maximum items per page (default 100, max 500)" },
-          { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque base64-encoded pagination cursor" },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Maximum items per page (default 100, max 500)",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description: "Opaque base64-encoded pagination cursor",
+          },
         ],
         responses: {
           "200": { description: "Paginated pairs list with nextCursor" },
@@ -186,8 +223,14 @@ export const openApiSpec = {
                 type: "object",
                 required: ["source", "destination"],
                 properties: {
-                  source: { type: "string", description: "Source asset code (1-12 alphanumeric)" },
-                  destination: { type: "string", description: "Destination asset code (1-12 alphanumeric)" },
+                  source: {
+                    type: "string",
+                    description: "Source asset code (1-12 alphanumeric)",
+                  },
+                  destination: {
+                    type: "string",
+                    description: "Destination asset code (1-12 alphanumeric)",
+                  },
                 },
               },
             },
@@ -196,7 +239,9 @@ export const openApiSpec = {
         responses: {
           "201": { description: "Pair registered" },
           "400": { description: "Invalid or missing `source`/`destination`" },
-          "409": { description: "Pair already registered or idempotency conflict" },
+          "409": {
+            description: "Pair already registered or idempotency conflict",
+          },
           "415": { description: "Content-Type is not `application/json`" },
         },
       },
@@ -206,11 +251,25 @@ export const openApiSpec = {
       get: {
         summary: "Read a registered pair",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" }, description: "Source asset code" },
-          { name: "destination", in: "path", required: true, schema: { type: "string" }, description: "Destination asset code" },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Source asset code",
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Destination asset code",
+          },
         ],
         responses: {
-          "200": { description: "Pair details (source, destination, registered: true)" },
+          "200": {
+            description: "Pair details (source, destination, registered: true)",
+          },
           "400": { description: "Invalid asset code format" },
           "404": { description: "Pair is not registered" },
         },
@@ -220,8 +279,20 @@ export const openApiSpec = {
         description:
           "Removes a registered pair from the registry. Emits a `pair.unregistered` audit event.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" }, description: "Source asset code" },
-          { name: "destination", in: "path", required: true, schema: { type: "string" }, description: "Destination asset code" },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Source asset code",
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Destination asset code",
+          },
         ],
         responses: {
           "204": { description: "Pair unregistered (no body)" },
@@ -238,8 +309,18 @@ export const openApiSpec = {
         description:
           "Returns a single round-trip aggregate of the pair's registration status and all metadata fields (fee, min/max amounts, liquidity, rate, enabled flag).",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Aggregate pair metadata" },
@@ -254,12 +335,30 @@ export const openApiSpec = {
         description:
           "Updates the `feeBps` metadata for a registered pair. Value must be an integer in [0, 1000].",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["feeBps"], properties: { feeBps: { type: "integer" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["feeBps"],
+                properties: { feeBps: { type: "integer" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
@@ -277,16 +376,37 @@ export const openApiSpec = {
         description:
           "Updates the `minAmount` metadata for a registered pair. Must be a non-negative integer string.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["minAmount"], properties: { minAmount: { type: "string" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["minAmount"],
+                properties: { minAmount: { type: "string" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `minAmount` value or cross-field constraint violation" },
+          "400": {
+            description:
+              "Invalid `minAmount` value or cross-field constraint violation",
+          },
           "404": { description: "Pair is not registered" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
@@ -300,16 +420,37 @@ export const openApiSpec = {
         description:
           "Updates the `maxAmount` metadata for a registered pair. Must be a positive integer string.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["maxAmount"], properties: { maxAmount: { type: "string" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["maxAmount"],
+                properties: { maxAmount: { type: "string" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `maxAmount` value or cross-field constraint violation" },
+          "400": {
+            description:
+              "Invalid `maxAmount` value or cross-field constraint violation",
+          },
           "404": { description: "Pair is not registered" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
@@ -323,16 +464,37 @@ export const openApiSpec = {
         description:
           "Updates the `liquidity` metadata for a registered pair. Must be a non-negative integer string.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["liquidity"], properties: { liquidity: { type: "string" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["liquidity"],
+                properties: { liquidity: { type: "string" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `liquidity` value or cross-field constraint violation" },
+          "400": {
+            description:
+              "Invalid `liquidity` value or cross-field constraint violation",
+          },
           "404": { description: "Pair is not registered" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
@@ -346,12 +508,30 @@ export const openApiSpec = {
         description:
           "Updates the `rate` metadata for a registered pair. Must be a positive decimal string with at most 8 decimal places.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["rate"], properties: { rate: { type: "string" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["rate"],
+                properties: { rate: { type: "string" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
@@ -369,12 +549,30 @@ export const openApiSpec = {
         description:
           "Enables or disables a registered pair. Emits a `pair.enabled` or `pair.disabled` audit event.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } } } } },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["enabled"],
+                properties: { enabled: { type: "boolean" } },
+              },
+            },
+          },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
@@ -392,8 +590,18 @@ export const openApiSpec = {
         description:
           "Resets a registered pair's metadata fields to their factory defaults. Emits a `pair.meta.reset` audit event.",
         parameters: [
-          { name: "source", in: "path", required: true, schema: { type: "string" } },
-          { name: "destination", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Reset pair metadata" },
@@ -417,15 +625,31 @@ export const openApiSpec = {
                 type: "object",
                 required: ["pairs"],
                 properties: {
-                  pairs: { type: "array", items: { type: "object", required: ["source", "destination"], properties: { source: { type: "string" }, destination: { type: "string" } } } },
+                  pairs: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      required: ["source", "destination"],
+                      properties: {
+                        source: { type: "string" },
+                        destination: { type: "string" },
+                      },
+                    },
+                  },
                 },
               },
             },
           },
         },
         responses: {
-          "200": { description: "Bulk registration result (partial failures reported per-item)" },
-          "400": { description: "Invalid request format or exceeds `bulkMaxItems` ceiling" },
+          "200": {
+            description:
+              "Bulk registration result (partial failures reported per-item)",
+          },
+          "400": {
+            description:
+              "Invalid request format or exceeds `bulkMaxItems` ceiling",
+          },
           "413": { description: "Request body exceeds 100 kB limit" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
@@ -442,15 +666,35 @@ export const openApiSpec = {
         description:
           "Returns a price quote for routing a given `amount` from `source` to `destination`. Amount bounds (min/max) and liquidity limits are enforced per the pair metadata.",
         parameters: [
-          { name: "source", in: "query", required: true, schema: { type: "string" }, description: "Source asset code" },
-          { name: "destination", in: "query", required: true, schema: { type: "string" }, description: "Destination asset code" },
-          { name: "amount", in: "query", required: true, schema: { type: "string" }, description: "Amount in base units (integer string)" },
+          {
+            name: "source",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Source asset code",
+          },
+          {
+            name: "destination",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Destination asset code",
+          },
+          {
+            name: "amount",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Amount in base units (integer string)",
+          },
         ],
         responses: {
           "200": { description: "Quote with fee, rate, and output amount" },
           "400": { description: "Invalid parameters or amount out of bounds" },
           "404": { description: "Pair is not registered" },
-          "422": { description: "Insufficient liquidity for the requested amount" },
+          "422": {
+            description: "Insufficient liquidity for the requested amount",
+          },
         },
       },
     },
@@ -461,9 +705,25 @@ export const openApiSpec = {
         description:
           "Calculates the required source amount needed to receive a specified `destinationAmount` after fees and slippage.",
         parameters: [
-          { name: "source", in: "query", required: true, schema: { type: "string" } },
-          { name: "destination", in: "query", required: true, schema: { type: "string" } },
-          { name: "destinationAmount", in: "query", required: true, schema: { type: "string" }, description: "Target amount in base units" },
+          {
+            name: "source",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destination",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "destinationAmount",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Target amount in base units",
+          },
         ],
         responses: {
           "200": { description: "Reverse quote with required input amount" },
@@ -487,7 +747,18 @@ export const openApiSpec = {
                 type: "object",
                 required: ["items"],
                 properties: {
-                  items: { type: "array", items: { type: "object", required: ["source", "destination", "amount"], properties: { source: { type: "string" }, destination: { type: "string" }, amount: { type: "string" } } } },
+                  items: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      required: ["source", "destination", "amount"],
+                      properties: {
+                        source: { type: "string" },
+                        destination: { type: "string" },
+                        amount: { type: "string" },
+                      },
+                    },
+                  },
                 },
               },
             },
@@ -495,7 +766,10 @@ export const openApiSpec = {
         },
         responses: {
           "200": { description: "Bulk quote results (per-item ok/error)" },
-          "400": { description: "Invalid request format or exceeds `bulkMaxItems` ceiling" },
+          "400": {
+            description:
+              "Invalid request format or exceeds `bulkMaxItems` ceiling",
+          },
           "413": { description: "Request body exceeds 100 kB limit" },
           "415": { description: "Content-Type is not `application/json`" },
         },
@@ -511,8 +785,18 @@ export const openApiSpec = {
         description:
           "Paginated list of API keys with their prefixes, labels, and metadata. Raw keys are never exposed. Supports `limit` and cursor-based pagination.",
         parameters: [
-          { name: "limit", in: "query", schema: { type: "integer" }, description: "Maximum items per page (default 100, max 500)" },
-          { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque base64-encoded pagination cursor" },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Maximum items per page (default 100, max 500)",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description: "Opaque base64-encoded pagination cursor",
+          },
         ],
         responses: {
           "200": { description: "Paginated API key list with nextCursor" },
@@ -531,9 +815,21 @@ export const openApiSpec = {
                 type: "object",
                 required: ["label"],
                 properties: {
-                  label: { type: "string", description: "Human-readable label (1-64 chars)" },
-                  scopes: { type: "array", items: { type: "string" }, description: "Scope strings (pairs:write, webhooks:write, keys:admin)" },
-                  expiresInSeconds: { type: "integer", description: "Time-to-live in seconds (max 31536000 / 1 year)" },
+                  label: {
+                    type: "string",
+                    description: "Human-readable label (1-64 chars)",
+                  },
+                  scopes: {
+                    type: "array",
+                    items: { type: "string" },
+                    description:
+                      "Scope strings (pairs:write, webhooks:write, keys:admin)",
+                  },
+                  expiresInSeconds: {
+                    type: "integer",
+                    description:
+                      "Time-to-live in seconds (max 31536000 / 1 year)",
+                  },
                 },
               },
             },
@@ -555,7 +851,13 @@ export const openApiSpec = {
         description:
           "Deletes an API key identified by its 8-character prefix. Emits an `apikey.deleted` audit event. Returns 204 with no body on success.",
         parameters: [
-          { name: "prefix", in: "path", required: true, schema: { type: "string" }, description: "8-character key prefix (e.g. `srk_abc1`)" },
+          {
+            name: "prefix",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "8-character key prefix (e.g. `srk_abc1`)",
+          },
         ],
         responses: {
           "204": { description: "Key revoked (no body)" },
@@ -571,10 +873,19 @@ export const openApiSpec = {
         description:
           "Mints a new `srk_` key inheriting the predecessor's label and scopes. The predecessor remains valid for a configurable grace window (`ROTATION_GRACE_MS`, default 1 hour). The new raw key is returned exactly once.",
         parameters: [
-          { name: "prefix", in: "path", required: true, schema: { type: "string" }, description: "8-character prefix of the key to rotate" },
+          {
+            name: "prefix",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "8-character prefix of the key to rotate",
+          },
         ],
         responses: {
-          "201": { description: "New key created — raw key returned once; predecessor stamped with rotation metadata" },
+          "201": {
+            description:
+              "New key created — raw key returned once; predecessor stamped with rotation metadata",
+          },
           "404": { description: "No key found with the given prefix" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -590,8 +901,18 @@ export const openApiSpec = {
         description:
           "Paginated list of registered webhook subscriptions. Supports `limit` and cursor-based pagination.",
         parameters: [
-          { name: "limit", in: "query", schema: { type: "integer" }, description: "Maximum items per page (default 100, max 500)" },
-          { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque base64-encoded pagination cursor" },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Maximum items per page (default 100, max 500)",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description: "Opaque base64-encoded pagination cursor",
+          },
         ],
         responses: {
           "200": { description: "Paginated webhook list with nextCursor" },
@@ -610,8 +931,15 @@ export const openApiSpec = {
                 type: "object",
                 required: ["url", "events"],
                 properties: {
-                  url: { type: "string", description: "HTTP(S) callback URL (max 2048 chars)" },
-                  events: { type: "array", items: { type: "string" }, description: "Event type names to subscribe to" },
+                  url: {
+                    type: "string",
+                    description: "HTTP(S) callback URL (max 2048 chars)",
+                  },
+                  events: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Event type names to subscribe to",
+                  },
                 },
               },
             },
@@ -619,7 +947,10 @@ export const openApiSpec = {
         },
         responses: {
           "201": { description: "Webhook registered" },
-          "400": { description: "Invalid URL format, unsafe host, or invalid event names" },
+          "400": {
+            description:
+              "Invalid URL format, unsafe host, or invalid event names",
+          },
           "409": { description: "Idempotency-Key conflict" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
@@ -631,7 +962,13 @@ export const openApiSpec = {
       get: {
         summary: "Read a registered webhook",
         parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Webhook identifier (e.g. `wh_abc123`)" },
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Webhook identifier (e.g. `wh_abc123`)",
+          },
         ],
         responses: {
           "200": { description: "Webhook record (id, url, events, createdAt)" },
@@ -643,7 +980,12 @@ export const openApiSpec = {
         description:
           "Removes a webhook subscription. Emits a `webhook.deleted` audit event. Returns 204 with no body on success.",
         parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "204": { description: "Webhook deleted (no body)" },
@@ -656,7 +998,12 @@ export const openApiSpec = {
         description:
           "Updates the subscribed event types for a webhook. The URL is immutable and must be changed through delete/recreate.",
         parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
@@ -666,7 +1013,11 @@ export const openApiSpec = {
                 type: "object",
                 required: ["events"],
                 properties: {
-                  events: { type: "array", items: { type: "string" }, description: "New list of event type names" },
+                  events: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "New list of event type names",
+                  },
                 },
               },
             },
@@ -692,7 +1043,9 @@ export const openApiSpec = {
           "Engages the service-level pause. While paused, non-idempotent (GET/HEAD/OPTIONS) requests are rejected with 503, except the unpause endpoint itself.",
         responses: {
           "200": { description: "Service paused (confirmed)" },
-          "503": { description: "Service is already paused or in read-only mode" },
+          "503": {
+            description: "Service is already paused or in read-only mode",
+          },
         },
       },
     },

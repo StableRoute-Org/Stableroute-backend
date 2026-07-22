@@ -83,7 +83,10 @@ export const applySlippage = (amount: bigint, slippageBps: number): bigint => {
  * @param amount - The requested amount in base units.
  * @returns A violation describing the offending bound, or `null` when in range.
  */
-export const checkQuoteBounds = (meta: PairMeta, amount: bigint): QuoteBoundsViolation | null => {
+export const checkQuoteBounds = (
+  meta: PairMeta,
+  amount: bigint,
+): QuoteBoundsViolation | null => {
   const minAmount = BigInt(meta.minAmount);
   if (minAmount !== 0n && amount < minAmount) {
     return {
@@ -143,7 +146,11 @@ export const solveInput = (target: bigint): bigint => {
  * @param slippageBps - Slippage tolerance in basis points (0-1000).
  * @returns The fee, net amount, minimum received, and echoed fee/rate.
  */
-export const priceQuote = (meta: PairMeta, amount: bigint, slippageBps: number): PricedQuote => {
+export const priceQuote = (
+  meta: PairMeta,
+  amount: bigint,
+  slippageBps: number,
+): PricedQuote => {
   const { feeAmount, netAmount } = applyFee(amount, meta.feeBps);
   const minReceived = applySlippage(netAmount, slippageBps);
   return {
@@ -163,7 +170,10 @@ export const priceQuote = (meta: PairMeta, amount: bigint, slippageBps: number):
  * @param targetAmount - The desired destination amount in base units.
  * @returns The required source input and the echoed rate.
  */
-export const priceReverseQuote = (meta: PairMeta, targetAmount: bigint): PricedReverseQuote => {
+export const priceReverseQuote = (
+  meta: PairMeta,
+  targetAmount: bigint,
+): PricedReverseQuote => {
   return {
     requiredInput: solveInput(targetAmount),
     rate: meta.rate,

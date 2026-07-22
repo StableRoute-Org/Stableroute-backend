@@ -31,10 +31,22 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
     // Seed two events with known timestamps by manipulating the log directly.
     const past = Date.now() - 10_000;
     const recent = Date.now();
-    eventLog.push({ id: "a", ts: past, type: "pair.registered", payload: { source: "OLD", destination: "EVT" } });
-    eventLog.push({ id: "b", ts: recent, type: "pair.registered", payload: { source: "NEW", destination: "EVT" } });
+    eventLog.push({
+      id: "a",
+      ts: past,
+      type: "pair.registered",
+      payload: { source: "OLD", destination: "EVT" },
+    });
+    eventLog.push({
+      id: "b",
+      ts: recent,
+      type: "pair.registered",
+      payload: { source: "NEW", destination: "EVT" },
+    });
 
-    const res = await request(app).get("/api/v1/events").query({ since: recent });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ since: recent });
     expect(res.status).toBe(200);
     const ids = res.body.items.map((e: { id: string }) => e.id);
     expect(ids).toContain("b");
@@ -42,16 +54,22 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   });
 
   it("returns empty items when since is in the far future", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "FUT", destination: "TST" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "FUT", destination: "TST" });
 
     const future = Date.now() + 100_000;
-    const res = await request(app).get("/api/v1/events").query({ since: future });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ since: future });
     expect(res.status).toBe(200);
     expect(res.body.items).toHaveLength(0);
   });
 
   it("returns all events when since=0 (default)", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "ALL", destination: "TST" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "ALL", destination: "TST" });
     await request(app).delete("/api/v1/pairs/ALL/TST");
 
     const res = await request(app).get("/api/v1/events").query({ since: 0 });
@@ -67,7 +85,9 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   });
 
   it("returns 400 for non-numeric since", async () => {
-    const res = await request(app).get("/api/v1/events").query({ since: "abc" });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ since: "abc" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
@@ -116,13 +136,17 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
     expect(res.status).toBe(200);
     expect(res.body.items.length).toBe(2);
     // Most recent entries are ORD3 and ORD4
-    const sources = res.body.items.map((e: { payload: { source: string } }) => e.payload.source);
+    const sources = res.body.items.map(
+      (e: { payload: { source: string } }) => e.payload.source,
+    );
     expect(sources).toContain("ORD4");
     expect(sources).toContain("ORD3");
   });
 
   it("returns 400 for non-integer limit", async () => {
-    const res = await request(app).get("/api/v1/events").query({ limit: "abc" });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ limit: "abc" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
@@ -130,27 +154,37 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   // ─── pair.unregistered and pair.refreshed events ────────────────────────
 
   it("records pair.unregistered event when a pair is deleted", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "DEL", destination: "ME" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "DEL", destination: "ME" });
     await request(app).delete("/api/v1/pairs/DEL/ME");
 
     const res = await request(app).get("/api/v1/events");
     expect(res.status).toBe(200);
     const unreg = res.body.items.find(
       (e: { type: string; payload: { source: string; destination: string } }) =>
-        e.type === "pair.unregistered" && e.payload.source === "DEL" && e.payload.destination === "ME"
+        e.type === "pair.unregistered" &&
+        e.payload.source === "DEL" &&
+        e.payload.destination === "ME",
     );
     expect(unreg).toBeDefined();
   });
 
   it("records pair.refreshed event on idempotent re-registration", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "REF", destination: "ME" });
-    await request(app).post("/api/v1/pairs").send({ source: "REF", destination: "ME" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "REF", destination: "ME" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "REF", destination: "ME" });
 
     const res = await request(app).get("/api/v1/events");
     expect(res.status).toBe(200);
     const refreshed = res.body.items.find(
       (e: { type: string; payload: { source: string; destination: string } }) =>
-        e.type === "pair.refreshed" && e.payload.source === "REF" && e.payload.destination === "ME"
+        e.type === "pair.refreshed" &&
+        e.payload.source === "REF" &&
+        e.payload.destination === "ME",
     );
     expect(refreshed).toBeDefined();
   });
@@ -162,9 +196,19 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
 
     // Fill the log to exactly EVENT_LOG_CAP
     const sentinel = "FIRST_EVENT";
-    eventLog.push({ id: sentinel, ts: 1, type: "pair.registered", payload: {} });
+    eventLog.push({
+      id: sentinel,
+      ts: 1,
+      type: "pair.registered",
+      payload: {},
+    });
     for (let i = 1; i < EVENT_LOG_CAP; i++) {
-      eventLog.push({ id: `e${i}`, ts: i + 1, type: "pair.registered", payload: {} });
+      eventLog.push({
+        id: `e${i}`,
+        ts: i + 1,
+        type: "pair.registered",
+        payload: {},
+      });
     }
     expect(eventLog.length).toBe(EVENT_LOG_CAP);
     expect(eventLog[0].id).toBe(sentinel);
@@ -190,13 +234,15 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   // ─── security: no sensitive payload fields ───────────────────────────────
 
   it("does not include raw API key material in apikey.created events", async () => {
-    const create = await request(app).post("/api/v1/api-keys").send({ label: "security-test" });
+    const create = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "security-test" });
     expect(create.status).toBe(201);
     const rawKey: string = create.body.key;
 
     const events = await request(app).get("/api/v1/events");
     const keyEvents = events.body.items.filter(
-      (e: { type: string }) => e.type === "apikey.created"
+      (e: { type: string }) => e.type === "apikey.created",
     );
     // No event payload should contain the raw key string
     for (const evt of keyEvents) {
@@ -205,7 +251,8 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
     }
     // The prefix (first 8 chars) and label should be present instead
     const keyEvent = keyEvents.find(
-      (e: { payload: { label: string } }) => e.payload.label === "security-test"
+      (e: { payload: { label: string } }) =>
+        e.payload.label === "security-test",
     );
     expect(keyEvent).toBeDefined();
     expect(keyEvent.payload.prefix).toBe(rawKey.slice(0, 8));
@@ -219,7 +266,7 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
 
     const events = await request(app).get("/api/v1/events");
     const webhookEvents = events.body.items.filter(
-      (e: { type: string }) => e.type === "webhook.created"
+      (e: { type: string }) => e.type === "webhook.created",
     );
     // Should expose id and url but no token/secret fields
     for (const evt of webhookEvents) {
@@ -231,7 +278,9 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   // ─── event shape ─────────────────────────────────────────────────────────
 
   it("each event has the required id, ts, type, and payload fields", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "SHP", destination: "TST" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "SHP", destination: "TST" });
 
     const res = await request(app).get("/api/v1/events");
     expect(res.status).toBe(200);
@@ -265,13 +314,17 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
   });
 
   it("returns 400 for a float since (since=1.5)", async () => {
-    const res = await request(app).get("/api/v1/events").query({ since: "1.5" });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ since: "1.5" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
 
   it("returns 400 for a float limit (limit=2.7)", async () => {
-    const res = await request(app).get("/api/v1/events").query({ limit: "2.7" });
+    const res = await request(app)
+      .get("/api/v1/events")
+      .query({ limit: "2.7" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });

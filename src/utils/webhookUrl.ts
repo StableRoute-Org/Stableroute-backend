@@ -32,7 +32,7 @@ export const isSafeWebhookUrl = (urlString: string): boolean => {
       if (host.startsWith("192.168.")) return false;
       // 169.254.0.0/16 (link local)
       if (host.startsWith("169.254.")) return false;
-      
+
       return true;
     } else if (ipType === 6) {
       // Check for loopback ::1
@@ -41,7 +41,7 @@ export const isSafeWebhookUrl = (urlString: string): boolean => {
       if (host.startsWith("fe80:")) return false;
       // Check for unique-local fc00:: or fd00::
       if (host.startsWith("fc00:") || host.startsWith("fd00:")) return false;
-      
+
       return true;
     }
 

@@ -80,7 +80,7 @@ describe("applySlippage", () => {
 });
 
 describe("checkQuoteBounds", () => {
-  it("returns null when all bounds are unset (\"0\")", () => {
+  it('returns null when all bounds are unset ("0")', () => {
     expect(checkQuoteBounds(meta(), 1_000_000_000n)).toBeNull();
   });
 
@@ -127,13 +127,19 @@ describe("checkQuoteBounds", () => {
   });
 
   it("checks minAmount before maxAmount when both are violated", () => {
-    const violation = checkQuoteBounds(meta({ minAmount: "100", maxAmount: "50" }), 10n);
+    const violation = checkQuoteBounds(
+      meta({ minAmount: "100", maxAmount: "50" }),
+      10n,
+    );
     expect(violation?.error).toBe("invalid_request");
     expect(violation?.message).toContain("below minAmount");
   });
 
   it("checks maxAmount before liquidity when both are violated", () => {
-    const violation = checkQuoteBounds(meta({ maxAmount: "50", liquidity: "10" }), 60n);
+    const violation = checkQuoteBounds(
+      meta({ maxAmount: "50", liquidity: "10" }),
+      60n,
+    );
     expect(violation?.error).toBe("invalid_request");
     expect(violation?.message).toContain("exceeds maxAmount");
   });
@@ -141,7 +147,10 @@ describe("checkQuoteBounds", () => {
   it("stays in BigInt space for amounts above Number.MAX_SAFE_INTEGER", () => {
     const bigLiquidity = (BigInt(Number.MAX_SAFE_INTEGER) * 10n).toString();
     const amount = BigInt(Number.MAX_SAFE_INTEGER) * 10n + 1n;
-    const violation = checkQuoteBounds(meta({ liquidity: bigLiquidity }), amount);
+    const violation = checkQuoteBounds(
+      meta({ liquidity: bigLiquidity }),
+      amount,
+    );
     expect(violation?.error).toBe("insufficient_liquidity");
   });
 });
@@ -183,7 +192,11 @@ describe("priceQuote", () => {
   });
 
   it("echoes the pair's rate and feeBps regardless of amount", () => {
-    const priced = priceQuote(meta({ feeBps: 25, rate: "0.85" }), 1_000_000n, 10);
+    const priced = priceQuote(
+      meta({ feeBps: 25, rate: "0.85" }),
+      1_000_000n,
+      10,
+    );
     expect(priced.feeBps).toBe(25);
     expect(priced.rate).toBe("0.85");
   });

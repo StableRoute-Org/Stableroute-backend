@@ -13,7 +13,7 @@ import {
 const expectCanonicalError = (
   body: Record<string, unknown>,
   requestId: string,
-  error: string
+  error: string,
 ) => {
   expect(body.error).toBe(error);
   expect(body.message).toBeTruthy();
@@ -39,7 +39,11 @@ describe("api-keys lifecycle", () => {
         .post("/api/v1/api-keys")
         .send({ label: "" });
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
     });
 
     it("rejects a 65-char label with 400 invalid_request + requestId", async () => {
@@ -47,7 +51,11 @@ describe("api-keys lifecycle", () => {
         .post("/api/v1/api-keys")
         .send({ label: "a".repeat(65) });
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
     });
 
     it("accepts a 64-char label (boundary)", async () => {
@@ -75,7 +83,7 @@ describe("api-keys lifecycle", () => {
 
       const mine = res.body.items.find(
         (it: { prefix: string; label: string }) =>
-          it.prefix === prefix && it.label === label
+          it.prefix === prefix && it.label === label,
       );
       expect(mine).toBeDefined();
       expect(mine).toHaveProperty("prefix");
@@ -106,7 +114,7 @@ describe("api-keys lifecycle", () => {
       // Confirm it is gone from the listing.
       const res = await request(app).get("/api/v1/api-keys");
       const stillThere = res.body.items.find(
-        (it: { prefix: string }) => it.prefix === prefix
+        (it: { prefix: string }) => it.prefix === prefix,
       );
       expect(stillThere).toBeUndefined();
     });
@@ -152,8 +160,12 @@ describe("api-keys storage — salted hashes, never recoverable material", () =>
   });
 
   it("generates a distinct salt (and hash) per key", async () => {
-    const a = await request(app).post("/api/v1/api-keys").send({ label: "key-a" });
-    const b = await request(app).post("/api/v1/api-keys").send({ label: "key-b" });
+    const a = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "key-a" });
+    const b = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "key-b" });
 
     const recordA = apiKeyStore.get(apiKeyPrefix(a.body.key));
     const recordB = apiKeyStore.get(apiKeyPrefix(b.body.key));
@@ -184,8 +196,12 @@ describe("api-keys storage — salted hashes, never recoverable material", () =>
   });
 
   it("verifyApiKeySecret rejects the correct raw key against the wrong record", async () => {
-    const a = await request(app).post("/api/v1/api-keys").send({ label: "wrong-record-a" });
-    const b = await request(app).post("/api/v1/api-keys").send({ label: "wrong-record-b" });
+    const a = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "wrong-record-a" });
+    const b = await request(app)
+      .post("/api/v1/api-keys")
+      .send({ label: "wrong-record-b" });
 
     const recordB = apiKeyStore.get(apiKeyPrefix(b.body.key));
     expect(verifyApiKeySecret(a.body.key, recordB!)).toBe(false);
@@ -197,10 +213,15 @@ describe("api-keys — requireScope authenticates via hash comparison", () => {
     const middleware = requireScope("pairs:write");
     return (rawKey: string | undefined) => {
       const req = {
-        header: jest.fn().mockReturnValue(rawKey ? `Bearer ${rawKey}` : undefined),
+        header: jest
+          .fn()
+          .mockReturnValue(rawKey ? `Bearer ${rawKey}` : undefined),
       } as unknown as Request;
       const json = jest.fn();
-      const res = { status: jest.fn().mockReturnThis(), json } as unknown as Response;
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json,
+      } as unknown as Response;
       const next = jest.fn();
       middleware(req, res, next);
       return { req, res, next, json };
@@ -246,7 +267,9 @@ describe("api-keys — rotation preserves per-key salted hashing", () => {
     const prefix = apiKeyPrefix(rawKey);
     const predecessorBefore = apiKeyStore.get(prefix);
 
-    const rotated = await request(app).post(`/api/v1/api-keys/${prefix}/rotate`);
+    const rotated = await request(app).post(
+      `/api/v1/api-keys/${prefix}/rotate`,
+    );
     expect(rotated.status).toBe(201);
     const newKey: string = rotated.body.key;
     const newPrefix = apiKeyPrefix(newKey);
@@ -277,7 +300,12 @@ describe("api-keys — snapshot migration invalidates legacy plaintext-derived r
     hydrateFromSnapshot({
       pairRegistry: [],
       pairMeta: [],
-      apiKeyStore: [[legacyRawKey, { label: "legacy", createdAt: 1, scopes: ["keys:admin"] }]],
+      apiKeyStore: [
+        [
+          legacyRawKey,
+          { label: "legacy", createdAt: 1, scopes: ["keys:admin"] },
+        ],
+      ],
       webhookStore: [],
       eventLog: [],
     });
@@ -293,7 +321,12 @@ describe("api-keys — snapshot migration invalidates legacy plaintext-derived r
     hydrateFromSnapshot({
       pairRegistry: [],
       pairMeta: [],
-      apiKeyStore: [["srk_curr", { label: "current", createdAt: 1, scopes: [], salt: "s", hash: "h" }]],
+      apiKeyStore: [
+        [
+          "srk_curr",
+          { label: "current", createdAt: 1, scopes: [], salt: "s", hash: "h" },
+        ],
+      ],
       webhookStore: [],
       eventLog: [],
     });

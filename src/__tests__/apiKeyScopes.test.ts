@@ -16,7 +16,13 @@ import { type Request, type Response } from "express";
 import express from "express";
 import request from "supertest";
 import app, { requireScope, SCOPE_CATALOG } from "../index";
-import { resetStores, apiKeyStore, apiKeyPrefix, generateApiKeySalt, hashApiKeySecret } from "../stores";
+import {
+  resetStores,
+  apiKeyStore,
+  apiKeyPrefix,
+  generateApiKeySalt,
+  hashApiKeySecret,
+} from "../stores";
 
 /** Build a valid, hashed store record for a raw key injected directly into apiKeyStore. */
 const recordFor = (rawKey: string, overrides: Record<string, unknown> = {}) => {
@@ -45,10 +51,7 @@ const expectCanonicalError = (
 };
 
 /** Create a key via POST and return the full response body. */
-const createKey = (
-  label: string,
-  extra: Record<string, unknown> = {},
-) =>
+const createKey = (label: string, extra: Record<string, unknown> = {}) =>
   request(app)
     .post("/api/v1/api-keys")
     .set("Content-Type", "application/json")
@@ -70,9 +73,13 @@ const createKey = (
 const makeProtectedApp = (scope: string) => {
   const miniApp = express();
   miniApp.use(express.json());
-  miniApp.get("/protected", requireScope(scope), (_req: Request, res: Response) => {
-    res.json({ ok: true });
-  });
+  miniApp.get(
+    "/protected",
+    requireScope(scope),
+    (_req: Request, res: Response) => {
+      res.json({ ok: true });
+    },
+  );
   return miniApp;
 };
 
@@ -155,8 +162,14 @@ describe("API-key scopes", () => {
     it("rejects an unknown scope with 400 invalid_request", async () => {
       const res = await createKey("bad-scope", { scopes: ["dne:scope"] });
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
-      expect((res.body.message as string).toLowerCase()).toMatch(/unknown scope/);
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
+      expect((res.body.message as string).toLowerCase()).toMatch(
+        /unknown scope/,
+      );
     });
 
     it("rejects a mix of valid and unknown scopes with 400 invalid_request", async () => {
@@ -164,13 +177,21 @@ describe("API-key scopes", () => {
         scopes: ["pairs:write", "bad:scope"],
       });
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
     });
 
     it("rejects scopes that is not an array with 400 invalid_request", async () => {
       const res = await createKey("str-scope", { scopes: "pairs:write" });
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
     });
 
     it("rejects scopes array containing non-string values with 400 invalid_request", async () => {
@@ -179,7 +200,11 @@ describe("API-key scopes", () => {
         .set("Content-Type", "application/json")
         .send(JSON.stringify({ label: "num-scope", scopes: [1, 2, 3] }));
       expect(res.status).toBe(400);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "invalid_request");
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
     });
 
     it("never exposes the raw key in the scope rejection response", async () => {
@@ -288,7 +313,7 @@ describe("API-key scopes", () => {
           createdAt: Date.now() - 10_000,
           expiresAt: Date.now() - 1, // expired 1 ms ago
           scopes: ["pairs:write"],
-        })
+        }),
       );
 
       const protectedApp = makeProtectedApp("pairs:write");
@@ -318,7 +343,11 @@ describe("API-key scopes", () => {
       const rawKey = "srk_noscopemock__000000000000000";
       apiKeyStore.set(
         apiKeyPrefix(rawKey),
-        recordFor(rawKey, { label: "no-scope", createdAt: Date.now(), scopes: [] })
+        recordFor(rawKey, {
+          label: "no-scope",
+          createdAt: Date.now(),
+          scopes: [],
+        }),
       );
 
       const middleware = requireScope("pairs:write");
@@ -338,7 +367,7 @@ describe("API-key scopes", () => {
       expect(res.status).toHaveBeenCalledWith(403);
       const body = json.mock.calls[0][0] as Record<string, unknown>;
       expect(body.error).toBe("forbidden");
-      expect((body.message as string)).toMatch(/pairs:write/);
+      expect(body.message as string).toMatch(/pairs:write/);
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -427,7 +456,11 @@ describe("API-key scopes", () => {
       const rawKey2 = "srk_bearer_case_test_0000000000";
       apiKeyStore.set(
         apiKeyPrefix(rawKey2),
-        recordFor(rawKey2, { label: "bearer-case", createdAt: Date.now(), scopes: ["pairs:write"] })
+        recordFor(rawKey2, {
+          label: "bearer-case",
+          createdAt: Date.now(),
+          scopes: ["pairs:write"],
+        }),
       );
 
       const middleware = requireScope("pairs:write");

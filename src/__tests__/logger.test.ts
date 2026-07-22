@@ -8,7 +8,10 @@ describe("logger", () => {
   });
 
   it("uses LOG_LEVEL outside test mode", () => {
-    const debugLogger = buildLogger({ NODE_ENV: "production", LOG_LEVEL: "debug" } as NodeJS.ProcessEnv);
+    const debugLogger = buildLogger({
+      NODE_ENV: "production",
+      LOG_LEVEL: "debug",
+    } as NodeJS.ProcessEnv);
 
     expect(debugLogger.level).toBe("debug");
     expect(debugLogger.isLevelEnabled("debug")).toBe(true);
@@ -21,7 +24,7 @@ describe("logger", () => {
         "headers.x-api-key",
         "req.headers.authorization",
         "req.headers.x-api-key",
-      ])
+      ]),
     );
   });
 });

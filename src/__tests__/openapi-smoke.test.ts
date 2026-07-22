@@ -5,7 +5,9 @@ const toOpenApiPath = (p: string): string => p.replace(/:([^/]+)/g, "{$1}");
 
 function discoverRoutePaths(): string[] {
   const stack = (
-    app as unknown as { _router: { stack: Array<{ route?: { path: string } }> } }
+    app as unknown as {
+      _router: { stack: Array<{ route?: { path: string } }> };
+    }
   )._router.stack;
   const paths = new Set<string>();
   for (const layer of stack) {
@@ -26,7 +28,7 @@ describe("OpenAPI paths smoke test", () => {
 
   it("every mounted /api/v1 route appears in the OpenAPI spec", () => {
     const mounted = discoverRoutePaths().filter(
-      (p) => p.startsWith("/api/v1/") && p !== "/api/v1/openapi.json"
+      (p) => p.startsWith("/api/v1/") && p !== "/api/v1/openapi.json",
     );
     expect(mounted.length).toBeGreaterThan(0);
     const missing = mounted.filter((p) => !specPaths.includes(p));
@@ -36,7 +38,10 @@ describe("OpenAPI paths smoke test", () => {
   it("spec has no paths pointing at non-existent routes", () => {
     const mounted = new Set(discoverRoutePaths());
     const undocumented = specPaths.filter(
-      (p) => p.startsWith("/api/v1/") && !mounted.has(p) && p !== "/api/v1/openapi.json"
+      (p) =>
+        p.startsWith("/api/v1/") &&
+        !mounted.has(p) &&
+        p !== "/api/v1/openapi.json",
     );
     expect(undocumented).toEqual([]);
   });

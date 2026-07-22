@@ -8,7 +8,9 @@ describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
   });
 
   it("toggles enabled flag with a boolean body", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .patch("/api/v1/pairs/USDC/EURC/enabled")
       .send({ enabled: false });
@@ -17,7 +19,9 @@ describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
   });
 
   it("rejects non-boolean enabled values", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .patch("/api/v1/pairs/USDC/EURC/enabled")
       .send({ enabled: "yes" });

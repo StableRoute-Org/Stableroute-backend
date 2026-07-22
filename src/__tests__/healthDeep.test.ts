@@ -33,7 +33,9 @@ describe("GET /api/v1/health/deep", () => {
     const res = await request(app).get("/api/v1/health/deep");
     expect(res.status).toBe(503);
     expect(res.body.status).toBe("degraded");
-    const clock = res.body.checks.find((c: { name: string }) => c.name === "clock");
+    const clock = res.body.checks.find(
+      (c: { name: string }) => c.name === "clock",
+    );
     expect(clock.status).toBe("fail");
 
     spy.mockRestore();

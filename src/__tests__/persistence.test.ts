@@ -94,7 +94,11 @@ describe("Persistence Layer", () => {
     });
 
     it("returns null if JSON is valid but not a valid snapshot shape", () => {
-      writeFileSync(TEST_SNAP_PATH, JSON.stringify({ randomField: true }), "utf8");
+      writeFileSync(
+        TEST_SNAP_PATH,
+        JSON.stringify({ randomField: true }),
+        "utf8",
+      );
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       expect(adapter.load()).toBeNull();
     });
@@ -212,7 +216,16 @@ describe("Persistence Layer", () => {
         pairRegistry: [],
         pairMeta: [],
         apiKeyStore: [
-          ["srk_abcd", { label: "current", createdAt: 1, scopes: [], salt: "s", hash: "h" }],
+          [
+            "srk_abcd",
+            {
+              label: "current",
+              createdAt: 1,
+              scopes: [],
+              salt: "s",
+              hash: "h",
+            },
+          ],
         ],
         webhookStore: [],
         eventLog: [],
@@ -235,7 +248,16 @@ describe("Persistence Layer", () => {
         pairMeta: [],
         apiKeyStore: [
           ["srk_legacy1", { label: "legacy", createdAt: 1, scopes: [] }],
-          ["srk_currnt", { label: "current", createdAt: 2, scopes: [], salt: "s", hash: "h" }],
+          [
+            "srk_currnt",
+            {
+              label: "current",
+              createdAt: 2,
+              scopes: [],
+              salt: "s",
+              hash: "h",
+            },
+          ],
         ],
         webhookStore: [],
         eventLog: [],
@@ -262,12 +284,14 @@ describe("Persistence Layer", () => {
       const originalWriteFileSync = fs.writeFileSync;
       let tempFileExistedDuringWrite = false;
 
-      jest.spyOn(fs, "writeFileSync").mockImplementation((path, data, options) => {
-        originalWriteFileSync(path, data, options);
-        if (path === tempPath) {
-          tempFileExistedDuringWrite = existsSync(tempPath);
-        }
-      });
+      jest
+        .spyOn(fs, "writeFileSync")
+        .mockImplementation((path, data, options) => {
+          originalWriteFileSync(path, data, options);
+          if (path === tempPath) {
+            tempFileExistedDuringWrite = existsSync(tempPath);
+          }
+        });
 
       const snap = getSnapshot();
       adapter.save(snap);
@@ -328,7 +352,12 @@ describe("Persistence Layer", () => {
 
     it("auto-saves on apiKeyStore mutations", async () => {
       process.env.PERSIST_PATH = TEST_SNAP_PATH;
-      apiKeyStore.set("srk_key1", { label: "label1", createdAt: 1, salt: "s", hash: "h" });
+      apiKeyStore.set("srk_key1", {
+        label: "label1",
+        createdAt: 1,
+        salt: "s",
+        hash: "h",
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
@@ -339,7 +368,11 @@ describe("Persistence Layer", () => {
 
     it("auto-saves on webhookStore mutations", async () => {
       process.env.PERSIST_PATH = TEST_SNAP_PATH;
-      webhookStore.set("wh_1", { url: "http://test", events: [], createdAt: 1 });
+      webhookStore.set("wh_1", {
+        url: "http://test",
+        events: [],
+        createdAt: 1,
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
@@ -370,11 +403,18 @@ describe("Persistence Layer", () => {
       });
 
       // Override active adapter in memory so trigger uses the spy
-      jest.spyOn(require("../persistence"), "getStoreAdapter").mockReturnValue(adapter);
+      jest
+        .spyOn(require("../persistence"), "getStoreAdapter")
+        .mockReturnValue(adapter);
 
       pairRegistry.add("A::B");
       pairRegistry.add("C::D");
-      apiKeyStore.set("srk_1", { label: "1", createdAt: 1, salt: "s", hash: "h" });
+      apiKeyStore.set("srk_1", {
+        label: "1",
+        createdAt: 1,
+        salt: "s",
+        hash: "h",
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 150));
 

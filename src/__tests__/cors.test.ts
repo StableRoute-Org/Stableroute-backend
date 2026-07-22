@@ -32,8 +32,12 @@ describe("CORS preflight smoke tests", () => {
   });
 
   it("parses comma-separated CORS allowlist entries", () => {
-    const allowed = parseCorsAllowedOrigins(" https://app.example.com,https://admin.example.com ,, ");
-    expect(allowed).toEqual(new Set(["https://app.example.com", "https://admin.example.com"]));
+    const allowed = parseCorsAllowedOrigins(
+      " https://app.example.com,https://admin.example.com ,, ",
+    );
+    expect(allowed).toEqual(
+      new Set(["https://app.example.com", "https://admin.example.com"]),
+    );
   });
 
   it("allows configured origins and requests without Origin only", () => {
@@ -46,7 +50,9 @@ describe("CORS preflight smoke tests", () => {
   it("OPTIONS preflight returns CORS headers for an allowed origin in normal operation", async () => {
     const res = await sendPreflight("/api/v1/pairs");
 
-    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    expect(res.headers["access-control-allow-origin"]).toBe(
+      "http://localhost:3000",
+    );
     expect(res.headers["access-control-allow-methods"]).toBeTruthy();
     expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
 
@@ -80,7 +86,9 @@ describe("CORS preflight smoke tests", () => {
 
     // CORS headers must still be present — a missing header would break
     // browser clients just as much as a 503 would.
-    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    expect(res.headers["access-control-allow-origin"]).toBe(
+      "http://localhost:3000",
+    );
   });
 
   it("mutating POST is still blocked with 503 while paused (pause guard integrity)", async () => {

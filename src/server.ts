@@ -14,7 +14,7 @@ import app, { hydrationPromise } from "./index";
  */
 export function createServer(
   application: Express = app,
-  port: string | number = process.env.PORT ?? 3001
+  port: string | number = process.env.PORT ?? 3001,
 ): http.Server {
   return application.listen(port, () => {
     console.log(`StableRoute backend listening on http://localhost:${port}`);
@@ -66,7 +66,7 @@ export interface ShutdownDeps {
 export function handleShutdown(
   server: http.Server,
   signal: string,
-  deps: ShutdownDeps
+  deps: ShutdownDeps,
 ): void {
   const graceMs = deps.graceMs ?? parseGraceMs();
   console.log(`Received ${signal}, draining…`);
@@ -103,7 +103,9 @@ export function registerSignalHandlers(server: http.Server): void {
     exit: (code) => process.exit(code),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
   };
-  process.on("SIGTERM", () => handleShutdown(server, "SIGTERM", productionDeps));
+  process.on("SIGTERM", () =>
+    handleShutdown(server, "SIGTERM", productionDeps),
+  );
   process.on("SIGINT", () => handleShutdown(server, "SIGINT", productionDeps));
 }
 

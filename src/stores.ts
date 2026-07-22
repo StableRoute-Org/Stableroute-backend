@@ -9,7 +9,12 @@
  * @module stores
  */
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { loadPausedState, savePausedState } from "./pauseState";
 import { getStoreAdapter } from "./persistence";
 import { logger } from "./logger";
@@ -113,7 +118,8 @@ export type ApiKeyRecord = {
 export const API_KEY_PREFIX_LENGTH = 8;
 
 /** Derive the non-secret lookup prefix from a raw API key. */
-export const apiKeyPrefix = (rawKey: string): string => rawKey.slice(0, API_KEY_PREFIX_LENGTH);
+export const apiKeyPrefix = (rawKey: string): string =>
+  rawKey.slice(0, API_KEY_PREFIX_LENGTH);
 
 /** Generate a fresh random salt (hex-encoded) for hashing a new API key. */
 export const generateApiKeySalt = (): string => randomBytes(16).toString("hex");
@@ -139,11 +145,13 @@ export const hashApiKeySecret = (rawKey: string, salt: string): string =>
  */
 export const verifyApiKeySecret = (
   rawKey: string,
-  record: Pick<ApiKeyRecord, "salt" | "hash">
+  record: Pick<ApiKeyRecord, "salt" | "hash">,
 ): boolean => {
   const candidate = Buffer.from(hashApiKeySecret(rawKey, record.salt), "hex");
   const stored = Buffer.from(record.hash, "hex");
-  return candidate.length === stored.length && timingSafeEqual(candidate, stored);
+  return (
+    candidate.length === stored.length && timingSafeEqual(candidate, stored)
+  );
 };
 
 /** Record stored for each registered webhook. */
@@ -266,7 +274,8 @@ export const pairKey = (source: string, dest: string): string =>
  */
 export const effectiveEventLogCap = (): number => {
   const cap = config.eventLogCap;
-  if (typeof cap !== "number" || cap <= 0 || cap > EVENT_LOG_CAP_MAX) return EVENT_LOG_CAP;
+  if (typeof cap !== "number" || cap <= 0 || cap > EVENT_LOG_CAP_MAX)
+    return EVENT_LOG_CAP;
   return cap;
 };
 
@@ -288,7 +297,7 @@ export const trimEventLog = (cap: number): void => {
  */
 export const recordEvent = (
   type: EventType,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
 ): void => {
   eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
   const cap = effectiveEventLogCap();
@@ -406,7 +415,11 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
       pairMeta.clear();
       if (Array.isArray(snap.pairMeta)) {
         for (const item of snap.pairMeta) {
-          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+          if (
+            Array.isArray(item) &&
+            item.length === 2 &&
+            typeof item[0] === "string"
+          ) {
             pairMeta.set(item[0], item[1] as PairMeta);
           }
         }
@@ -416,14 +429,22 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
       if (Array.isArray(snap.apiKeyStore)) {
         let invalidatedLegacyKeys = 0;
         for (const item of snap.apiKeyStore) {
-          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+          if (
+            Array.isArray(item) &&
+            item.length === 2 &&
+            typeof item[0] === "string"
+          ) {
             const record = item[1] as Partial<ApiKeyRecord> | null;
             // Migration guard: pre-existing snapshots keyed by the raw API
             // key (with a record that predates the salt/hash fields) held
             // recoverable credential material. Rather than trust and
             // silently re-hash a value that may already have been read from
             // a leaked snapshot, drop it — the key must be recreated.
-            if (!record || typeof record.salt !== "string" || typeof record.hash !== "string") {
+            if (
+              !record ||
+              typeof record.salt !== "string" ||
+              typeof record.hash !== "string"
+            ) {
               invalidatedLegacyKeys += 1;
               continue;
             }
@@ -433,7 +454,7 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
         if (invalidatedLegacyKeys > 0) {
           logger.warn(
             { invalidatedLegacyKeys },
-            "[stores] discarded pre-migration API key record(s) lacking salt/hash during snapshot hydration; affected keys must be recreated"
+            "[stores] discarded pre-migration API key record(s) lacking salt/hash during snapshot hydration; affected keys must be recreated",
           );
         }
       }
@@ -441,7 +462,11 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
       webhookStore.clear();
       if (Array.isArray(snap.webhookStore)) {
         for (const item of snap.webhookStore) {
-          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+          if (
+            Array.isArray(item) &&
+            item.length === 2 &&
+            typeof item[0] === "string"
+          ) {
             webhookStore.set(item[0], item[1] as WebhookRecord);
           }
         }
@@ -576,4 +601,3 @@ wrapMap(pairMeta);
 wrapMap(apiKeyStore);
 wrapMap(webhookStore);
 wrapArray(eventLog);
-

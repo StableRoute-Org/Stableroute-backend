@@ -1,15 +1,41 @@
 import request from "supertest";
 import express, { type Request, type Response } from "express";
-import app, { isValidRequestId, clearIdempotencyCache, isKeyValid, requireScope, requireJsonContentType } from "../index";
-import { resetStores, apiKeyStore, webhookStore, config } from "../stores";
+import app, {
+  isValidRequestId,
+  clearIdempotencyCache,
+  isKeyValid,
+  requireScope,
+  requireJsonContentType,
+} from "../index";
+import {
+  resetStores,
+  apiKeyStore,
+  webhookStore,
+  config,
+  apiKeyPrefix,
+  generateApiKeySalt,
+  hashApiKeySecret,
+} from "../stores";
 import { logger } from "../logger";
+
+/** Build a valid, hashed apiKeyStore record for a raw key injected in a test. */
+const recordFor = (rawKey: string, overrides: Record<string, unknown> = {}) => {
+  const salt = generateApiKeySalt();
+  return {
+    label: "injected",
+    createdAt: Date.now(),
+    salt,
+    hash: hashApiKeySecret(rawKey, salt),
+    ...overrides,
+  };
+};
 
 beforeEach(() => resetStores());
 
 const expectCanonicalError = (
   body: Record<string, unknown>,
   requestId: string,
-  error: string
+  error: string,
 ) => {
   expect(body.error).toBe(error);
   expect(body.message).toBeTruthy();
@@ -20,11 +46,16 @@ describe("StableRoute Backend", () => {
   it("GET /health returns 200 and status ok", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ status: "ok", service: "stableroute-backend" });
+    expect(res.body).toMatchObject({
+      status: "ok",
+      service: "stableroute-backend",
+    });
   });
 
   it("GET /api/v1/quote with params returns quote for a registered pair", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .get("/api/v1/quote")
       .query({ source_asset: "USDC", dest_asset: "EURC", amount: "100" });
@@ -48,33 +79,34 @@ describe("StableRoute Backend", () => {
     const id = res.headers["x-request-id"];
     expect(typeof id).toBe("string");
     expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
   });
 
   it("echoes the caller-provided X-Request-Id when present", async () => {
     const caller = "stableroute-trace-xyz-1";
-    const res = await request(app)
-      .get("/health")
-      .set("X-Request-Id", caller);
+    const res = await request(app).get("/health").set("X-Request-Id", caller);
     expect(res.status).toBe(200);
     expect(res.headers["x-request-id"]).toBe(caller);
   });
 
   it("replaces an over-length X-Request-Id (> 200 chars) with a generated UUID", async () => {
     const tooLong = "a".repeat(201);
-    const res = await request(app)
-      .get("/health")
-      .set("X-Request-Id", tooLong);
+    const res = await request(app).get("/health").set("X-Request-Id", tooLong);
     expect(res.status).toBe(200);
     const echoed = res.headers["x-request-id"];
     expect(echoed).not.toBe(tooLong);
-    expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(echoed).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
   });
 
   it("replaces a CRLF-containing X-Request-Id with a generated UUID", async () => {
     const originalHeader = express.request.header;
-    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+    express.request.header = function (
+      this: unknown,
+      name: string,
+    ): string | string[] | undefined {
       if (name.toLowerCase() === "x-request-id") {
         return "id\r\ninjection";
       }
@@ -87,7 +119,9 @@ describe("StableRoute Backend", () => {
       const echoed = res.headers["x-request-id"];
       expect(echoed).not.toContain("\r");
       expect(echoed).not.toContain("\n");
-      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(echoed).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     } finally {
       express.request.header = originalHeader;
     }
@@ -95,7 +129,10 @@ describe("StableRoute Backend", () => {
 
   it("replaces a control-character-containing X-Request-Id with a generated UUID", async () => {
     const originalHeader = express.request.header;
-    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+    express.request.header = function (
+      this: unknown,
+      name: string,
+    ): string | string[] | undefined {
       if (name.toLowerCase() === "x-request-id") {
         return "id\x00null\x1fcontrol";
       }
@@ -108,7 +145,9 @@ describe("StableRoute Backend", () => {
       const echoed = res.headers["x-request-id"];
       expect(echoed).not.toContain("\x00");
       expect(echoed).not.toContain("\x1f");
-      expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(echoed).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     } finally {
       express.request.header = originalHeader;
     }
@@ -116,7 +155,10 @@ describe("StableRoute Backend", () => {
 
   it("asserts that the response header and error body never contain control characters or CRLF from input", async () => {
     const originalHeader = express.request.header;
-    express.request.header = function (this: unknown, name: string): string | string[] | undefined {
+    express.request.header = function (
+      this: unknown,
+      name: string,
+    ): string | string[] | undefined {
       if (name.toLowerCase() === "x-request-id") {
         return "id\r\ninjection\x00null";
       }
@@ -126,20 +168,24 @@ describe("StableRoute Backend", () => {
     try {
       const res = await request(app).get("/api/v1/this-route-does-not-exist");
       expect(res.status).toBe(404);
-      
+
       // Header check
       const headerId = res.headers["x-request-id"];
       expect(headerId).not.toContain("\r");
       expect(headerId).not.toContain("\n");
       expect(headerId).not.toContain("\x00");
-      expect(headerId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(headerId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
 
       // Body check
       const bodyId = (res.body as Record<string, unknown>).requestId as string;
       expect(bodyId).not.toContain("\r");
       expect(bodyId).not.toContain("\n");
       expect(bodyId).not.toContain("\x00");
-      expect(bodyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(bodyId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     } finally {
       express.request.header = originalHeader;
     }
@@ -351,11 +397,14 @@ describe("StableRoute Backend", () => {
     expect(events.status).toBe(200);
     expect(
       events.body.items.some(
-        (e: { type: string; payload: { source: string; destination: string } }) =>
+        (e: {
+          type: string;
+          payload: { source: string; destination: string };
+        }) =>
           e.type === "pair.registered" &&
           e.payload.source === "EVT" &&
-          e.payload.destination === "LOG"
-      )
+          e.payload.destination === "LOG",
+      ),
     ).toBe(true);
   });
 
@@ -367,7 +416,9 @@ describe("StableRoute Backend", () => {
     expect(create.body.key).toMatch(/^srk_/);
     const prefix = create.body.key.slice(0, 8);
     const list = await request(app).get("/api/v1/api-keys");
-    expect(list.body.items.some((k: { prefix: string }) => k.prefix === prefix)).toBe(true);
+    expect(
+      list.body.items.some((k: { prefix: string }) => k.prefix === prefix),
+    ).toBe(true);
     const del = await request(app).delete(`/api/v1/api-keys/${prefix}`);
     expect(del.status).toBe(204);
   });
@@ -415,7 +466,9 @@ describe("StableRoute Backend", () => {
       const listRes = await request(app).get("/api/v1/api-keys");
       expect(listRes.status).toBe(200);
 
-      const keyRecord = listRes.body.items.find((item: { prefix: string }) => item.prefix === prefix);
+      const keyRecord = listRes.body.items.find(
+        (item: { prefix: string }) => item.prefix === prefix,
+      );
       expect(keyRecord).toBeDefined();
       expect(keyRecord.expiresAt).toBe(createRes.body.expiresAt);
       expect(keyRecord).not.toHaveProperty("key");
@@ -447,11 +500,11 @@ describe("StableRoute Backend", () => {
           createdAt: Date.now(),
           expiresAt: Date.now() - 1000, // expired 1s ago
           scopes: ["pairs:write"],
-        })
+        }),
       );
 
       const middleware = requireScope("pairs:write");
-      
+
       const req = {
         header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
       } as unknown as Request;
@@ -468,7 +521,7 @@ describe("StableRoute Backend", () => {
         expect.objectContaining({
           error: "unauthorized",
           message: "a valid API key is required",
-        })
+        }),
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -482,11 +535,11 @@ describe("StableRoute Backend", () => {
           createdAt: Date.now(),
           expiresAt: Date.now() + 3600 * 1000,
           scopes: ["pairs:write"],
-        })
+        }),
       );
 
       const middleware = requireScope("pairs:write");
-      
+
       const req = {
         header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
       } as unknown as Request;
@@ -500,7 +553,7 @@ describe("StableRoute Backend", () => {
 
       expect(res.status).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalled();
-      
+
       const updatedRecord = apiKeyStore.get(apiKeyPrefix(rawKey));
       expect(updatedRecord!.lastUsedAt).toBeDefined();
       expect(updatedRecord!.lastUsedAt).toBeGreaterThan(0);
@@ -531,11 +584,11 @@ describe("StableRoute Backend", () => {
           label: "test-auth-no-scope",
           createdAt: Date.now(),
           scopes: [], // empty scope
-        })
+        }),
       );
 
       const middleware = requireScope("pairs:write");
-      
+
       const req = {
         header: jest.fn().mockReturnValue(`Bearer ${rawKey}`),
       } as unknown as Request;
@@ -552,7 +605,7 @@ describe("StableRoute Backend", () => {
         expect.objectContaining({
           error: "forbidden",
           message: "this key is missing the required scope: pairs:write",
-        })
+        }),
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -564,7 +617,10 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("ok");
       expect(res.body.uptimeSeconds).toBeGreaterThanOrEqual(0);
-      expect(res.body.memory).toMatchObject({ rssMb: expect.any(Number), heapUsedMb: expect.any(Number) });
+      expect(res.body.memory).toMatchObject({
+        rssMb: expect.any(Number),
+        heapUsedMb: expect.any(Number),
+      });
       expect(res.body.pid).toBeGreaterThan(0);
       expect(typeof res.body.node).toBe("string");
 
@@ -583,7 +639,9 @@ describe("StableRoute Backend", () => {
       expect(names).toContain("storage");
       expect(names).toContain("clock");
       // All should pass in normal conditions
-      expect(res.body.checks.every((c: { status: string }) => c.status === "ok")).toBe(true);
+      expect(
+        res.body.checks.every((c: { status: string }) => c.status === "ok"),
+      ).toBe(true);
     });
 
     it("returns 503 degraded when a check fails", async () => {
@@ -597,7 +655,9 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(503);
       expect(res.body.status).toBe("degraded");
 
-      const clockCheck = res.body.checks.find((c: { name: string }) => c.name === "clock");
+      const clockCheck = res.body.checks.find(
+        (c: { name: string }) => c.name === "clock",
+      );
       expect(clockCheck).toBeDefined();
       expect(clockCheck.status).toBe("fail");
 
@@ -647,19 +707,25 @@ describe("StableRoute Backend", () => {
     it("includes stableroute_events_total and stableroute_events_by_type with correct Content-Type", async () => {
       const res = await request(app).get("/api/v1/metrics");
       expect(res.status).toBe(200);
-      expect(res.headers["content-type"]).toMatch(/text\/plain.*version=0\.0\.4/);
+      expect(res.headers["content-type"]).toMatch(
+        /text\/plain.*version=0\.0\.4/,
+      );
       expect(res.text).toMatch(/# HELP stableroute_events_total/);
       expect(res.text).toMatch(/# TYPE stableroute_events_total gauge/);
       expect(res.text).toMatch(/^stableroute_events_total \d+$/m);
       expect(res.text).toMatch(/# HELP stableroute_events_by_type/);
       expect(res.text).toMatch(/# TYPE stableroute_events_by_type gauge/);
-      expect(res.text).toMatch(/stableroute_events_by_type\{type="pair\.registered"\}/);
+      expect(res.text).toMatch(
+        /stableroute_events_by_type\{type="pair\.registered"\}/,
+      );
       // Body must end with a newline (Prometheus requirement)
       expect(res.text.endsWith("\n")).toBe(true);
     });
 
     it("reflects actual event counts after registering and unregistering a pair", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "MTEST", destination: "NTEST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "MTEST", destination: "NTEST" });
       await request(app).delete("/api/v1/pairs/MTEST/NTEST");
 
       const res = await request(app).get("/api/v1/metrics");
@@ -670,8 +736,12 @@ describe("StableRoute Backend", () => {
       expect(Number(totalMatch![1])).toBeGreaterThanOrEqual(2);
 
       // per-type gauges for pair.registered and pair.unregistered should be >= 1
-      const regMatch = res.text.match(/stableroute_events_by_type\{type="pair\.registered"\} (\d+)/);
-      const unregMatch = res.text.match(/stableroute_events_by_type\{type="pair\.unregistered"\} (\d+)/);
+      const regMatch = res.text.match(
+        /stableroute_events_by_type\{type="pair\.registered"\} (\d+)/,
+      );
+      const unregMatch = res.text.match(
+        /stableroute_events_by_type\{type="pair\.unregistered"\} (\d+)/,
+      );
       expect(regMatch).not.toBeNull();
       expect(unregMatch).not.toBeNull();
       expect(Number(regMatch![1])).toBeGreaterThanOrEqual(1);
@@ -684,9 +754,15 @@ describe("StableRoute Backend", () => {
       // just assert that the zero-count lines are still emitted (they may not be zero
       // here if other tests ran first, but the series must always be present).
       const res = await request(app).get("/api/v1/metrics");
-      expect(res.text).toMatch(/stableroute_events_by_type\{type="pair\.registered"\} \d+/);
-      expect(res.text).toMatch(/stableroute_events_by_type\{type="pair\.refreshed"\} \d+/);
-      expect(res.text).toMatch(/stableroute_events_by_type\{type="pair\.unregistered"\} \d+/);
+      expect(res.text).toMatch(
+        /stableroute_events_by_type\{type="pair\.registered"\} \d+/,
+      );
+      expect(res.text).toMatch(
+        /stableroute_events_by_type\{type="pair\.refreshed"\} \d+/,
+      );
+      expect(res.text).toMatch(
+        /stableroute_events_by_type\{type="pair\.unregistered"\} \d+/,
+      );
     });
 
     it("existing stableroute_pairs_total and stableroute_paused gauges are still present", async () => {
@@ -708,7 +784,9 @@ describe("StableRoute Backend", () => {
     it("emits # HELP and # TYPE lines for all four store gauges", async () => {
       const res = await request(app).get("/api/v1/metrics");
       expect(res.status).toBe(200);
-      expect(res.headers["content-type"]).toMatch(/text\/plain.*version=0\.0\.4/);
+      expect(res.headers["content-type"]).toMatch(
+        /text\/plain.*version=0\.0\.4/,
+      );
 
       expect(res.text).toMatch(/# HELP stableroute_api_keys_total/);
       expect(res.text).toMatch(/# TYPE stableroute_api_keys_total gauge/);
@@ -720,22 +798,30 @@ describe("StableRoute Backend", () => {
       expect(res.text).toMatch(/# TYPE stableroute_event_log_size gauge/);
 
       expect(res.text).toMatch(/# HELP stableroute_rate_limit_per_window/);
-      expect(res.text).toMatch(/# TYPE stableroute_rate_limit_per_window gauge/);
+      expect(res.text).toMatch(
+        /# TYPE stableroute_rate_limit_per_window gauge/,
+      );
     });
 
     it("reports zero counts when stores are empty", async () => {
       const res = await request(app).get("/api/v1/metrics");
       expect(res.status).toBe(200);
 
-      const apiKeysMatch = res.text.match(/^stableroute_api_keys_total (\d+)$/m);
+      const apiKeysMatch = res.text.match(
+        /^stableroute_api_keys_total (\d+)$/m,
+      );
       expect(apiKeysMatch).not.toBeNull();
       expect(Number(apiKeysMatch![1])).toBe(0);
 
-      const webhooksMatch = res.text.match(/^stableroute_webhooks_total (\d+)$/m);
+      const webhooksMatch = res.text.match(
+        /^stableroute_webhooks_total (\d+)$/m,
+      );
       expect(webhooksMatch).not.toBeNull();
       expect(Number(webhooksMatch![1])).toBe(0);
 
-      const eventLogMatch = res.text.match(/^stableroute_event_log_size (\d+)$/m);
+      const eventLogMatch = res.text.match(
+        /^stableroute_event_log_size (\d+)$/m,
+      );
       expect(eventLogMatch).not.toBeNull();
       expect(Number(eventLogMatch![1])).toBe(0);
     });
@@ -761,8 +847,20 @@ describe("StableRoute Backend", () => {
 
     it("stableroute_api_keys_total increments and decrements correctly", async () => {
       // Seed store directly for a controlled count
-      apiKeyStore.set("srk_key1", { label: "k1", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
-      apiKeyStore.set("srk_key2", { label: "k2", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
+      apiKeyStore.set("srk_key1", {
+        label: "k1",
+        createdAt: Date.now(),
+        scopes: [],
+        salt: "s",
+        hash: "h",
+      });
+      apiKeyStore.set("srk_key2", {
+        label: "k2",
+        createdAt: Date.now(),
+        scopes: [],
+        salt: "s",
+        hash: "h",
+      });
 
       const res1 = await request(app).get("/api/v1/metrics");
       const match1 = res1.text.match(/^stableroute_api_keys_total (\d+)$/m);
@@ -778,8 +876,16 @@ describe("StableRoute Backend", () => {
     });
 
     it("stableroute_webhooks_total reflects the number of registered webhooks", async () => {
-      webhookStore.set("wh_001", { url: "https://example.com/hook1", events: ["pair.registered"], createdAt: Date.now() });
-      webhookStore.set("wh_002", { url: "https://example.com/hook2", events: ["pair.unregistered"], createdAt: Date.now() });
+      webhookStore.set("wh_001", {
+        url: "https://example.com/hook1",
+        events: ["pair.registered"],
+        createdAt: Date.now(),
+      });
+      webhookStore.set("wh_002", {
+        url: "https://example.com/hook2",
+        events: ["pair.unregistered"],
+        createdAt: Date.now(),
+      });
 
       const res = await request(app).get("/api/v1/metrics");
       const match = res.text.match(/^stableroute_webhooks_total (\d+)$/m);
@@ -789,18 +895,26 @@ describe("StableRoute Backend", () => {
 
     it("stableroute_event_log_size reflects the current event log depth", async () => {
       // Register a pair to generate events
-      await request(app).post("/api/v1/pairs").send({ source: "GTEST", destination: "HTEST" });
-      await request(app).post("/api/v1/pairs").send({ source: "ITEST", destination: "JTEST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "GTEST", destination: "HTEST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ITEST", destination: "JTEST" });
 
       const res = await request(app).get("/api/v1/metrics");
-      const eventLogMatch = res.text.match(/^stableroute_event_log_size (\d+)$/m);
+      const eventLogMatch = res.text.match(
+        /^stableroute_event_log_size (\d+)$/m,
+      );
       expect(eventLogMatch).not.toBeNull();
       expect(Number(eventLogMatch![1])).toBeGreaterThanOrEqual(2);
     });
 
     it("stableroute_rate_limit_per_window reflects config.rateLimitPerWindow", async () => {
       const res1 = await request(app).get("/api/v1/metrics");
-      const match1 = res1.text.match(/^stableroute_rate_limit_per_window (\d+)$/m);
+      const match1 = res1.text.match(
+        /^stableroute_rate_limit_per_window (\d+)$/m,
+      );
       expect(match1).not.toBeNull();
       // Default is 60
       expect(Number(match1![1])).toBe(config.rateLimitPerWindow);
@@ -810,7 +924,9 @@ describe("StableRoute Backend", () => {
       config.rateLimitPerWindow = 120;
 
       const res2 = await request(app).get("/api/v1/metrics");
-      const match2 = res2.text.match(/^stableroute_rate_limit_per_window (\d+)$/m);
+      const match2 = res2.text.match(
+        /^stableroute_rate_limit_per_window (\d+)$/m,
+      );
       expect(match2).not.toBeNull();
       expect(Number(match2![1])).toBe(120);
 
@@ -820,14 +936,26 @@ describe("StableRoute Backend", () => {
 
     it("gauge values never include raw API key material or webhook URLs", async () => {
       const secret = "srk_supersecretapikey12345";
-      apiKeyStore.set(apiKeyPrefix(secret), { label: "secret-key", createdAt: Date.now(), scopes: [], salt: "s", hash: "h" });
-      webhookStore.set("wh_secure", { url: "https://internal.secret.example.com/hook", events: [], createdAt: Date.now() });
+      apiKeyStore.set(apiKeyPrefix(secret), {
+        label: "secret-key",
+        createdAt: Date.now(),
+        scopes: [],
+        salt: "s",
+        hash: "h",
+      });
+      webhookStore.set("wh_secure", {
+        url: "https://internal.secret.example.com/hook",
+        events: [],
+        createdAt: Date.now(),
+      });
 
       const res = await request(app).get("/api/v1/metrics");
       // Raw key must not appear
       expect(res.text).not.toContain(secret);
       // Webhook URL must not appear
-      expect(res.text).not.toContain("https://internal.secret.example.com/hook");
+      expect(res.text).not.toContain(
+        "https://internal.secret.example.com/hook",
+      );
     });
 
     it("body ends with a newline (Prometheus text format requirement)", async () => {
@@ -916,7 +1044,9 @@ describe("StableRoute Backend", () => {
     it("accepts a very large positive amount via BigInt parsing", async () => {
       // 10^25 — far above Number.MAX_SAFE_INTEGER (~9.007 * 10^15)
       const huge = "10000000000000000000000000";
-      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
       const res = await request(app)
         .get("/api/v1/quote")
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
@@ -940,7 +1070,9 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 200 after the pair is registered", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "REGSRC", destination: "REGDST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "REGSRC", destination: "REGDST" });
       const res = await request(app)
         .get("/api/v1/quote")
         .query({ source_asset: "REGSRC", dest_asset: "REGDST", amount: "200" });
@@ -951,7 +1083,9 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 404 again after a pair is unregistered", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "GONE", destination: "SOON" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "GONE", destination: "SOON" });
       await request(app).delete("/api/v1/pairs/GONE/SOON");
       const res = await request(app)
         .get("/api/v1/quote")
@@ -989,8 +1123,12 @@ describe("StableRoute Backend", () => {
     });
 
     it("rejects GET quotes below minAmount with a canonical 400", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "MIN", destination: "DST" });
-      await request(app).patch("/api/v1/pairs/MIN/DST/min").send({ minAmount: "100" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "MIN", destination: "DST" });
+      await request(app)
+        .patch("/api/v1/pairs/MIN/DST/min")
+        .send({ minAmount: "100" });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1003,8 +1141,12 @@ describe("StableRoute Backend", () => {
     });
 
     it("rejects GET quotes above maxAmount with a canonical 400", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "MAX", destination: "DST" });
-      await request(app).patch("/api/v1/pairs/MAX/DST/max").send({ maxAmount: "1000" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "MAX", destination: "DST" });
+      await request(app)
+        .patch("/api/v1/pairs/MAX/DST/max")
+        .send({ maxAmount: "1000" });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1017,8 +1159,12 @@ describe("StableRoute Backend", () => {
     });
 
     it("rejects GET quotes above liquidity with insufficient_liquidity", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "LIQ", destination: "DST" });
-      await request(app).patch("/api/v1/pairs/LIQ/DST/liquidity").send({ liquidity: "500" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "LIQ", destination: "DST" });
+      await request(app)
+        .patch("/api/v1/pairs/LIQ/DST/liquidity")
+        .send({ liquidity: "500" });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1031,10 +1177,18 @@ describe("StableRoute Backend", () => {
     });
 
     it("allows amounts exactly at min, max, and liquidity bounds", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "EDGE", destination: "DST" });
-      await request(app).patch("/api/v1/pairs/EDGE/DST/min").send({ minAmount: "100" });
-      await request(app).patch("/api/v1/pairs/EDGE/DST/max").send({ maxAmount: "1000" });
-      await request(app).patch("/api/v1/pairs/EDGE/DST/liquidity").send({ liquidity: "1000" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "EDGE", destination: "DST" });
+      await request(app)
+        .patch("/api/v1/pairs/EDGE/DST/min")
+        .send({ minAmount: "100" });
+      await request(app)
+        .patch("/api/v1/pairs/EDGE/DST/max")
+        .send({ maxAmount: "1000" });
+      await request(app)
+        .patch("/api/v1/pairs/EDGE/DST/liquidity")
+        .send({ liquidity: "1000" });
 
       const min = await request(app)
         .get("/api/v1/quote")
@@ -1050,10 +1204,18 @@ describe("StableRoute Backend", () => {
     });
 
     it("reports bulk quote bound failures per item without failing the batch", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "BULK", destination: "DST" });
-      await request(app).patch("/api/v1/pairs/BULK/DST/min").send({ minAmount: "100" });
-      await request(app).patch("/api/v1/pairs/BULK/DST/max").send({ maxAmount: "1000" });
-      await request(app).patch("/api/v1/pairs/BULK/DST/liquidity").send({ liquidity: "1000" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "BULK", destination: "DST" });
+      await request(app)
+        .patch("/api/v1/pairs/BULK/DST/min")
+        .send({ minAmount: "100" });
+      await request(app)
+        .patch("/api/v1/pairs/BULK/DST/max")
+        .send({ maxAmount: "1000" });
+      await request(app)
+        .patch("/api/v1/pairs/BULK/DST/liquidity")
+        .send({ liquidity: "1000" });
 
       const res = await request(app)
         .post("/api/v1/quote/bulk")
@@ -1066,9 +1228,21 @@ describe("StableRoute Backend", () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body.results[0]).toMatchObject({ index: 0, ok: true, amount: "100" });
-      expect(res.body.results[1]).toMatchObject({ index: 1, ok: false, error: "out_of_bounds" });
-      expect(res.body.results[2]).toMatchObject({ index: 2, ok: false, error: "out_of_bounds" });
+      expect(res.body.results[0]).toMatchObject({
+        index: 0,
+        ok: true,
+        amount: "100",
+      });
+      expect(res.body.results[1]).toMatchObject({
+        index: 1,
+        ok: false,
+        error: "out_of_bounds",
+      });
+      expect(res.body.results[2]).toMatchObject({
+        index: 2,
+        ok: false,
+        error: "out_of_bounds",
+      });
     });
   });
 
@@ -1079,28 +1253,50 @@ describe("StableRoute Backend", () => {
 
     it("filters events by a valid type", async () => {
       // Register a pair (pair.registered) then unregister it (pair.unregistered)
-      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "FIL", destination: "TER" });
       await request(app).delete("/api/v1/pairs/FIL/TER");
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered" });
       expect(res.status).toBe(200);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(true);
       expect(res.body.items.length).toBeGreaterThanOrEqual(1);
     });
 
     it("excludes events of other types when type param is set", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "FIL", destination: "TER" });
       await request(app).delete("/api/v1/pairs/FIL/TER");
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.unregistered" });
       expect(res.status).toBe(200);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.unregistered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.unregistered",
+        ),
+      ).toBe(true);
       // No pair.registered events should appear
-      expect(res.body.items.some((e: { type: string }) => e.type === "pair.registered")).toBe(false);
+      expect(
+        res.body.items.some(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(false);
     });
 
     it("returns 400 with invalid_request for an unknown event type", async () => {
-      const res = await request(app).get("/api/v1/events").query({ type: "unknown.event" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "unknown.event" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
       expect(res.body.message).toMatch(/pair\.registered/);
@@ -1108,38 +1304,51 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 400 with invalid_request for an injection attempt", async () => {
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered; DROP TABLE" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered; DROP TABLE" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
     });
 
     it("returns empty items when type filter matches no events", async () => {
       // Only register a pair (no unregister) — so pair.unregistered will not appear
-      await request(app).post("/api/v1/pairs").send({ source: "NO", destination: "MATCH" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "NO", destination: "MATCH" });
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.unregistered" });
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(0);
     });
 
     it("type filter composes correctly with since param", async () => {
       const before = Date.now() - 1;
-      await request(app).post("/api/v1/pairs").send({ source: "SNC", destination: "TST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "SNC", destination: "TST" });
 
       const res = await request(app)
         .get("/api/v1/events")
         .query({ type: "pair.registered", since: before });
       expect(res.status).toBe(200);
       expect(res.body.items.length).toBeGreaterThanOrEqual(1);
-      expect(res.body.items.every((e: { type: string; ts: number }) =>
-        e.type === "pair.registered" && e.ts >= before
-      )).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string; ts: number }) =>
+            e.type === "pair.registered" && e.ts >= before,
+        ),
+      ).toBe(true);
     });
 
     it("type filter composes correctly with limit param", async () => {
       // Register multiple pairs to produce multiple events
       for (let i = 0; i < 5; i++) {
-        await request(app).post("/api/v1/pairs").send({ source: `LIM${i}`, destination: "TST" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: `LIM${i}`, destination: "TST" });
       }
 
       const res = await request(app)
@@ -1148,16 +1357,24 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       // At most 2 items returned
       expect(res.body.items.length).toBeLessThanOrEqual(2);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(true);
     });
 
     it("returns all events when type param is omitted", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "ALL", destination: "EVT" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ALL", destination: "EVT" });
       await request(app).delete("/api/v1/pairs/ALL/EVT");
 
       const res = await request(app).get("/api/v1/events");
       expect(res.status).toBe(200);
-      const types = new Set(res.body.items.map((e: { type: string }) => e.type));
+      const types = new Set(
+        res.body.items.map((e: { type: string }) => e.type),
+      );
       // Both event types should be present
       expect(types.has("pair.registered")).toBe(true);
       expect(types.has("pair.unregistered")).toBe(true);
@@ -1213,7 +1430,11 @@ describe("StableRoute Backend", () => {
       // Read single pair
       const read = await request(app).get("/api/v1/pairs/ALIVE/PAIR");
       expect(read.status).toBe(200);
-      expect(read.body).toMatchObject({ source: "ALIVE", destination: "PAIR", registered: true });
+      expect(read.body).toMatchObject({
+        source: "ALIVE",
+        destination: "PAIR",
+        registered: true,
+      });
 
       // Unregister
       const del = await request(app).delete("/api/v1/pairs/ALIVE/PAIR");
@@ -1341,7 +1562,11 @@ describe("StableRoute Backend", () => {
         .set("X-Request-Id", "missing-liquidity-pair")
         .send({ liquidity: "10" });
       expect(liquidity.status).toBe(404);
-      expectCanonicalError(liquidity.body, "missing-liquidity-pair", "not_found");
+      expectCanonicalError(
+        liquidity.body,
+        "missing-liquidity-pair",
+        "not_found",
+      );
 
       const max = await request(app)
         .patch("/api/v1/pairs/GONE/ONE/max")
@@ -1378,7 +1603,9 @@ describe("StableRoute Backend", () => {
       const cfg = await request(app).get("/api/v1/config");
       savedBulkMax = cfg.body.config.bulkMaxItems;
       // Register pair used across bulk tests
-      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
     });
 
     afterEach(async () => {
@@ -1419,33 +1646,47 @@ describe("StableRoute Backend", () => {
     });
 
     it("lowered bulkMaxItems rejects at new limit", async () => {
-      await request(app)
-        .patch("/api/v1/config")
-        .send({ bulkMaxItems: 5 });
+      await request(app).patch("/api/v1/config").send({ bulkMaxItems: 5 });
 
       // 5 items — should pass
       const ok = await request(app)
         .post("/api/v1/quote/bulk")
-        .send({ items: new Array(5).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+        .send({
+          items: new Array(5).fill({
+            source_asset: "USDC",
+            dest_asset: "EURC",
+            amount: "1",
+          }),
+        });
       expect(ok.status).toBe(200);
 
       // 6 items — should fail at the new cap
       const over = await request(app)
         .post("/api/v1/quote/bulk")
-        .send({ items: new Array(6).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+        .send({
+          items: new Array(6).fill({
+            source_asset: "USDC",
+            dest_asset: "EURC",
+            amount: "1",
+          }),
+        });
       expect(over.status).toBe(400);
       expect(over.body.message).toMatch(/1-5/);
     });
 
     it("raised bulkMaxItems accepts above default", async () => {
-      await request(app)
-        .patch("/api/v1/config")
-        .send({ bulkMaxItems: 150 });
+      await request(app).patch("/api/v1/config").send({ bulkMaxItems: 150 });
 
       // 101 items — would fail at default 100, now passes
       const res = await request(app)
         .post("/api/v1/quote/bulk")
-        .send({ items: new Array(101).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+        .send({
+          items: new Array(101).fill({
+            source_asset: "USDC",
+            dest_asset: "EURC",
+            amount: "1",
+          }),
+        });
       expect(res.status).toBe(200);
     });
 
@@ -1483,9 +1724,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .post("/api/v1/quote/bulk")
         .send({
-          items: [
-            { source_asset: "USDC", dest_asset: "USDC", amount: "100" },
-          ],
+          items: [{ source_asset: "USDC", dest_asset: "USDC", amount: "100" }],
         });
       expect(res.status).toBe(200);
       expect(res.body.results[0].ok).toBe(false);
@@ -1594,14 +1833,22 @@ describe("StableRoute Backend", () => {
     it("rejects all invalid config values", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
-        .send({ rateLimitPerWindow: -1, rateLimitWindowMs: 0, bulkMaxItems: -100 });
+        .send({
+          rateLimitPerWindow: -1,
+          rateLimitWindowMs: 0,
+          bulkMaxItems: -100,
+        });
       expect(res.status).toBe(400);
     });
 
     it("patches multiple config fields at once", async () => {
       const res = await request(app)
         .patch("/api/v1/config")
-        .send({ rateLimitPerWindow: 100, rateLimitWindowMs: 30000, bulkMaxItems: 50 });
+        .send({
+          rateLimitPerWindow: 100,
+          rateLimitWindowMs: 30000,
+          bulkMaxItems: 50,
+        });
       expect(res.status).toBe(200);
       expect(res.body.config.rateLimitPerWindow).toBe(100);
       expect(res.body.config.rateLimitWindowMs).toBe(30000);
@@ -1616,7 +1863,9 @@ describe("StableRoute Backend", () => {
         .send({ source: "SINCE", destination: "TEST" });
 
       const farFuture = Date.now() + 100000;
-      const noEvents = await request(app).get(`/api/v1/events?since=${farFuture}`);
+      const noEvents = await request(app).get(
+        `/api/v1/events?since=${farFuture}`,
+      );
       expect(noEvents.status).toBe(200);
       expect(noEvents.body.items.length).toBe(0);
 
@@ -1634,9 +1883,7 @@ describe("StableRoute Backend", () => {
 
   describe("api-keys edge cases", () => {
     it("rejects missing label", async () => {
-      const res = await request(app)
-        .post("/api/v1/api-keys")
-        .send({});
+      const res = await request(app).post("/api/v1/api-keys").send({});
       expect(res.status).toBe(400);
     });
 
@@ -1663,14 +1910,14 @@ describe("StableRoute Backend", () => {
     });
   });
 
-
-
   describe("pair-meta: minAmount vs liquidity cross-field invariant", () => {
     const SRC = "INVS";
     const DST = "CHCK";
 
     beforeEach(async () => {
-      await request(app).post("/api/v1/pairs").send({ source: SRC, destination: DST });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: SRC, destination: DST });
     });
 
     afterEach(async () => {
@@ -1790,7 +2037,7 @@ describe("StableRoute Backend", () => {
     it("correctly compares 39-digit base-unit strings without Number precision loss", async () => {
       // These large values are above Number.MAX_SAFE_INTEGER; BigInt must be used
       const bigLiquidity = "100000000000000000000000000000000000000"; // 10^38
-      const bigMin      = "100000000000000000000000000000000000001"; // 10^38 + 1
+      const bigMin = "100000000000000000000000000000000000001"; // 10^38 + 1
 
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
@@ -1829,13 +2076,11 @@ describe("StableRoute Backend", () => {
     });
 
     it("rejects asset codes longer than 12 chars", async () => {
-      const res = await request(app)
-        .get("/api/v1/quote")
-        .query({
-          source_asset: "USDC",
-          dest_asset: "THIRTEENLETTERS",
-          amount: "100",
-        });
+      const res = await request(app).get("/api/v1/quote").query({
+        source_asset: "USDC",
+        dest_asset: "THIRTEENLETTERS",
+        amount: "100",
+      });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/1-12 alphanumeric characters/);
     });
@@ -1866,7 +2111,9 @@ describe("StableRoute Backend", () => {
     it("accepts a very large positive amount via BigInt parsing", async () => {
       // 10^25 — far above Number.MAX_SAFE_INTEGER (~9.007 * 10^15)
       const huge = "10000000000000000000000000";
-      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
       const res = await request(app)
         .get("/api/v1/quote")
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
@@ -1890,7 +2137,9 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 200 after the pair is registered", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "REGSRC", destination: "REGDST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "REGSRC", destination: "REGDST" });
       const res = await request(app)
         .get("/api/v1/quote")
         .query({ source_asset: "REGSRC", dest_asset: "REGDST", amount: "200" });
@@ -1901,7 +2150,9 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 404 again after a pair is unregistered", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "GONE", destination: "SOON" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "GONE", destination: "SOON" });
       await request(app).delete("/api/v1/pairs/GONE/SOON");
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1940,28 +2191,50 @@ describe("StableRoute Backend", () => {
 
     it("filters events by a valid type", async () => {
       // Register a pair (pair.registered) then unregister it (pair.unregistered)
-      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "FIL", destination: "TER" });
       await request(app).delete("/api/v1/pairs/FIL/TER");
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered" });
       expect(res.status).toBe(200);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(true);
       expect(res.body.items.length).toBeGreaterThanOrEqual(1);
     });
 
     it("excludes events of other types when type param is set", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "FIL", destination: "TER" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "FIL", destination: "TER" });
       await request(app).delete("/api/v1/pairs/FIL/TER");
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.unregistered" });
       expect(res.status).toBe(200);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.unregistered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.unregistered",
+        ),
+      ).toBe(true);
       // No pair.registered events should appear
-      expect(res.body.items.some((e: { type: string }) => e.type === "pair.registered")).toBe(false);
+      expect(
+        res.body.items.some(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(false);
     });
 
     it("returns 400 with invalid_request for an unknown event type", async () => {
-      const res = await request(app).get("/api/v1/events").query({ type: "unknown.event" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "unknown.event" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
       expect(res.body.message).toMatch(/pair\.registered/);
@@ -1969,38 +2242,51 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 400 with invalid_request for an injection attempt", async () => {
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.registered; DROP TABLE" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.registered; DROP TABLE" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
     });
 
     it("returns empty items when type filter matches no events", async () => {
       // Only register a pair (no unregister) — so pair.unregistered will not appear
-      await request(app).post("/api/v1/pairs").send({ source: "NO", destination: "MATCH" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "NO", destination: "MATCH" });
 
-      const res = await request(app).get("/api/v1/events").query({ type: "pair.unregistered" });
+      const res = await request(app)
+        .get("/api/v1/events")
+        .query({ type: "pair.unregistered" });
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(0);
     });
 
     it("type filter composes correctly with since param", async () => {
       const before = Date.now() - 1;
-      await request(app).post("/api/v1/pairs").send({ source: "SNC", destination: "TST" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "SNC", destination: "TST" });
 
       const res = await request(app)
         .get("/api/v1/events")
         .query({ type: "pair.registered", since: before });
       expect(res.status).toBe(200);
       expect(res.body.items.length).toBeGreaterThanOrEqual(1);
-      expect(res.body.items.every((e: { type: string; ts: number }) =>
-        e.type === "pair.registered" && e.ts >= before
-      )).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string; ts: number }) =>
+            e.type === "pair.registered" && e.ts >= before,
+        ),
+      ).toBe(true);
     });
 
     it("type filter composes correctly with limit param", async () => {
       // Register multiple pairs to produce multiple events
       for (let i = 0; i < 5; i++) {
-        await request(app).post("/api/v1/pairs").send({ source: `LIM${i}`, destination: "TST" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: `LIM${i}`, destination: "TST" });
       }
 
       const res = await request(app)
@@ -2009,16 +2295,24 @@ describe("StableRoute Backend", () => {
       expect(res.status).toBe(200);
       // At most 2 items returned
       expect(res.body.items.length).toBeLessThanOrEqual(2);
-      expect(res.body.items.every((e: { type: string }) => e.type === "pair.registered")).toBe(true);
+      expect(
+        res.body.items.every(
+          (e: { type: string }) => e.type === "pair.registered",
+        ),
+      ).toBe(true);
     });
 
     it("returns all events when type param is omitted", async () => {
-      await request(app).post("/api/v1/pairs").send({ source: "ALL", destination: "EVT" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "ALL", destination: "EVT" });
       await request(app).delete("/api/v1/pairs/ALL/EVT");
 
       const res = await request(app).get("/api/v1/events");
       expect(res.status).toBe(200);
-      const types = new Set(res.body.items.map((e: { type: string }) => e.type));
+      const types = new Set(
+        res.body.items.map((e: { type: string }) => e.type),
+      );
       // Both event types should be present
       expect(types.has("pair.registered")).toBe(true);
       expect(types.has("pair.unregistered")).toBe(true);
@@ -2038,7 +2332,9 @@ describe("StableRoute Backend", () => {
       // The fixed message must not echo the offending input or a stack trace.
       expect(res.body.message).not.toMatch(/not json/);
       expect(res.body.stack).toBeUndefined();
-      expect(JSON.stringify(res.body)).not.toMatch(/SyntaxError|at Object|node_modules/);
+      expect(JSON.stringify(res.body)).not.toMatch(
+        /SyntaxError|at Object|node_modules/,
+      );
     });
 
     it("still accepts a valid JSON body", async () => {
@@ -2062,13 +2358,19 @@ describe("StableRoute Backend", () => {
     beforeEach(async () => {
       resetStores();
       // Register a pair to test registration-required paths
-      await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "USDC", destination: "EURC" });
     });
 
     it("returns 200 and exact-output quote for a registered pair", async () => {
       const res = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "100" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: "100",
+        });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         source_asset: "USDC",
@@ -2107,47 +2409,75 @@ describe("StableRoute Backend", () => {
     it("rejects equal source and destination assets", async () => {
       const res = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "USDC", target_amount: "100" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "USDC",
+          target_amount: "100",
+        });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/source_asset and dest_asset must differ/);
+      expect(res.body.message).toMatch(
+        /source_asset and dest_asset must differ/,
+      );
     });
 
     it("rejects invalid asset codes", async () => {
       const res = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "INVALID_ASSET_CODE_TOO_LONG", dest_asset: "EURC", target_amount: "100" });
+        .query({
+          source_asset: "INVALID_ASSET_CODE_TOO_LONG",
+          dest_asset: "EURC",
+          target_amount: "100",
+        });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
-      expect(res.body.message).toMatch(/source_asset and dest_asset must be 1-12 alphanumeric characters/);
+      expect(res.body.message).toMatch(
+        /source_asset and dest_asset must be 1-12 alphanumeric characters/,
+      );
     });
 
     it("rejects invalid target_amount values", async () => {
       // Zero amount
       const res1 = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "0" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: "0",
+        });
       expect(res1.status).toBe(400);
       expect(res1.body.error).toBe("invalid_request");
 
       // Leading zero
       const res2 = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "0100" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: "0100",
+        });
       expect(res2.status).toBe(400);
       expect(res2.body.error).toBe("invalid_request");
 
       // Non-integer string
       const res3 = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "100.5" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: "100.5",
+        });
       expect(res3.status).toBe(400);
       expect(res3.body.error).toBe("invalid_request");
 
       // Negative number
       const res4 = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: "-100" });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: "-100",
+        });
       expect(res4.status).toBe(400);
       expect(res4.body.error).toBe("invalid_request");
     });
@@ -2155,7 +2485,11 @@ describe("StableRoute Backend", () => {
     it("rejects when the pair is unregistered", async () => {
       const res = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDT", dest_asset: "EURC", target_amount: "100" });
+        .query({
+          source_asset: "USDT",
+          dest_asset: "EURC",
+          target_amount: "100",
+        });
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("pair_not_registered");
       expect(res.body.source_asset).toBe("USDT");
@@ -2166,7 +2500,11 @@ describe("StableRoute Backend", () => {
       const largeTarget = "9".repeat(39);
       const res = await request(app)
         .get("/api/v1/quote/reverse")
-        .query({ source_asset: "USDC", dest_asset: "EURC", target_amount: largeTarget });
+        .query({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          target_amount: largeTarget,
+        });
       expect(res.status).toBe(200);
       expect(res.body.target_amount).toBe(largeTarget);
       expect(res.body.required_input).toBe(largeTarget);
@@ -2177,7 +2515,11 @@ describe("StableRoute Backend", () => {
       try {
         const res = await request(app)
           .get("/api/v1/quote/reverse")
-          .query({ source_asset: "USDT", dest_asset: "EURC", target_amount: "100" });
+          .query({
+            source_asset: "USDT",
+            dest_asset: "EURC",
+            target_amount: "100",
+          });
         expect(res.status).toBe(200);
         expect(res.body.required_input).toBe("100");
       } finally {
@@ -2204,7 +2546,9 @@ describe("StableRoute Backend", () => {
           await request(app).post("/api/v1/pairs").send(p);
         }
 
-        const res1 = await request(app).get("/api/v1/pairs").query({ limit: 2 });
+        const res1 = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 2 });
         expect(res1.status).toBe(200);
         expect(res1.body.pairs).toHaveLength(2);
         expect(res1.body.nextCursor).toBeTruthy();
@@ -2236,7 +2580,9 @@ describe("StableRoute Backend", () => {
         expect(resDefault.body.pairs.length).toBeGreaterThanOrEqual(10);
         expect(resDefault.body.nextCursor).toBeNull();
 
-        const resClamp = await request(app).get("/api/v1/pairs").query({ limit: 600 });
+        const resClamp = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 600 });
         expect(resClamp.status).toBe(200);
       });
 
@@ -2252,8 +2598,12 @@ describe("StableRoute Backend", () => {
       });
 
       it("preserves ETag behavior on paginated slice", async () => {
-        await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
-        await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "XLM" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "USDC", destination: "EURC" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "USDC", destination: "XLM" });
 
         const res = await request(app).get("/api/v1/pairs").query({ limit: 1 });
         expect(res.status).toBe(200);
@@ -2273,10 +2623,15 @@ describe("StableRoute Backend", () => {
         for (let i = 0; i < 3; i++) {
           await request(app)
             .post("/api/v1/webhooks")
-            .send({ url: `https://example.com/wh${i}`, events: ["pair.registered"] });
+            .send({
+              url: `https://example.com/wh${i}`,
+              events: ["pair.registered"],
+            });
         }
 
-        const res1 = await request(app).get("/api/v1/webhooks").query({ limit: 2 });
+        const res1 = await request(app)
+          .get("/api/v1/webhooks")
+          .query({ limit: 2 });
         expect(res1.status).toBe(200);
         expect(res1.body.items).toHaveLength(2);
         expect(res1.body.nextCursor).toBeTruthy();
@@ -2290,7 +2645,9 @@ describe("StableRoute Backend", () => {
       });
 
       it("returns 400 for malformed cursor", async () => {
-        const res = await request(app).get("/api/v1/webhooks").query({ cursor: "!!!" });
+        const res = await request(app)
+          .get("/api/v1/webhooks")
+          .query({ cursor: "!!!" });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
       });
@@ -2299,10 +2656,14 @@ describe("StableRoute Backend", () => {
     describe("GET /api/v1/api-keys pagination", () => {
       it("pages through api keys", async () => {
         for (let i = 0; i < 3; i++) {
-          await request(app).post("/api/v1/api-keys").send({ label: `key-${i}` });
+          await request(app)
+            .post("/api/v1/api-keys")
+            .send({ label: `key-${i}` });
         }
 
-        const res1 = await request(app).get("/api/v1/api-keys").query({ limit: 2 });
+        const res1 = await request(app)
+          .get("/api/v1/api-keys")
+          .query({ limit: 2 });
         expect(res1.status).toBe(200);
         expect(res1.body.items).toHaveLength(2);
         expect(res1.body.nextCursor).toBeTruthy();
@@ -2316,7 +2677,9 @@ describe("StableRoute Backend", () => {
       });
 
       it("returns 400 for malformed cursor", async () => {
-        const res = await request(app).get("/api/v1/api-keys").query({ cursor: "!!!" });
+        const res = await request(app)
+          .get("/api/v1/api-keys")
+          .query({ cursor: "!!!" });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
       });
@@ -2325,9 +2688,15 @@ describe("StableRoute Backend", () => {
     describe("GET /api/v1/events pagination", () => {
       it("pages through events with since/type filters layered", async () => {
         const before = Date.now() - 1000;
-        await request(app).post("/api/v1/pairs").send({ source: "EVT1", destination: "USD" });
-        await request(app).post("/api/v1/pairs").send({ source: "EVT2", destination: "USD" });
-        await request(app).post("/api/v1/pairs").send({ source: "EVT3", destination: "USD" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "EVT1", destination: "USD" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "EVT2", destination: "USD" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "EVT3", destination: "USD" });
 
         const res1 = await request(app)
           .get("/api/v1/events")
@@ -2338,14 +2707,21 @@ describe("StableRoute Backend", () => {
 
         const res2 = await request(app)
           .get("/api/v1/events")
-          .query({ limit: 2, type: "pair.registered", since: before, cursor: res1.body.nextCursor });
+          .query({
+            limit: 2,
+            type: "pair.registered",
+            since: before,
+            cursor: res1.body.nextCursor,
+          });
         expect(res2.status).toBe(200);
         expect(res2.body.items).toHaveLength(1);
         expect(res2.body.nextCursor).toBeNull();
       });
 
       it("returns 400 for malformed cursor", async () => {
-        const res = await request(app).get("/api/v1/events").query({ cursor: "!!!" });
+        const res = await request(app)
+          .get("/api/v1/events")
+          .query({ cursor: "!!!" });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
       });
@@ -2367,9 +2743,13 @@ describe("StableRoute Backend", () => {
 
     describe("POST /api/v1/api-keys", () => {
       it("behaves normally when no key is provided", async () => {
-        const res1 = await request(app).post("/api/v1/api-keys").send({ label: "key1" });
+        const res1 = await request(app)
+          .post("/api/v1/api-keys")
+          .send({ label: "key1" });
         expect(res1.status).toBe(201);
-        const res2 = await request(app).post("/api/v1/api-keys").send({ label: "key1" });
+        const res2 = await request(app)
+          .post("/api/v1/api-keys")
+          .send({ label: "key1" });
         expect(res2.status).toBe(201);
         expect(res1.body.key).not.toBe(res2.body.key);
       });
@@ -2422,7 +2802,10 @@ describe("StableRoute Backend", () => {
 
       it("replays the response when the same key and body are sent twice", async () => {
         const key = "idem-wh-1";
-        const body = { url: "https://example.com/w1", events: ["pair.registered"] };
+        const body = {
+          url: "https://example.com/w1",
+          events: ["pair.registered"],
+        };
         const res1 = await request(app)
           .post("/api/v1/webhooks")
           .set("Idempotency-Key", key)
@@ -2439,8 +2822,14 @@ describe("StableRoute Backend", () => {
 
       it("returns 409 idempotency_conflict when same key is used with a different body", async () => {
         const key = "idem-wh-2";
-        const body1 = { url: "https://example.com/w1", events: ["pair.registered"] };
-        const body2 = { url: "https://example.com/w2", events: ["pair.registered"] };
+        const body1 = {
+          url: "https://example.com/w1",
+          events: ["pair.registered"],
+        };
+        const body2 = {
+          url: "https://example.com/w2",
+          events: ["pair.registered"],
+        };
         const res1 = await request(app)
           .post("/api/v1/webhooks")
           .set("Idempotency-Key", key)
@@ -2518,20 +2907,35 @@ describe("StableRoute Backend", () => {
         process.env.IDEMPOTENCY_CACHE_MAX = "2"; // only keep 2 entries
         const body = { label: "key" };
 
-        const res1 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-1").send(body);
-        const res2 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-2").send(body);
+        const res1 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", "key-1")
+          .send(body);
+        const res2 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", "key-2")
+          .send(body);
         expect(res1.status).toBe(201);
         expect(res2.status).toBe(201);
 
         // Third request will evict key-1
-        const res3 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-3").send(body);
+        const res3 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", "key-3")
+          .send(body);
         expect(res3.status).toBe(201);
 
-        const resReplay2 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-2").send(body);
+        const resReplay2 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", "key-2")
+          .send(body);
         expect(resReplay2.status).toBe(201);
         expect(resReplay2.body.key).toBe(res2.body.key);
 
-        const resReplay1 = await request(app).post("/api/v1/api-keys").set("Idempotency-Key", "key-1").send(body);
+        const resReplay1 = await request(app)
+          .post("/api/v1/api-keys")
+          .set("Idempotency-Key", "key-1")
+          .send(body);
         expect(resReplay1.status).toBe(201);
         expect(resReplay1.body.key).not.toBe(res1.body.key);
       });
@@ -2614,7 +3018,9 @@ describe("StableRoute Backend", () => {
 
     it("passes through a DELETE request without requiring Content-Type (no body method)", async () => {
       // Register a pair first so the DELETE has a real target
-      await request(app).post("/api/v1/pairs").send({ source: "CTDEL", destination: "EURC" });
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "CTDEL", destination: "EURC" });
       const res = await request(app)
         .delete("/api/v1/pairs/CTDEL/EURC")
         .set("X-Request-Id", "ct-delete-ok");
@@ -2647,23 +3053,20 @@ describe("StableRoute Backend", () => {
       expect(res.body.message.length).toBeGreaterThan(0);
     });
 
-    it(
-      "forged Content-Type: application/json with oversized body is blocked at 413 (body-size limit)",
-      async () => {
-        // This asserts the security invariant: a caller cannot use
-        // Content-Type: application/json to bypass the 100 kB body-size limit
-        // and push raw bytes into a handler. The body parser rejects the
-        // oversized body before requireJsonContentType even runs.
-        const res = await request(app)
-          .post("/api/v1/pairs")
-          .set("Content-Type", "application/json")
-          .set("X-Request-Id", "ct-413-forged")
-          .send({ payload: "x".repeat(110_000) });
-        expect(res.status).toBe(413);
-        expect(res.body.error).toBe("payload_too_large");
-        expect(res.body.requestId).toBe("ct-413-forged");
-      }
-    );
+    it("forged Content-Type: application/json with oversized body is blocked at 413 (body-size limit)", async () => {
+      // This asserts the security invariant: a caller cannot use
+      // Content-Type: application/json to bypass the 100 kB body-size limit
+      // and push raw bytes into a handler. The body parser rejects the
+      // oversized body before requireJsonContentType even runs.
+      const res = await request(app)
+        .post("/api/v1/pairs")
+        .set("Content-Type", "application/json")
+        .set("X-Request-Id", "ct-413-forged")
+        .send({ payload: "x".repeat(110_000) });
+      expect(res.status).toBe(413);
+      expect(res.body.error).toBe("payload_too_large");
+      expect(res.body.requestId).toBe("ct-413-forged");
+    });
 
     it("returns 415 for PATCH with wrong content-type", async () => {
       const res = await request(app)
@@ -2697,7 +3100,7 @@ describe("StableRoute Backend", () => {
           contentType: string | undefined;
           contentLength: string | undefined;
           transferEncoding: string | undefined;
-        }> = {}
+        }> = {},
       ) =>
         ({
           method: overrides.method ?? "POST",
@@ -2714,7 +3117,7 @@ describe("StableRoute Backend", () => {
           },
           header: (name: string) =>
             (overrides as Record<string, string | undefined>)[name],
-        } as unknown as Request);
+        }) as unknown as Request;
 
       const makeRes = () => {
         const res = {
@@ -2830,7 +3233,7 @@ describe("StableRoute Backend", () => {
         expect(next).not.toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(415);
         expect(res.json).toHaveBeenCalledWith(
-          expect.objectContaining({ error: "unsupported_media_type" })
+          expect.objectContaining({ error: "unsupported_media_type" }),
         );
       });
 
@@ -2935,9 +3338,7 @@ describe("StableRoute Backend", () => {
       });
 
       it("empty body behaves as before (400 — missing label)", async () => {
-        const res = await request(app)
-          .post("/api/v1/api-keys")
-          .send({});
+        const res = await request(app).post("/api/v1/api-keys").send({});
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
         expect(res.body.message).toMatch(/label/);
@@ -2948,7 +3349,9 @@ describe("StableRoute Backend", () => {
           .post("/api/v1/api-keys")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-api-key")
-          .send(JSON.stringify({ label: "test", __proto__: { polluted: true } }));
+          .send(
+            JSON.stringify({ label: "test", __proto__: { polluted: true } }),
+          );
         expect(res.status).toBe(201);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -2979,7 +3382,13 @@ describe("StableRoute Backend", () => {
           .post("/api/v1/pairs")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-pair")
-          .send(JSON.stringify({ source: "USDC", destination: "EURC", __proto__: { polluted: true } }));
+          .send(
+            JSON.stringify({
+              source: "USDC",
+              destination: "EURC",
+              __proto__: { polluted: true },
+            }),
+          );
         expect(res.status).toBe(201);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -3006,9 +3415,7 @@ describe("StableRoute Backend", () => {
       });
 
       it("empty body behaves as before (400 — missing url)", async () => {
-        const res = await request(app)
-          .post("/api/v1/webhooks")
-          .send({});
+        const res = await request(app).post("/api/v1/webhooks").send({});
         expect(res.status).toBe(400);
         expect(res.body.error).toBe("invalid_request");
       });
@@ -3018,11 +3425,13 @@ describe("StableRoute Backend", () => {
           .post("/api/v1/webhooks")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-wh")
-          .send(JSON.stringify({
-            url: "https://example.com/h",
-            events: ["pair.registered"],
-            __proto__: { polluted: true },
-          }));
+          .send(
+            JSON.stringify({
+              url: "https://example.com/h",
+              events: ["pair.registered"],
+              __proto__: { polluted: true },
+            }),
+          );
         expect(res.status).toBe(201);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -3049,7 +3458,12 @@ describe("StableRoute Backend", () => {
           .patch("/api/v1/config")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-config")
-          .send(JSON.stringify({ rateLimitPerWindow: 100, __proto__: { polluted: true } }));
+          .send(
+            JSON.stringify({
+              rateLimitPerWindow: 100,
+              __proto__: { polluted: true },
+            }),
+          );
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -3058,7 +3472,9 @@ describe("StableRoute Backend", () => {
     describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
       beforeEach(async () => {
         resetStores();
-        await request(app).post("/api/v1/pairs").send({ source: "ENAB", destination: "TEST" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "ENAB", destination: "TEST" });
       });
 
       it("rejects an extra unknown key", async () => {
@@ -3074,7 +3490,9 @@ describe("StableRoute Backend", () => {
           .patch("/api/v1/pairs/ENAB/TEST/enabled")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-enabled")
-          .send(JSON.stringify({ enabled: true, __proto__: { polluted: true } }));
+          .send(
+            JSON.stringify({ enabled: true, __proto__: { polluted: true } }),
+          );
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -3083,7 +3501,9 @@ describe("StableRoute Backend", () => {
     describe("pair-meta PATCH (liquidity)", () => {
       beforeEach(async () => {
         resetStores();
-        await request(app).post("/api/v1/pairs").send({ source: "LIQ", destination: "TEST" });
+        await request(app)
+          .post("/api/v1/pairs")
+          .send({ source: "LIQ", destination: "TEST" });
       });
 
       it("rejects an extra unknown key", async () => {
@@ -3099,7 +3519,9 @@ describe("StableRoute Backend", () => {
           .patch("/api/v1/pairs/LIQ/TEST/liquidity")
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-liq")
-          .send(JSON.stringify({ liquidity: "500", __proto__: { polluted: true } }));
+          .send(
+            JSON.stringify({ liquidity: "500", __proto__: { polluted: true } }),
+          );
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
       });
@@ -3122,11 +3544,9 @@ describe("StableRoute Backend", () => {
 
       it("allows a request to complete normally within the deadline and clears the timer", async () => {
         config.requestTimeoutMs = 500;
-        
-        const res = await request(app)
-          .get("/test/slow")
-          .query({ delay: 50 });
-        
+
+        const res = await request(app).get("/test/slow").query({ delay: 50 });
+
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ ok: true });
       });
@@ -3167,7 +3587,7 @@ describe("StableRoute Backend", () => {
 
       it("does not send request_timeout error or throw if headers were already sent", async () => {
         config.requestTimeoutMs = 20;
-        
+
         const spyWarn = jest.spyOn(logger, "warn").mockImplementation(() => {});
 
         const res = await request(app)
@@ -3183,7 +3603,7 @@ describe("StableRoute Backend", () => {
 
         expect(spyWarn).toHaveBeenCalledWith(
           expect.objectContaining({ requestId: "timeout-headers-sent-test" }),
-          "Request timeout triggered but headers were already sent."
+          "Request timeout triggered but headers were already sent.",
         );
         spyWarn.mockRestore();
       });

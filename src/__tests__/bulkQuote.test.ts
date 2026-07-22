@@ -25,9 +25,7 @@ describe("POST /api/v1/quote/bulk", () => {
   // ── array-level validation ───────────────────────────────────────────────
 
   it("returns 400 when items field is missing entirely", async () => {
-    const res = await request(app)
-      .post("/api/v1/quote/bulk")
-      .send({});
+    const res = await request(app).post("/api/v1/quote/bulk").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
     expect(res.body.requestId).toBeTruthy();
@@ -44,7 +42,13 @@ describe("POST /api/v1/quote/bulk", () => {
   it("returns 400 when items exceeds default cap of 100", async () => {
     const res = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: new Array(101).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      .send({
+        items: new Array(101).fill({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "1",
+        }),
+      });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
     expect(res.body.message).toMatch(/1-100/);
@@ -53,7 +57,13 @@ describe("POST /api/v1/quote/bulk", () => {
   it("accepts exactly 100 items (at the default cap boundary)", async () => {
     const res = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: new Array(100).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      .send({
+        items: new Array(100).fill({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "1",
+        }),
+      });
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(100);
   });
@@ -119,7 +129,13 @@ describe("POST /api/v1/quote/bulk", () => {
     const res = await request(app)
       .post("/api/v1/quote/bulk")
       .send({
-        items: [{ source_asset: "TOOLONGASSETCODE", dest_asset: "EURC", amount: "100" }],
+        items: [
+          {
+            source_asset: "TOOLONGASSETCODE",
+            dest_asset: "EURC",
+            amount: "100",
+          },
+        ],
       });
     expect(res.status).toBe(200);
     expect(res.body.results[0].ok).toBe(false);
@@ -155,22 +171,46 @@ describe("POST /api/v1/quote/bulk", () => {
       .post("/api/v1/quote/bulk")
       .send({
         items: [
-          { source_asset: "USDC", dest_asset: "EURC", amount: "100" },   // valid
-          { source_asset: "XLM",  dest_asset: "XLM",  amount: "50"  },   // same asset
-          { source_asset: "USDC", dest_asset: "EURC", amount: "-5"  },   // bad amount
-          { source_asset: "",     dest_asset: "EURC", amount: "10"  },   // bad source
-          { source_asset: "BTC",  dest_asset: "ETH",  amount: "200" },   // valid
+          { source_asset: "USDC", dest_asset: "EURC", amount: "100" }, // valid
+          { source_asset: "XLM", dest_asset: "XLM", amount: "50" }, // same asset
+          { source_asset: "USDC", dest_asset: "EURC", amount: "-5" }, // bad amount
+          { source_asset: "", dest_asset: "EURC", amount: "10" }, // bad source
+          { source_asset: "BTC", dest_asset: "ETH", amount: "200" }, // valid
         ],
       });
     expect(res.status).toBe(200);
     const results = res.body.results;
     expect(results).toHaveLength(5);
 
-    expect(results[0]).toMatchObject({ index: 0, ok: true, source_asset: "USDC", dest_asset: "EURC", amount: "100" });
-    expect(results[1]).toMatchObject({ index: 1, ok: false, error: "invalid_item" });
-    expect(results[2]).toMatchObject({ index: 2, ok: false, error: "invalid_item" });
-    expect(results[3]).toMatchObject({ index: 3, ok: false, error: "invalid_item" });
-    expect(results[4]).toMatchObject({ index: 4, ok: true, source_asset: "BTC", dest_asset: "ETH", amount: "200" });
+    expect(results[0]).toMatchObject({
+      index: 0,
+      ok: true,
+      source_asset: "USDC",
+      dest_asset: "EURC",
+      amount: "100",
+    });
+    expect(results[1]).toMatchObject({
+      index: 1,
+      ok: false,
+      error: "invalid_item",
+    });
+    expect(results[2]).toMatchObject({
+      index: 2,
+      ok: false,
+      error: "invalid_item",
+    });
+    expect(results[3]).toMatchObject({
+      index: 3,
+      ok: false,
+      error: "invalid_item",
+    });
+    expect(results[4]).toMatchObject({
+      index: 4,
+      ok: true,
+      source_asset: "BTC",
+      dest_asset: "ETH",
+      amount: "200",
+    });
   });
 
   it("handles an all-invalid batch without a 400 (per-item errors, not batch error)", async () => {
@@ -179,12 +219,14 @@ describe("POST /api/v1/quote/bulk", () => {
       .send({
         items: [
           { source_asset: "USDC", dest_asset: "USDC", amount: "1" },
-          { source_asset: "",     dest_asset: "EURC", amount: "1" },
-          { source_asset: "XLM",  dest_asset: "EURC", amount: "0" },
+          { source_asset: "", dest_asset: "EURC", amount: "1" },
+          { source_asset: "XLM", dest_asset: "EURC", amount: "0" },
         ],
       });
     expect(res.status).toBe(200);
-    expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(true);
+    expect(res.body.results.every((r: { ok: boolean }) => r.ok === false)).toBe(
+      true,
+    );
   });
 
   // ── configurable cap ──────────────────────────────────────────────────────
@@ -194,13 +236,25 @@ describe("POST /api/v1/quote/bulk", () => {
 
     const over = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: new Array(4).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      .send({
+        items: new Array(4).fill({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "1",
+        }),
+      });
     expect(over.status).toBe(400);
     expect(over.body.message).toMatch(/1-3/);
 
     const ok = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: new Array(3).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      .send({
+        items: new Array(3).fill({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "1",
+        }),
+      });
     expect(ok.status).toBe(200);
     expect(ok.body.results).toHaveLength(3);
   });
@@ -210,7 +264,13 @@ describe("POST /api/v1/quote/bulk", () => {
 
     const res = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: new Array(101).fill({ source_asset: "USDC", dest_asset: "EURC", amount: "1" }) });
+      .send({
+        items: new Array(101).fill({
+          source_asset: "USDC",
+          dest_asset: "EURC",
+          amount: "1",
+        }),
+      });
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(101);
   });
@@ -222,7 +282,9 @@ describe("POST /api/v1/quote/bulk", () => {
 
     const res = await request(app)
       .post("/api/v1/quote/bulk")
-      .send({ items: [{ source_asset: "USDC", dest_asset: "EURC", amount: "1" }] });
+      .send({
+        items: [{ source_asset: "USDC", dest_asset: "EURC", amount: "1" }],
+      });
     expect(res.status).toBe(200);
 
     await request(app).post("/api/v1/admin/read-write");

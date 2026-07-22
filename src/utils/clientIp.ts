@@ -5,7 +5,7 @@
  */
 export const resolveClientIp = (
   forwardedFor: string | string[] | undefined,
-  remoteAddress: string | undefined
+  remoteAddress: string | undefined,
 ): string => {
   if (forwardedFor) {
     const raw = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;

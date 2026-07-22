@@ -57,8 +57,8 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
     expect(
       body.pairs.some(
         (p: { source: string; destination: string }) =>
-          p.source === SRC && p.destination === DST
-      )
+          p.source === SRC && p.destination === DST,
+      ),
     ).toBe(true);
   });
 });

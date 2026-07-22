@@ -21,10 +21,16 @@ describe("GET /api/v1/stats breakdown", () => {
   });
 
   it("derives counts from pairs, keys, webhooks, events and fees", async () => {
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "EURC" });
-    await request(app).post("/api/v1/pairs").send({ source: "USDC", destination: "XLM" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" });
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "XLM" });
     // Set a fee on one pair only.
-    await request(app).patch("/api/v1/pairs/USDC/EURC/fee_bps").send({ feeBps: 25 });
+    await request(app)
+      .patch("/api/v1/pairs/USDC/EURC/fee_bps")
+      .send({ feeBps: 25 });
 
     await request(app).post("/api/v1/api-keys").send({ label: "ci" });
     await request(app)

@@ -12,9 +12,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unlinkSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { InMemoryAdapter, JsonFileAdapter, createAdapter } from "../store/adapter";
+import {
+  InMemoryAdapter,
+  JsonFileAdapter,
+  createAdapter,
+} from "../store/adapter";
 import type { StorageAdapter } from "../store/adapter";
-import type { PairMeta, ApiKeyRecord, WebhookRecord, AppEvent, EventType } from "../stores";
+import type {
+  PairMeta,
+  ApiKeyRecord,
+  WebhookRecord,
+  AppEvent,
+  EventType,
+} from "../stores";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -130,7 +140,12 @@ function runAdapterSuite(label: string, factory: () => StorageAdapter): void {
 
       it("keysAll returns all entries", () => {
         adapter.keysSet("srk_aaa", sampleKey());
-        adapter.keysSet("srk_bbb", { label: "b", createdAt: 1, salt: "s", hash: "h" });
+        adapter.keysSet("srk_bbb", {
+          label: "b",
+          createdAt: 1,
+          salt: "s",
+          hash: "h",
+        });
         expect(adapter.keysAll().size).toBe(2);
       });
 
@@ -159,7 +174,11 @@ function runAdapterSuite(label: string, factory: () => StorageAdapter): void {
 
       it("webhooksAll returns all entries", () => {
         adapter.webhooksSet("wh_1", sampleWebhook());
-        adapter.webhooksSet("wh_2", { url: "https://b.com", events: ["*"], createdAt: 1 });
+        adapter.webhooksSet("wh_2", {
+          url: "https://b.com",
+          events: ["*"],
+          createdAt: 1,
+        });
         expect(adapter.webhooksAll().size).toBe(2);
       });
 

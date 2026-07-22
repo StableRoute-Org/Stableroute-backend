@@ -1,4 +1,10 @@
-import { writeFileSync, renameSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import {
+  writeFileSync,
+  renameSync,
+  readFileSync,
+  existsSync,
+  unlinkSync,
+} from "node:fs";
 import {
   type PairMeta,
   type ApiKeyRecord,
@@ -76,7 +82,10 @@ export class JsonFileStoreAdapter implements StoreAdapter {
       if (this.isValidSnapshot(parsed)) {
         return parsed;
       }
-      console.warn("[persistence] invalid snapshot format in file:", this.filePath);
+      console.warn(
+        "[persistence] invalid snapshot format in file:",
+        this.filePath,
+      );
       return null;
     } catch (err) {
       console.error("[persistence] failed to load snapshot from file:", err);

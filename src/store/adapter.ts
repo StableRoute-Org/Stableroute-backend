@@ -14,7 +14,12 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import type { PairMeta, AppEvent, ApiKeyRecord, WebhookRecord } from "../stores";
+import type {
+  PairMeta,
+  AppEvent,
+  ApiKeyRecord,
+  WebhookRecord,
+} from "../stores";
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
@@ -98,35 +103,78 @@ export class InMemoryAdapter implements StorageAdapter {
   private readonly webhooks = new Map<string, WebhookRecord>();
   private readonly events: AppEvent[] = [];
 
-  pairsAll(): Set<string> { return this.pairs; }
-  pairsHas(key: string): boolean { return this.pairs.has(key); }
-  pairsAdd(key: string): void { this.pairs.add(key); }
-  pairsDelete(key: string): boolean { return this.pairs.delete(key); }
-  pairsSize(): number { return this.pairs.size; }
-
-  metaGet(key: string): PairMeta | undefined { return this.meta.get(key); }
-  metaSet(key: string, m: PairMeta): void { this.meta.set(key, m); }
-  metaDelete(key: string): boolean { return this.meta.delete(key); }
-
-  keysAll(): Map<string, ApiKeyRecord> { return this.keys; }
-  keysGet(key: string): ApiKeyRecord | undefined { return this.keys.get(key); }
-  keysSet(key: string, r: ApiKeyRecord): void { this.keys.set(key, r); }
-  keysDelete(key: string): boolean { return this.keys.delete(key); }
-  keysSize(): number { return this.keys.size; }
-
-  webhooksAll(): Map<string, WebhookRecord> { return this.webhooks; }
-  webhooksGet(id: string): WebhookRecord | undefined { return this.webhooks.get(id); }
-  webhooksSet(id: string, r: WebhookRecord): void { this.webhooks.set(id, r); }
-  webhooksDelete(id: string): boolean { return this.webhooks.delete(id); }
-  webhooksSize(): number { return this.webhooks.size; }
-
-  eventsGet(): AppEvent[] { return this.events; }
-  eventsAppend(event: AppEvent): void { this.events.push(event); }
-  eventsTrim(cap: number): void {
-    if (this.events.length > cap) this.events.splice(0, this.events.length - cap);
+  pairsAll(): Set<string> {
+    return this.pairs;
+  }
+  pairsHas(key: string): boolean {
+    return this.pairs.has(key);
+  }
+  pairsAdd(key: string): void {
+    this.pairs.add(key);
+  }
+  pairsDelete(key: string): boolean {
+    return this.pairs.delete(key);
+  }
+  pairsSize(): number {
+    return this.pairs.size;
   }
 
-  flush(): void { /* no-op */ }
+  metaGet(key: string): PairMeta | undefined {
+    return this.meta.get(key);
+  }
+  metaSet(key: string, m: PairMeta): void {
+    this.meta.set(key, m);
+  }
+  metaDelete(key: string): boolean {
+    return this.meta.delete(key);
+  }
+
+  keysAll(): Map<string, ApiKeyRecord> {
+    return this.keys;
+  }
+  keysGet(key: string): ApiKeyRecord | undefined {
+    return this.keys.get(key);
+  }
+  keysSet(key: string, r: ApiKeyRecord): void {
+    this.keys.set(key, r);
+  }
+  keysDelete(key: string): boolean {
+    return this.keys.delete(key);
+  }
+  keysSize(): number {
+    return this.keys.size;
+  }
+
+  webhooksAll(): Map<string, WebhookRecord> {
+    return this.webhooks;
+  }
+  webhooksGet(id: string): WebhookRecord | undefined {
+    return this.webhooks.get(id);
+  }
+  webhooksSet(id: string, r: WebhookRecord): void {
+    this.webhooks.set(id, r);
+  }
+  webhooksDelete(id: string): boolean {
+    return this.webhooks.delete(id);
+  }
+  webhooksSize(): number {
+    return this.webhooks.size;
+  }
+
+  eventsGet(): AppEvent[] {
+    return this.events;
+  }
+  eventsAppend(event: AppEvent): void {
+    this.events.push(event);
+  }
+  eventsTrim(cap: number): void {
+    if (this.events.length > cap)
+      this.events.splice(0, this.events.length - cap);
+  }
+
+  flush(): void {
+    /* no-op */
+  }
   clear(): void {
     this.pairs.clear();
     this.meta.clear();
@@ -199,30 +247,83 @@ export class JsonFileAdapter implements StorageAdapter {
     writeFileSync(this.filePath, JSON.stringify(data), "utf8");
   }
 
-  pairsAll(): Set<string> { return this.pairs; }
-  pairsHas(key: string): boolean { return this.pairs.has(key); }
-  pairsAdd(key: string): void { this.pairs.add(key); this._save(); }
-  pairsDelete(key: string): boolean { const r = this.pairs.delete(key); if (r) this._save(); return r; }
-  pairsSize(): number { return this.pairs.size; }
+  pairsAll(): Set<string> {
+    return this.pairs;
+  }
+  pairsHas(key: string): boolean {
+    return this.pairs.has(key);
+  }
+  pairsAdd(key: string): void {
+    this.pairs.add(key);
+    this._save();
+  }
+  pairsDelete(key: string): boolean {
+    const r = this.pairs.delete(key);
+    if (r) this._save();
+    return r;
+  }
+  pairsSize(): number {
+    return this.pairs.size;
+  }
 
-  metaGet(key: string): PairMeta | undefined { return this.meta.get(key); }
-  metaSet(key: string, m: PairMeta): void { this.meta.set(key, m); this._save(); }
-  metaDelete(key: string): boolean { const r = this.meta.delete(key); if (r) this._save(); return r; }
+  metaGet(key: string): PairMeta | undefined {
+    return this.meta.get(key);
+  }
+  metaSet(key: string, m: PairMeta): void {
+    this.meta.set(key, m);
+    this._save();
+  }
+  metaDelete(key: string): boolean {
+    const r = this.meta.delete(key);
+    if (r) this._save();
+    return r;
+  }
 
-  keysAll(): Map<string, ApiKeyRecord> { return this.keys; }
-  keysGet(key: string): ApiKeyRecord | undefined { return this.keys.get(key); }
-  keysSet(key: string, record: ApiKeyRecord): void { this.keys.set(key, record); this._save(); }
-  keysDelete(key: string): boolean { const r = this.keys.delete(key); if (r) this._save(); return r; }
-  keysSize(): number { return this.keys.size; }
+  keysAll(): Map<string, ApiKeyRecord> {
+    return this.keys;
+  }
+  keysGet(key: string): ApiKeyRecord | undefined {
+    return this.keys.get(key);
+  }
+  keysSet(key: string, record: ApiKeyRecord): void {
+    this.keys.set(key, record);
+    this._save();
+  }
+  keysDelete(key: string): boolean {
+    const r = this.keys.delete(key);
+    if (r) this._save();
+    return r;
+  }
+  keysSize(): number {
+    return this.keys.size;
+  }
 
-  webhooksAll(): Map<string, WebhookRecord> { return this.webhooks; }
-  webhooksGet(id: string): WebhookRecord | undefined { return this.webhooks.get(id); }
-  webhooksSet(id: string, record: WebhookRecord): void { this.webhooks.set(id, record); this._save(); }
-  webhooksDelete(id: string): boolean { const r = this.webhooks.delete(id); if (r) this._save(); return r; }
-  webhooksSize(): number { return this.webhooks.size; }
+  webhooksAll(): Map<string, WebhookRecord> {
+    return this.webhooks;
+  }
+  webhooksGet(id: string): WebhookRecord | undefined {
+    return this.webhooks.get(id);
+  }
+  webhooksSet(id: string, record: WebhookRecord): void {
+    this.webhooks.set(id, record);
+    this._save();
+  }
+  webhooksDelete(id: string): boolean {
+    const r = this.webhooks.delete(id);
+    if (r) this._save();
+    return r;
+  }
+  webhooksSize(): number {
+    return this.webhooks.size;
+  }
 
-  eventsGet(): AppEvent[] { return this.events; }
-  eventsAppend(event: AppEvent): void { this.events.push(event); this._save(); }
+  eventsGet(): AppEvent[] {
+    return this.events;
+  }
+  eventsAppend(event: AppEvent): void {
+    this.events.push(event);
+    this._save();
+  }
   eventsTrim(cap: number): void {
     if (this.events.length > cap) {
       this.events.splice(0, this.events.length - cap);
@@ -230,7 +331,9 @@ export class JsonFileAdapter implements StorageAdapter {
     }
   }
 
-  flush(): void { this._save(); }
+  flush(): void {
+    this._save();
+  }
   clear(): void {
     this.pairs.clear();
     this.meta.clear();

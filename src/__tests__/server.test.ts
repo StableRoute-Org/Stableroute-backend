@@ -186,7 +186,10 @@ describe("Server startup", () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", service: "stableroute-backend" });
+    expect(body).toMatchObject({
+      status: "ok",
+      service: "stableroute-backend",
+    });
   });
 
   it("closes cleanly with no hanging handles", async () => {
@@ -205,7 +208,7 @@ describe("Server startup", () => {
     await expect(
       new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
-      })
+      }),
     ).resolves.toBeUndefined();
   });
 
@@ -236,7 +239,10 @@ describe("Server startup", () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", service: "stableroute-backend" });
+    expect(body).toMatchObject({
+      status: "ok",
+      service: "stableroute-backend",
+    });
 
     let exitCode: number | null = null;
     let timerUnrefCalled = false;

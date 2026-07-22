@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { logger } from "./logger";
@@ -54,7 +58,6 @@ const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 /** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
 const BULK_ABSOLUTE_MAX = 10_000;
 
-
 const app = express();
 
 // --- Persistence Hydration on startup ---
@@ -76,10 +79,6 @@ export const hydrationPromise = (async () => {
   }
 })();
 
-
-
-
-
 const DEFAULT_CORS_ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:3001",
@@ -88,9 +87,19 @@ const DEFAULT_CORS_ALLOWED_ORIGINS = [
 ];
 
 /** Parse a comma-separated CORS origin allowlist, falling back to localhost-only development origins. */
-export const parseCorsAllowedOrigins = (value: string | undefined): Set<string> => {
-  const source = value === undefined || value.trim() === "" ? DEFAULT_CORS_ALLOWED_ORIGINS.join(",") : value;
-  return new Set(source.split(",").map((origin) => origin.trim()).filter(Boolean));
+export const parseCorsAllowedOrigins = (
+  value: string | undefined,
+): Set<string> => {
+  const source =
+    value === undefined || value.trim() === ""
+      ? DEFAULT_CORS_ALLOWED_ORIGINS.join(",")
+      : value;
+  return new Set(
+    source
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  );
 };
 
 /**
@@ -101,17 +110,21 @@ export const parseCorsAllowedOrigins = (value: string | undefined): Set<string> 
  */
 export const isCorsOriginAllowed = (
   origin: string | undefined,
-  allowedOrigins: Set<string>
+  allowedOrigins: Set<string>,
 ): boolean => origin === undefined || allowedOrigins.has(origin);
 
-const corsAllowedOrigins = parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+const corsAllowedOrigins = parseCorsAllowedOrigins(
+  process.env.CORS_ALLOWED_ORIGINS,
+);
 
-app.use(cors({
-  credentials: false,
-  origin: (origin, callback) => {
-    callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
-  },
-}));
+app.use(
+  cors({
+    credentials: false,
+    origin: (origin, callback) => {
+      callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
+    },
+  }),
+);
 
 type RequestWithId = Request & { id?: string };
 type ErrorResponseExtra = Record<string, unknown>;
@@ -154,7 +167,8 @@ export const isValidRequestId = (value: string): boolean =>
 /**
  * Read the request id attached by the correlation middleware.
  */
-const getRequestId = (req: Request): string | undefined => (req as RequestWithId).id;
+const getRequestId = (req: Request): string | undefined =>
+  (req as RequestWithId).id;
 
 /**
  * Send the canonical API error body used by explicit handlers and middleware.
@@ -165,8 +179,11 @@ const sendError = (
   status: number,
   error: ApiErrorCode,
   message: string,
-  extra: ErrorResponseExtra = {}
-) => res.status(status).json({ error, message, ...extra, requestId: getRequestId(req) });
+  extra: ErrorResponseExtra = {},
+) =>
+  res
+    .status(status)
+    .json({ error, message, ...extra, requestId: getRequestId(req) });
 
 /**
  * Helper to retrieve the active request timeout in milliseconds.
@@ -194,14 +211,18 @@ const getRequestTimeoutMs = (): number => {
  *
  * Checks `res.headersSent` to prevent a double-send / crash if headers are already sent.
  */
-export const requestTimeoutGuard = (req: Request, res: Response, next: NextFunction): void => {
+export const requestTimeoutGuard = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
   const timeoutMs = getRequestTimeoutMs();
-  
+
   const timer = setTimeout(() => {
     if (res.headersSent) {
       logger.warn(
         { requestId: getRequestId(req), method: req.method, path: req.path },
-        "Request timeout triggered but headers were already sent."
+        "Request timeout triggered but headers were already sent.",
       );
       return;
     }
@@ -291,20 +312,36 @@ const pruneIdempotencyCache = (): void => {
  *
  * Cache entries expire after dynamic TTL (default 24 h).
  */
-const idempotencyGuard = (req: Request, res: Response, next: NextFunction): void => {
+const idempotencyGuard = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
   const idempotencyKey = req.header("idempotency-key");
-  if (!idempotencyKey || idempotencyKey.length < 1 || idempotencyKey.length > 200) {
+  if (
+    !idempotencyKey ||
+    idempotencyKey.length < 1 ||
+    idempotencyKey.length > 200
+  ) {
     return next();
   }
 
   const cacheKey = `${req.method}:${req.path}:${idempotencyKey}`;
-  const bodyHash = createHash("sha256").update(JSON.stringify(req.body ?? null)).digest("hex");
+  const bodyHash = createHash("sha256")
+    .update(JSON.stringify(req.body ?? null))
+    .digest("hex");
 
   const existing = idempotencyCache.get(cacheKey);
   if (existing) {
     if (existing.expiresAt > Date.now()) {
       if (existing.bodyHash !== bodyHash) {
-        sendError(res, req, 409, "idempotency_conflict", "Idempotency-Key reused with a different request body");
+        sendError(
+          res,
+          req,
+          409,
+          "idempotency_conflict",
+          "Idempotency-Key reused with a different request body",
+        );
         return;
       }
       // Replay cached response verbatim.
@@ -349,17 +386,33 @@ const idempotencyGuard = (req: Request, res: Response, next: NextFunction): void
  * @param allowed - The exhaustive set of permitted top-level body keys.
  * @returns `true` when an error was sent (unknown keys present), else `false`.
  */
-const rejectUnknownKeys = (req: Request, res: Response, allowed: string[]): boolean => {
+const rejectUnknownKeys = (
+  req: Request,
+  res: Response,
+  allowed: string[],
+): boolean => {
   const body = req.body;
-  if (body === undefined || body === null || typeof body !== "object" || Array.isArray(body)) {
+  if (
+    body === undefined ||
+    body === null ||
+    typeof body !== "object" ||
+    Array.isArray(body)
+  ) {
     return false;
   }
   const allow = new Set(allowed);
   const unknown = Object.keys(body).filter((k) => !allow.has(k));
   if (unknown.length > 0) {
-    sendError(res, req, 400, "invalid_request", `unknown field(s): ${unknown.join(", ")}`, {
-      unknownKeys: unknown,
-    });
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `unknown field(s): ${unknown.join(", ")}`,
+      {
+        unknownKeys: unknown,
+      },
+    );
     return true;
   }
   return false;
@@ -376,7 +429,10 @@ const rejectUnknownKeys = (req: Request, res: Response, allowed: string[]): bool
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
   const incoming = req.header("x-request-id");
-  const id = incoming !== undefined && isValidRequestId(incoming) ? incoming : randomUUID();
+  const id =
+    incoming !== undefined && isValidRequestId(incoming)
+      ? incoming
+      : randomUUID();
   (req as RequestWithId).id = id;
   res.setHeader("X-Request-Id", id);
   next();
@@ -422,15 +478,21 @@ app.use(express.json({ limit: "100kb" }));
 export const requireJsonContentType = (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void => {
   const method = req.method.toUpperCase();
-  if (method === "GET" || method === "HEAD" || method === "DELETE" || method === "OPTIONS") {
+  if (
+    method === "GET" ||
+    method === "HEAD" ||
+    method === "DELETE" ||
+    method === "OPTIONS"
+  ) {
     next();
     return;
   }
   const hasBody =
-    (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0") ||
+    (req.headers["content-length"] !== undefined &&
+      req.headers["content-length"] !== "0") ||
     req.headers["transfer-encoding"] !== undefined;
   if (!hasBody) {
     next();
@@ -446,7 +508,7 @@ export const requireJsonContentType = (
     req,
     415,
     "unsupported_media_type",
-    "Content-Type must be application/json"
+    "Content-Type must be application/json",
   );
 };
 
@@ -491,7 +553,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (QUOTE_PATHS.has(req.path)) return next();
   // Recovery path must always be reachable, like /admin/unpause.
   if (req.path === "/api/v1/admin/read-write") return next();
-  sendError(res, req, 503, "read_only_mode", "StableRoute backend is in read-only mode");
+  sendError(
+    res,
+    req,
+    503,
+    "read_only_mode",
+    "StableRoute backend is in read-only mode",
+  );
 });
 
 // Per-IP sliding-window rate limiter.
@@ -503,7 +571,9 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 export type TrustProxySetting = boolean | number | string | string[];
 
 /** Parse a trust proxy setting string from the environment. */
-export const parseTrustProxy = (value: string | undefined): TrustProxySetting => {
+export const parseTrustProxy = (
+  value: string | undefined,
+): TrustProxySetting => {
   if (value === undefined || value.trim() === "") return false;
   const normalized = value.trim().toLowerCase();
   if (normalized === "true") return true;
@@ -525,7 +595,10 @@ let lastRateBucketGcAt = 0;
 const RATE_BUCKET_GC_INTERVAL_MS = 60_000;
 
 /** Prune IP rate limit buckets that have not had any requests within the window. */
-export const pruneExpiredRateBuckets = (now: number, windowMs: number): number => {
+export const pruneExpiredRateBuckets = (
+  now: number,
+  windowMs: number,
+): number => {
   if (now - lastRateBucketGcAt < RATE_BUCKET_GC_INTERVAL_MS) return 0;
   lastRateBucketGcAt = now;
   let removed = 0;
@@ -551,7 +624,11 @@ export const pruneExpiredRateBuckets = (now: number, windowMs: number): number =
  *   {@link RATE_BUCKETS_MAX_IPS} entries and a new IP is admitted, the
  *   oldest entry is deleted first so cardinality never exceeds the cap.
  */
-export const evictRateBuckets = (ip: string, now: number, windowMs: number): number[] => {
+export const evictRateBuckets = (
+  ip: string,
+  now: number,
+  windowMs: number,
+): number[] => {
   // Enforce IP-count ceiling for new IPs.
   if (!rateBuckets.has(ip) && rateBuckets.size >= RATE_BUCKETS_MAX_IPS) {
     const oldestKey = rateBuckets.keys().next().value as string;
@@ -568,7 +645,10 @@ export const evictRateBuckets = (ip: string, now: number, windowMs: number): num
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (process.env.NODE_ENV === "test") return next();
-  const ip = resolveClientIp(req.headers["x-forwarded-for"], req.ip ?? req.socket.remoteAddress);
+  const ip = resolveClientIp(
+    req.headers["x-forwarded-for"],
+    req.ip ?? req.socket.remoteAddress,
+  );
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
   pruneExpiredRateBuckets(now, windowMs);
@@ -581,7 +661,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       req,
       429,
       "rate_limited",
-      `more than ${limitPerWindow} requests per ${windowMs / 1000}s`
+      `more than ${limitPerWindow} requests per ${windowMs / 1000}s`,
     );
     return;
   }
@@ -607,7 +687,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
           status: res.statusCode,
           durationMs: Math.round(ms * 10) / 10,
         },
-        "request completed"
+        "request completed",
       );
   });
   next();
@@ -631,7 +711,7 @@ app.use(
       includeSubDomains: true,
     },
     xFrameOptions: { action: "deny" },
-  })
+  }),
 );
 
 /**
@@ -668,14 +748,22 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (!accept) return next();
 
   // Split on comma to get individual media-range tokens; strip quality params.
-  const types = accept.split(",").map((t) => t.split(";")[0].trim().toLowerCase());
+  const types = accept
+    .split(",")
+    .map((t) => t.split(";")[0].trim().toLowerCase());
 
   const acceptable = types.some(
-    (t) => t === "*/*" || t === "application/json" || t === "application/*"
+    (t) => t === "*/*" || t === "application/json" || t === "application/*",
   );
 
   if (!acceptable) {
-    sendError(res, req, 406, "not_acceptable", "This endpoint only produces application/json");
+    sendError(
+      res,
+      req,
+      406,
+      "not_acceptable",
+      "This endpoint only produces application/json",
+    );
     return;
   }
 
@@ -699,8 +787,16 @@ app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
  *
  * Results are returned as an array of { name, status, durationMs } objects.
  */
-const runHealthChecks = (): Array<{ name: string; status: "ok" | "fail"; durationMs: number }> => {
-  const checks: Array<{ name: string; status: "ok" | "fail"; durationMs: number }> = [];
+const runHealthChecks = (): Array<{
+  name: string;
+  status: "ok" | "fail";
+  durationMs: number;
+}> => {
+  const checks: Array<{
+    name: string;
+    status: "ok" | "fail";
+    durationMs: number;
+  }> = [];
 
   // Storage check — verifies that the in-memory store can write and read back.
   // Uses the reserved HEALTH_PROBE_KEY sentinel (prefixed with a NUL control
@@ -835,7 +931,10 @@ app.post("/api/v1/admin/read-write", (_req: Request, res: Response) => {
  * @param fallback - The value to use when the param is absent.
  * @returns A finite integer, or `null` when the input is array-form or non-numeric.
  */
-const parseIntegerQueryParam = (value: unknown, fallback: number): number | null => {
+const parseIntegerQueryParam = (
+  value: unknown,
+  fallback: number,
+): number | null => {
   if (value === undefined) return fallback;
   if (typeof value !== "string" || value.trim() === "") return null;
   const n = Number(value);
@@ -879,17 +978,16 @@ const parseCursor = (raw: unknown): number | "bad" | undefined => {
 const paginate = <T>(
   items: T[],
   limit: number,
-  offset: number
+  offset: number,
 ): { page: T[]; nextCursor: string | null } => {
   const page = items.slice(offset, offset + limit);
   const nextOffset = offset + limit;
-  const nextCursor = nextOffset < items.length
-    ? Buffer.from(String(nextOffset)).toString("base64")
-    : null;
+  const nextCursor =
+    nextOffset < items.length
+      ? Buffer.from(String(nextOffset)).toString("base64")
+      : null;
   return { page, nextCursor };
 };
-
-
 
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
@@ -897,14 +995,26 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   // return zero events).
   const since = parseIntegerQueryParam(req.query.since, 0);
   if (since === null || since < 0) {
-    sendError(res, req, 400, "invalid_request", "since must be a non-negative integer");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "since must be a non-negative integer",
+    );
     return;
   }
 
   // `limit` must be a single numeric value; it is then clamped to [1, EVENT_LOG_CAP].
   const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
   if (rawLimit === null) {
-    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "limit must be a single integer",
+    );
     return;
   }
   const limit = Math.min(EVENT_LOG_CAP, Math.max(1, rawLimit));
@@ -921,7 +1031,7 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
         req,
         400,
         "invalid_request",
-        `type must be one of: ${KNOWN_EVENT_TYPES.join(", ")}`
+        `type must be one of: ${KNOWN_EVENT_TYPES.join(", ")}`,
       );
       return;
     }
@@ -956,7 +1066,11 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
  * A key without any scope (i.e. an empty array) is read-only and can only call
  * endpoints that do not require a scope.
  */
-export const SCOPE_CATALOG = ["pairs:write", "webhooks:write", "keys:admin"] as const;
+export const SCOPE_CATALOG = [
+  "pairs:write",
+  "webhooks:write",
+  "keys:admin",
+] as const;
 
 /**
  * Least-privilege default scope set applied when a key is created without an
@@ -975,7 +1089,8 @@ const DEFAULT_SCOPES: readonly string[] = [];
  * @returns `true` if the key is valid and usable; otherwise `false`.
  */
 export const isKeyValid = (record: ApiKeyRecord): boolean => {
-  if (record.expiresAt !== undefined && Date.now() > record.expiresAt) return false;
+  if (record.expiresAt !== undefined && Date.now() > record.expiresAt)
+    return false;
   if (record.graceExpiresAt !== undefined && record.rotatedAt !== undefined) {
     // Rotated predecessor: still valid until grace window expires
     return Date.now() <= record.graceExpiresAt;
@@ -995,7 +1110,8 @@ export const isKeyValid = (record: ApiKeyRecord): boolean => {
  * @param scope - The scope string (from {@link SCOPE_CATALOG}) the route requires.
  * @returns An Express request handler enforcing the scope.
  */
-export const requireScope = (scope: string) =>
+export const requireScope =
+  (scope: string) =>
   (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.header("authorization") ?? "";
     const match = /^Bearer\s+(\S+)$/i.exec(auth);
@@ -1011,7 +1127,13 @@ export const requireScope = (scope: string) =>
       return;
     }
     if (!(record.scopes ?? []).includes(scope)) {
-      sendError(res, req, 403, "forbidden", `this key is missing the required scope: ${scope}`);
+      sendError(
+        res,
+        req,
+        403,
+        "forbidden",
+        `this key is missing the required scope: ${scope}`,
+      );
       return;
     }
     apiKeyStore.set(prefix, { ...record, lastUsedAt: Date.now() });
@@ -1024,7 +1146,12 @@ export const requireScope = (scope: string) =>
  * derived prefix collides with one already in `apiKeyStore` — since the
  * prefix doubles as the store's lookup key, it must be unique.
  */
-const mintApiKey = (): { key: string; prefix: string; salt: string; hash: string } => {
+const mintApiKey = (): {
+  key: string;
+  prefix: string;
+  salt: string;
+  hash: string;
+} => {
   let key: string;
   let prefix: string;
   do {
@@ -1050,7 +1177,13 @@ app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
 app.get("/api/v1/api-keys", (req: Request, res: Response) => {
   const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
   if (rawLimit === null) {
-    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "limit must be a single integer",
+    );
     return;
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
@@ -1076,60 +1209,84 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
   res.json({ items: page, nextCursor });
 });
 
-app.post("/api/v1/api-keys", idempotencyGuard, (req: Request, res: Response) => {
-  if (rejectUnknownKeys(req, res, ["label", "scopes", "expiresInSeconds"])) return;
-  const { label, scopes, expiresInSeconds } = req.body ?? {};
-  if (typeof label !== "string" || label.length === 0 || label.length > 64) {
-    sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
-    return;
-  }
-  let grantedScopes: string[] = [...DEFAULT_SCOPES];
-  if (scopes !== undefined) {
-    if (!Array.isArray(scopes) || scopes.some((s) => typeof s !== "string")) {
-      sendError(res, req, 400, "invalid_request", "scopes must be a string array");
+app.post(
+  "/api/v1/api-keys",
+  idempotencyGuard,
+  (req: Request, res: Response) => {
+    if (rejectUnknownKeys(req, res, ["label", "scopes", "expiresInSeconds"]))
+      return;
+    const { label, scopes, expiresInSeconds } = req.body ?? {};
+    if (typeof label !== "string" || label.length === 0 || label.length > 64) {
+      sendError(res, req, 400, "invalid_request", "label must be 1-64 chars");
       return;
     }
-    const unknown = (scopes as string[]).filter(
-      (s) => !(SCOPE_CATALOG as ReadonlyArray<string>).includes(s)
-    );
-    if (unknown.length > 0) {
-      sendError(
-        res,
-        req,
-        400,
-        "invalid_request",
-        `unknown scope(s): ${unknown.join(", ")}. Known scopes: ${SCOPE_CATALOG.join(", ")}`
+    let grantedScopes: string[] = [...DEFAULT_SCOPES];
+    if (scopes !== undefined) {
+      if (!Array.isArray(scopes) || scopes.some((s) => typeof s !== "string")) {
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          "scopes must be a string array",
+        );
+        return;
+      }
+      const unknown = (scopes as string[]).filter(
+        (s) => !(SCOPE_CATALOG as ReadonlyArray<string>).includes(s),
       );
-      return;
+      if (unknown.length > 0) {
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          `unknown scope(s): ${unknown.join(", ")}. Known scopes: ${SCOPE_CATALOG.join(", ")}`,
+        );
+        return;
+      }
+      grantedScopes = [...new Set(scopes as string[])];
     }
-    grantedScopes = [...new Set(scopes as string[])];
-  }
-  let expiresAt: number | undefined;
-  if (expiresInSeconds !== undefined) {
-    if (
-      typeof expiresInSeconds !== "number" ||
-      !Number.isInteger(expiresInSeconds) ||
-      expiresInSeconds <= 0 ||
-      expiresInSeconds > 31_536_000
-    ) {
-      sendError(res, req, 400, "invalid_request", "expiresInSeconds must be a positive integer no greater than 31536000");
-      return;
+    let expiresAt: number | undefined;
+    if (expiresInSeconds !== undefined) {
+      if (
+        typeof expiresInSeconds !== "number" ||
+        !Number.isInteger(expiresInSeconds) ||
+        expiresInSeconds <= 0 ||
+        expiresInSeconds > 31_536_000
+      ) {
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          "expiresInSeconds must be a positive integer no greater than 31536000",
+        );
+        return;
+      }
+      expiresAt = Date.now() + expiresInSeconds * 1000;
     }
-    expiresAt = Date.now() + expiresInSeconds * 1000;
-  }
-  const { key, prefix, salt, hash } = mintApiKey();
-  apiKeyStore.set(prefix, {
-    label,
-    createdAt: Date.now(),
-    scopes: grantedScopes,
-    salt,
-    hash,
-    ...(expiresAt !== undefined ? { expiresAt } : {}),
-  });
-  // Record only the non-sensitive prefix and label — never the raw key.
-  recordEvent("apikey.created", { prefix, label });
-  res.status(201).json({ key, label, scopes: grantedScopes, ...(expiresAt !== undefined ? { expiresAt } : {}) });
-});
+    const { key, prefix, salt, hash } = mintApiKey();
+    apiKeyStore.set(prefix, {
+      label,
+      createdAt: Date.now(),
+      scopes: grantedScopes,
+      salt,
+      hash,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    });
+    // Record only the non-sensitive prefix and label — never the raw key.
+    recordEvent("apikey.created", { prefix, label });
+    res
+      .status(201)
+      .json({
+        key,
+        label,
+        scopes: grantedScopes,
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+      });
+  },
+);
 
 /**
  * Grace window (ms) during which a rotated predecessor key remains valid
@@ -1173,7 +1330,13 @@ app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
     salt,
     hash,
   });
-  res.status(201).json({ key: newKey, label: predecessor.label, graceExpiresAt: now + ROTATION_GRACE_MS });
+  res
+    .status(201)
+    .json({
+      key: newKey,
+      label: predecessor.label,
+      graceExpiresAt: now + ROTATION_GRACE_MS,
+    });
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
@@ -1190,7 +1353,13 @@ app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
 app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
   if (rawLimit === null) {
-    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "limit must be a single integer",
+    );
     return;
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
@@ -1202,7 +1371,10 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   }
   const offset = cursorResult ?? 0;
 
-  const allItems = Array.from(webhookStore.entries()).map(([id, m]) => ({ id, ...m }));
+  const allItems = Array.from(webhookStore.entries()).map(([id, m]) => ({
+    id,
+    ...m,
+  }));
   const { page, nextCursor } = paginate(allItems, limit, offset);
   res.json({ items: page, nextCursor });
 });
@@ -1211,58 +1383,116 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
  * Validate a set of webhook events. Sends error if invalid and returns null,
  * otherwise returns deduplicated array of valid event names.
  */
-const validateWebhookEvents = (res: Response, req: Request, events: unknown): string[] | null => {
-  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
-    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
+const validateWebhookEvents = (
+  res: Response,
+  req: Request,
+  events: unknown,
+): string[] | null => {
+  if (
+    !Array.isArray(events) ||
+    events.length === 0 ||
+    events.some((e) => typeof e !== "string")
+  ) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "events must be a non-empty string array",
+    );
     return null;
   }
   if (events.length > WEBHOOK_MAX_EVENTS) {
-    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`,
+    );
     return null;
   }
   for (const name of events as string[]) {
     if (name.trim().length === 0) {
-      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "event names must not be blank or whitespace-only",
+      );
       return null;
     }
     if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
-      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`,
+      );
       return null;
     }
     if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event name "${name}" uses a reserved prefix`,
+      );
       return null;
     }
     // Event names must be either "*" (wildcard) or follow the "namespace.action"
     // convention (exactly one dot, alphanumeric segments). Names with multiple
     // dots are rejected as they indicate a typo or unsupported format.
     if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event name "${name}" must be "*" or follow "namespace.action" format`,
+      );
       return null;
     }
   }
   return [...new Set(events as string[])];
 };
 
-app.post("/api/v1/webhooks", idempotencyGuard, (req: Request, res: Response) => {
-  if (rejectUnknownKeys(req, res, ["url", "events"])) return;
-  const { url, events } = req.body ?? {};
-  if (typeof url !== "string" || !/^https?:\/\//.test(url) || url.length > 2048) {
-    sendError(res, req, 400, "invalid_request", "url must be http(s), <=2048 chars");
-    return;
-  }
-  if (!isSafeWebhookUrl(url)) {
-    sendError(res, req, 400, "invalid_request", "url host must be public");
-    return;
-  }
-  const deduped = validateWebhookEvents(res, req, events);
-  if (deduped === null) return;
-  const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
-  // Record id and url only — never any webhook secret material.
-  recordEvent("webhook.created", { id, url });
-  res.status(201).json({ id, url, events: deduped });
-});
+app.post(
+  "/api/v1/webhooks",
+  idempotencyGuard,
+  (req: Request, res: Response) => {
+    if (rejectUnknownKeys(req, res, ["url", "events"])) return;
+    const { url, events } = req.body ?? {};
+    if (
+      typeof url !== "string" ||
+      !/^https?:\/\//.test(url) ||
+      url.length > 2048
+    ) {
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "url must be http(s), <=2048 chars",
+      );
+      return;
+    }
+    if (!isSafeWebhookUrl(url)) {
+      sendError(res, req, 400, "invalid_request", "url host must be public");
+      return;
+    }
+    const deduped = validateWebhookEvents(res, req, events);
+    if (deduped === null) return;
+    const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
+    // Record id and url only — never any webhook secret material.
+    recordEvent("webhook.created", { id, url });
+    res.status(201).json({ id, url, events: deduped });
+  },
+);
 
 /**
  * Read a single registered webhook by id.
@@ -1304,29 +1534,69 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   }
   if (rejectUnknownKeys(req, res, ["events"])) return;
   const { events } = req.body ?? {};
-  if (!Array.isArray(events) || events.length === 0 || events.some((e) => typeof e !== "string")) {
-    sendError(res, req, 400, "invalid_request", "events must be a non-empty string array");
+  if (
+    !Array.isArray(events) ||
+    events.length === 0 ||
+    events.some((e) => typeof e !== "string")
+  ) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "events must be a non-empty string array",
+    );
     return;
   }
   if (events.length > WEBHOOK_MAX_EVENTS) {
-    sendError(res, req, 400, "invalid_request", `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`);
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`,
+    );
     return;
   }
   for (const name of events as string[]) {
     if (name.trim().length === 0) {
-      sendError(res, req, 400, "invalid_request", "event names must not be blank or whitespace-only");
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "event names must not be blank or whitespace-only",
+      );
       return;
     }
     if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
-      sendError(res, req, 400, "invalid_request", `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`,
+      );
       return;
     }
     if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" uses a reserved prefix`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event name "${name}" uses a reserved prefix`,
+      );
       return;
     }
     if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
-      sendError(res, req, 400, "invalid_request", `event name "${name}" must be "*" or follow "namespace.action" format`);
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `event name "${name}" must be "*" or follow "namespace.action" format`,
+      );
       return;
     }
   }
@@ -1337,7 +1607,6 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   res.json({ id, ...updated });
 });
 
-
 /**
  * Normalize the `:source`/`:destination` route params to their canonical asset
  * codes via {@link normalizeAsset}. On invalid input a `400 invalid_request` is
@@ -1345,30 +1614,39 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
  */
 const normalizePairParams = (
   req: Request,
-  res: Response
+  res: Response,
 ): { source: string; destination: string } | null => {
   const source = normalizeAsset(req.params.source);
   const destination = normalizeAsset(req.params.destination);
   if (source === null || destination === null) {
-    sendError(res, req, 400, "invalid_request", "source and destination must be 1-12 alphanumeric characters");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source and destination must be 1-12 alphanumeric characters",
+    );
     return null;
   }
   return { source, destination };
 };
 
 /** Aggregate read of every per-pair slot in one round-trip. */
-app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response) => {
-  const normalized = normalizePairParams(req, res);
-  if (!normalized) return;
-  const { source, destination } = normalized;
-  const k = pairKey(source, destination);
-  res.json({
-    source,
-    destination,
-    registered: pairRegistry.has(k),
-    ...(pairMeta.get(k) ?? defaultMeta()),
-  });
-});
+app.get(
+  "/api/v1/pairs/:source/:destination/info",
+  (req: Request, res: Response) => {
+    const normalized = normalizePairParams(req, res);
+    if (!normalized) return;
+    const { source, destination } = normalized;
+    const k = pairKey(source, destination);
+    res.json({
+      source,
+      destination,
+      registered: pairRegistry.has(k),
+      ...(pairMeta.get(k) ?? defaultMeta()),
+    });
+  },
+);
 
 /**
  * Factory that creates an Express PATCH handler for a single `PairMeta` field.
@@ -1389,13 +1667,14 @@ app.get("/api/v1/pairs/:source/:destination/info", (req: Request, res: Response)
  * @param validate     - Returns `true` when the value is acceptable, `false` to reject.
  * @param errorMessage - The `message` string sent in the 400 response body.
  */
-const makePairMetaPatch = <K extends keyof PairMeta>(
-  field: K,
-  bodyKey: string,
-  validate: (v: unknown) => boolean,
-  errorMessage: string,
-  crossCheck?: (value: unknown, meta: PairMeta) => string | null
-) =>
+const makePairMetaPatch =
+  <K extends keyof PairMeta>(
+    field: K,
+    bodyKey: string,
+    validate: (v: unknown) => boolean,
+    errorMessage: string,
+    crossCheck?: (value: unknown, meta: PairMeta) => string | null,
+  ) =>
   (req: Request, res: Response): void => {
     const normalized = normalizePairParams(req, res);
     if (!normalized) return;
@@ -1474,7 +1753,10 @@ const checkMaxAgainstMin = (value: unknown, meta: PairMeta): string | null => {
  *
  * @returns An error message when inconsistent, else `null`.
  */
-const checkLiquidityAgainstMin = (value: unknown, meta: PairMeta): string | null => {
+const checkLiquidityAgainstMin = (
+  value: unknown,
+  meta: PairMeta,
+): string | null => {
   const newLiquidity = BigInt(value as string);
   if (newLiquidity === 0n) return null; // "0" means unset — always allowed
   const existingMin = BigInt(meta.minAmount);
@@ -1492,7 +1774,10 @@ const checkLiquidityAgainstMin = (value: unknown, meta: PairMeta): string | null
  *
  * @returns An error message when inconsistent, else `null`.
  */
-const checkMinAgainstLiquidity = (value: unknown, meta: PairMeta): string | null => {
+const checkMinAgainstLiquidity = (
+  value: unknown,
+  meta: PairMeta,
+): string | null => {
   const newMin = BigInt(value as string);
   const existingLiquidity = BigInt(meta.liquidity);
   if (existingLiquidity !== 0n && newMin > existingLiquidity) {
@@ -1537,7 +1822,8 @@ const pairMetaPatchDescriptors: Array<{
     bodyKey: "minAmount",
     validate: (v) => typeof v === "string" && /^(0|[1-9][0-9]{0,38})$/.test(v),
     errorMessage: "minAmount must be a non-negative integer string",
-    crossCheck: (value, meta) => checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
+    crossCheck: (value, meta) =>
+      checkMinAgainstMax(value, meta) ?? checkMinAgainstLiquidity(value, meta),
   },
   {
     suffix: "fee_bps",
@@ -1562,10 +1848,17 @@ const pairMetaPatchDescriptors: Array<{
 ];
 
 // Register each descriptor as a PATCH route.
-for (const { suffix, field, bodyKey, validate, errorMessage, crossCheck } of pairMetaPatchDescriptors) {
+for (const {
+  suffix,
+  field,
+  bodyKey,
+  validate,
+  errorMessage,
+  crossCheck,
+} of pairMetaPatchDescriptors) {
   app.patch(
     `/api/v1/pairs/:source/:destination/${suffix}`,
-    makePairMetaPatch(field, bodyKey, validate, errorMessage, crossCheck)
+    makePairMetaPatch(field, bodyKey, validate, errorMessage, crossCheck),
   );
 }
 
@@ -1577,27 +1870,33 @@ for (const { suffix, field, bodyKey, validate, errorMessage, crossCheck } of pai
  *
  * @route PATCH /api/v1/pairs/:source/:destination/enabled
  */
-app.patch("/api/v1/pairs/:source/:destination/enabled", (req: Request, res: Response): void => {
-  const normalized = normalizePairParams(req, res);
-  if (!normalized) return;
-  const { source, destination } = normalized;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  if (rejectUnknownKeys(req, res, ["enabled"])) return;
-  const { enabled } = req.body ?? {};
-  if (typeof enabled !== "boolean") {
-    sendError(res, req, 400, "invalid_request", "enabled must be a boolean");
-    return;
-  }
-  const meta = pairMeta.get(k) ?? defaultMeta();
-  meta.enabled = enabled;
-  pairMeta.set(k, meta);
-  recordEvent(enabled ? "pair.enabled" : "pair.disabled", { source, destination });
-  res.json({ source, destination, ...meta });
-});
+app.patch(
+  "/api/v1/pairs/:source/:destination/enabled",
+  (req: Request, res: Response): void => {
+    const normalized = normalizePairParams(req, res);
+    if (!normalized) return;
+    const { source, destination } = normalized;
+    const k = pairKey(source, destination);
+    if (!pairRegistry.has(k)) {
+      sendError(res, req, 404, "not_found", "pair not registered");
+      return;
+    }
+    if (rejectUnknownKeys(req, res, ["enabled"])) return;
+    const { enabled } = req.body ?? {};
+    if (typeof enabled !== "boolean") {
+      sendError(res, req, 400, "invalid_request", "enabled must be a boolean");
+      return;
+    }
+    const meta = pairMeta.get(k) ?? defaultMeta();
+    meta.enabled = enabled;
+    pairMeta.set(k, meta);
+    recordEvent(enabled ? "pair.enabled" : "pair.disabled", {
+      source,
+      destination,
+    });
+    res.json({ source, destination, ...meta });
+  },
+);
 
 /**
  * Reset a registered pair's metadata to factory defaults.
@@ -1609,37 +1908,55 @@ app.patch("/api/v1/pairs/:source/:destination/enabled", (req: Request, res: Resp
  *
  * @route POST /api/v1/pairs/:source/:destination/reset
  */
-app.post("/api/v1/pairs/:source/:destination/reset", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", "pair not registered");
-    return;
-  }
-  const meta = defaultMeta();
-  pairMeta.set(k, meta);
-  recordEvent("pair.meta.reset", { source, destination });
-  res.json({ source, destination, ...meta });
-});
+app.post(
+  "/api/v1/pairs/:source/:destination/reset",
+  (req: Request, res: Response) => {
+    const { source, destination } = req.params;
+    const k = pairKey(source, destination);
+    if (!pairRegistry.has(k)) {
+      sendError(res, req, 404, "not_found", "pair not registered");
+      return;
+    }
+    const meta = defaultMeta();
+    pairMeta.set(k, meta);
+    recordEvent("pair.meta.reset", { source, destination });
+    res.json({ source, destination, ...meta });
+  },
+);
 
 /** Unregister a pair. */
-app.delete("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
-  const k = pairKey(source, destination);
-  if (!pairRegistry.has(k)) {
-    sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
-    return;
-  }
-  pairRegistry.delete(k);
-  recordEvent("pair.unregistered", { source, destination });
-  res.status(204).send();
-});
+app.delete(
+  "/api/v1/pairs/:source/:destination",
+  (req: Request, res: Response) => {
+    const { source, destination } = req.params;
+    const k = pairKey(source, destination);
+    if (!pairRegistry.has(k)) {
+      sendError(
+        res,
+        req,
+        404,
+        "not_found",
+        `pair ${source}->${destination} is not registered`,
+      );
+      return;
+    }
+    pairRegistry.delete(k);
+    recordEvent("pair.unregistered", { source, destination });
+    res.status(204).send();
+  },
+);
 
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const { source, destination } = req.params;
   if (!pairRegistry.has(pairKey(source, destination))) {
-    sendError(res, req, 404, "not_found", `pair ${source}->${destination} is not registered`);
+    sendError(
+      res,
+      req,
+      404,
+      "not_found",
+      `pair ${source}->${destination} is not registered`,
+    );
     return;
   }
   res.json({ source, destination, registered: true });
@@ -1649,23 +1966,50 @@ app.get("/api/v1/admin/status", (_req: Request, res: Response) => {
   res.json({ paused: isPaused(), readOnly: isReadOnly() });
 });
 
-app.get("/api/v1/config", (_req: Request, res: Response) => res.json({ config }));
+app.get("/api/v1/config", (_req: Request, res: Response) =>
+  res.json({ config }),
+);
 app.patch("/api/v1/config", (req: Request, res: Response) => {
-  const allowed = ["rateLimitPerWindow", "rateLimitWindowMs", "bulkMaxItems", "eventLogCap", "quote_ttl_ms", "requestTimeoutMs"] as const;
+  const allowed = [
+    "rateLimitPerWindow",
+    "rateLimitWindowMs",
+    "bulkMaxItems",
+    "eventLogCap",
+    "quote_ttl_ms",
+    "requestTimeoutMs",
+  ] as const;
   if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
     if (k in (req.body ?? {})) {
       const v = req.body[k];
       if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
-        sendError(res, req, 400, "invalid_request", `${k} must be positive integer`);
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          `${k} must be positive integer`,
+        );
         return;
       }
       if (k === "bulkMaxItems" && v > BULK_ABSOLUTE_MAX) {
-        sendError(res, req, 400, "invalid_request", `bulkMaxItems cannot exceed ${BULK_ABSOLUTE_MAX}`);
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          `bulkMaxItems cannot exceed ${BULK_ABSOLUTE_MAX}`,
+        );
         return;
       }
       if (k === "eventLogCap" && v > EVENT_LOG_CAP_MAX) {
-        sendError(res, req, 400, "invalid_request", `eventLogCap cannot exceed ${EVENT_LOG_CAP_MAX}`);
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          `eventLogCap cannot exceed ${EVENT_LOG_CAP_MAX}`,
+        );
         return;
       }
       config[k] = v;
@@ -1749,7 +2093,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
     "# TYPE stableroute_events_by_type gauge",
     ...Array.from(eventCounts.entries()).map(
       ([type, count]) =>
-        `stableroute_events_by_type{type="${escapeLabelValue(type)}"} ${count}`
+        `stableroute_events_by_type{type="${escapeLabelValue(type)}"} ${count}`,
     ),
     ...buildStoreGaugeLines(),
   ];
@@ -1770,7 +2114,10 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
  *
  * @returns `{ pairsWithFee, distinctAssets }`.
  */
-const aggregatePairStats = (): { pairsWithFee: number; distinctAssets: number } => {
+const aggregatePairStats = (): {
+  pairsWithFee: number;
+  distinctAssets: number;
+} => {
   let pairsWithFee = 0;
   const assets = new Set<string>();
   for (const k of pairRegistry) {
@@ -1833,7 +2180,13 @@ const pairsEtag = (body: string): string =>
 app.get("/api/v1/pairs", (req: Request, res: Response) => {
   const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
   if (rawLimit === null) {
-    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "limit must be a single integer",
+    );
     return;
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
@@ -1899,16 +2252,25 @@ app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "source and destination must be 1-12 alphanumeric characters"
+      "source and destination must be 1-12 alphanumeric characters",
     );
   }
   if (source === destination) {
-    return sendError(res, req, 400, "invalid_request", "source and destination must differ");
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source and destination must differ",
+    );
   }
   const key = pairKey(source, destination);
   const isNew = !pairRegistry.has(key);
   pairRegistry.add(key);
-  recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source, destination });
+  recordEvent(isNew ? "pair.registered" : "pair.refreshed", {
+    source,
+    destination,
+  });
   res.status(isNew ? 201 : 200).json({ source, destination, registered: true });
 });
 
@@ -1934,7 +2296,13 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   const { pairs } = req.body ?? {};
   const maxItems = config.bulkMaxItems;
   if (!Array.isArray(pairs) || pairs.length === 0 || pairs.length > maxItems) {
-    sendError(res, req, 400, "invalid_request", `pairs must be 1-${maxItems} entries`);
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `pairs must be 1-${maxItems} entries`,
+    );
     return;
   }
   const results = pairs.map(
@@ -1945,19 +2313,27 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
       if (source === null || destination === null) {
         return { index, ok: false as const, error: "invalid_asset_code" };
       }
-      if (normSource === normDest) {
+      if (source === destination) {
         return { index, ok: false as const, error: "same_asset" };
       }
-      const key = pairKey(normSource, normDest);
+      const key = pairKey(source, destination);
       const isNew = !pairRegistry.has(key);
       pairRegistry.add(key);
-      recordEvent(isNew ? "pair.registered" : "pair.refreshed", { source: normSource, destination: normDest });
-      return { index, ok: true as const, source: normSource, destination: normDest, registered: true };
-    }
+      recordEvent(isNew ? "pair.registered" : "pair.refreshed", {
+        source,
+        destination,
+      });
+      return {
+        index,
+        ok: true as const,
+        source,
+        destination,
+        registered: true,
+      };
+    },
   );
   res.json({ results });
 });
-
 
 /**
  * Canonicalize an asset code so that casing and surrounding whitespace never
@@ -1976,7 +2352,8 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
 const normalizeAsset = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
   const code = v.trim().toUpperCase();
-  if (!/^[A-Z0-9]{1,12}$/.test(code) || code.startsWith("__HEALTH")) return null;
+  if (!/^[A-Z0-9]{1,12}$/.test(code) || code.startsWith("__HEALTH"))
+    return null;
   return code;
 };
 
@@ -1996,14 +2373,22 @@ const parseSlippageBps = (v: unknown): number | null => {
   if (v === undefined) return 0;
   if (typeof v !== "string" || !/^[0-9]{1,4}$/.test(v)) return null;
   const parsed = Number(v);
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1000 ? parsed : null;
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1000
+    ? parsed
+    : null;
 };
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
-  const maxItems = config.bulkMaxItems;  // driven by config.bulkMaxItems
+  const maxItems = config.bulkMaxItems; // driven by config.bulkMaxItems
   if (!Array.isArray(items) || items.length === 0 || items.length > maxItems) {
-    sendError(res, req, 400, "invalid_request", `items must be 1-${maxItems} entries`);
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      `items must be 1-${maxItems} entries`,
+    );
     return;
   }
   /**
@@ -2016,54 +2401,72 @@ app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
    * still returned as `ok: false, error: "invalid_item"` and take precedence.
    */
   const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
-  const results = items.map((it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown }, i: number) => {
-    const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
-    const source_asset = normalizeAsset(rawSource);
-    const dest_asset = normalizeAsset(rawDest);
-    const parsedAmount = parseAmount(amount);
-    if (source_asset === null || dest_asset === null || parsedAmount === null || source_asset === dest_asset) {
-      return { index: i, ok: false as const, error: "invalid_item" };
-    }
-    if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
-      return { index: i, ok: false as const, error: "pair_not_registered" };
-    }
-    const bulkKey = pairKey(source_asset, dest_asset);
-    const bulkMeta = pairMeta.get(bulkKey) ?? defaultMeta();
-    if (pairRegistry.has(bulkKey) && bulkMeta.enabled === false) {
-      return { index: i, ok: false as const, error: "pair_disabled" };
-    }
-    if (pairRegistry.has(bulkKey)) {
-      const boundsViolation = checkQuoteBounds(bulkMeta, parsedAmount);
-      if (boundsViolation) {
-        return {
-          index: i,
-          ok: false as const,
-          error: boundsViolation.bulkError,
-          message: boundsViolation.message,
-        };
+  const results = items.map(
+    (
+      it: { source_asset?: unknown; dest_asset?: unknown; amount?: unknown },
+      i: number,
+    ) => {
+      const { source_asset: rawSource, dest_asset: rawDest, amount } = it ?? {};
+      const source_asset = normalizeAsset(rawSource);
+      const dest_asset = normalizeAsset(rawDest);
+      const parsedAmount = parseAmount(amount);
+      if (
+        source_asset === null ||
+        dest_asset === null ||
+        parsedAmount === null ||
+        source_asset === dest_asset
+      ) {
+        return { index: i, ok: false as const, error: "invalid_item" };
       }
-    }
-    const slippage_bps = 0;
-    const priced = priceQuote(bulkMeta, parsedAmount, slippage_bps);
-    return {
-      index: i,
-      ok: true as const,
-      source_asset,
-      dest_asset,
-      amount: parsedAmount.toString(),
-      estimated_rate: priced.rate,
-      feeBps: priced.feeBps,
-      feeAmount: priced.feeAmount.toString(),
-      netAmount: priced.netAmount.toString(),
-      slippage_bps,
-      min_received: priced.minReceived.toString(),
-    };
-  });
+      if (
+        !allowUnregistered &&
+        !pairRegistry.has(pairKey(source_asset, dest_asset))
+      ) {
+        return { index: i, ok: false as const, error: "pair_not_registered" };
+      }
+      const bulkKey = pairKey(source_asset, dest_asset);
+      const bulkMeta = pairMeta.get(bulkKey) ?? defaultMeta();
+      if (pairRegistry.has(bulkKey) && bulkMeta.enabled === false) {
+        return { index: i, ok: false as const, error: "pair_disabled" };
+      }
+      if (pairRegistry.has(bulkKey)) {
+        const boundsViolation = checkQuoteBounds(bulkMeta, parsedAmount);
+        if (boundsViolation) {
+          return {
+            index: i,
+            ok: false as const,
+            error: boundsViolation.bulkError,
+            message: boundsViolation.message,
+          };
+        }
+      }
+      const slippage_bps = 0;
+      const priced = priceQuote(bulkMeta, parsedAmount, slippage_bps);
+      return {
+        index: i,
+        ok: true as const,
+        source_asset,
+        dest_asset,
+        amount: parsedAmount.toString(),
+        estimated_rate: priced.rate,
+        feeBps: priced.feeBps,
+        feeAmount: priced.feeAmount.toString(),
+        netAmount: priced.netAmount.toString(),
+        slippage_bps,
+        min_received: priced.minReceived.toString(),
+      };
+    },
+  );
   res.json({ results });
 });
 
 app.get("/api/v1/quote", (req: Request, res: Response) => {
-  const { source_asset: rawSource, dest_asset: rawDest, amount, slippage_bps: rawSlippage } = req.query;
+  const {
+    source_asset: rawSource,
+    dest_asset: rawDest,
+    amount,
+    slippage_bps: rawSlippage,
+  } = req.query;
 
   if (!rawSource || !rawDest || !amount) {
     return sendError(
@@ -2071,7 +2474,7 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "Missing required query params: source_asset, dest_asset, amount"
+      "Missing required query params: source_asset, dest_asset, amount",
     );
   }
   const source_asset = normalizeAsset(rawSource);
@@ -2082,11 +2485,17 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "source_asset and dest_asset must be 1-12 alphanumeric characters"
+      "source_asset and dest_asset must be 1-12 alphanumeric characters",
     );
   }
   if (source_asset === dest_asset) {
-    return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source_asset and dest_asset must differ",
+    );
   }
   const parsedAmount = parseAmount(amount);
   if (parsedAmount === null) {
@@ -2095,12 +2504,18 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "amount must be a positive integer string with no leading zero"
+      "amount must be a positive integer string with no leading zero",
     );
   }
   const slippage_bps = parseSlippageBps(rawSlippage);
   if (slippage_bps === null) {
-    return sendError(res, req, 400, "invalid_request", "slippage_bps must be an integer in [0,1000]");
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "slippage_bps must be an integer in [0,1000]",
+    );
   }
 
   /**
@@ -2117,17 +2532,30 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
    * cannot be toggled per-request.
    */
   const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
-  if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
-    return sendError(res, req, 404, "pair_not_registered",
+  if (
+    !allowUnregistered &&
+    !pairRegistry.has(pairKey(source_asset, dest_asset))
+  ) {
+    return sendError(
+      res,
+      req,
+      404,
+      "pair_not_registered",
       `pair ${source_asset}->${dest_asset} is not registered`,
-      { source_asset, dest_asset }
+      { source_asset, dest_asset },
     );
   }
 
   const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
   const boundsViolation = checkQuoteBounds(meta, parsedAmount);
   if (boundsViolation) {
-    return sendError(res, req, boundsViolation.status, boundsViolation.error, boundsViolation.message);
+    return sendError(
+      res,
+      req,
+      boundsViolation.status,
+      boundsViolation.error,
+      boundsViolation.message,
+    );
   }
   const priced = priceQuote(meta, parsedAmount, slippage_bps);
 
@@ -2146,7 +2574,11 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
 });
 
 app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
-  const { source_asset: rawSource, dest_asset: rawDest, target_amount: rawTargetAmount } = req.query;
+  const {
+    source_asset: rawSource,
+    dest_asset: rawDest,
+    target_amount: rawTargetAmount,
+  } = req.query;
 
   if (!rawSource || !rawDest || !rawTargetAmount) {
     return sendError(
@@ -2154,7 +2586,7 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "Missing required query params: source_asset, dest_asset, target_amount"
+      "Missing required query params: source_asset, dest_asset, target_amount",
     );
   }
 
@@ -2166,12 +2598,18 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "source_asset and dest_asset must be 1-12 alphanumeric characters"
+      "source_asset and dest_asset must be 1-12 alphanumeric characters",
     );
   }
 
   if (source_asset === dest_asset) {
-    return sendError(res, req, 400, "invalid_request", "source_asset and dest_asset must differ");
+    return sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "source_asset and dest_asset must differ",
+    );
   }
 
   const parsedTarget = parseAmount(rawTargetAmount);
@@ -2181,19 +2619,22 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
       req,
       400,
       "invalid_request",
-      "target_amount must be a positive integer string with no leading zero"
+      "target_amount must be a positive integer string with no leading zero",
     );
   }
 
   const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
-  if (!allowUnregistered && !pairRegistry.has(pairKey(source_asset, dest_asset))) {
+  if (
+    !allowUnregistered &&
+    !pairRegistry.has(pairKey(source_asset, dest_asset))
+  ) {
     return sendError(
       res,
       req,
       404,
       "pair_not_registered",
       `pair ${source_asset}->${dest_asset} is not registered`,
-      { source_asset, dest_asset }
+      { source_asset, dest_asset },
     );
   }
 
@@ -2232,7 +2673,13 @@ if (process.env.NODE_ENV === "test") {
 
 // Unknown route: structured 404 echoing the request id.
 app.use((req: Request, res: Response) => {
-  sendError(res, req, 404, "not_found", `No route for ${req.method} ${req.path}`);
+  sendError(
+    res,
+    req,
+    404,
+    "not_found",
+    `No route for ${req.method} ${req.path}`,
+  );
 });
 
 // Final 4-arg error handler. Any handler that throws or calls next(err)
@@ -2240,8 +2687,19 @@ app.use((req: Request, res: Response) => {
 // { error, message, requestId } as the explicit 400 / 404 bodies so
 // clients can branch on `error` uniformly.
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-  if (err && typeof err === "object" && "type" in err && (err as { type: string }).type === "entity.too.large") {
-    sendError(res, req, 413, "payload_too_large", "request body exceeds the 100 KiB limit");
+  if (
+    err &&
+    typeof err === "object" &&
+    "type" in err &&
+    (err as { type: string }).type === "entity.too.large"
+  ) {
+    sendError(
+      res,
+      req,
+      413,
+      "payload_too_large",
+      "request body exceeds the 100 KiB limit",
+    );
     return;
   }
   // Malformed JSON body. express.json() raises a SyntaxError tagged with
@@ -2252,7 +2710,8 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (
     err &&
     typeof err === "object" &&
-    (("type" in err && (err as { type: string }).type === "entity.parse.failed") ||
+    (("type" in err &&
+      (err as { type: string }).type === "entity.parse.failed") ||
       err instanceof SyntaxError)
   ) {
     sendError(res, req, 400, "invalid_json", "request body is not valid JSON");
@@ -2266,7 +2725,7 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
       method: req.method,
       path: req.path,
     },
-    "unhandled request error"
+    "unhandled request error",
   );
   const message = isProduction
     ? "An unexpected error occurred"

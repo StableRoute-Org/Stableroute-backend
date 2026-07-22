@@ -10,7 +10,10 @@ describe("404 fallback and X-Request-Id echo", () => {
   it("404 body uses canonical error shape", async () => {
     const res = await request(app).get("/no-such-route");
     expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ error: expect.any(String), message: expect.any(String) });
+    expect(res.body).toMatchObject({
+      error: expect.any(String),
+      message: expect.any(String),
+    });
   });
 
   it("echoes a valid X-Request-Id back in response header", async () => {
@@ -22,7 +25,7 @@ describe("404 fallback and X-Request-Id echo", () => {
   it("generates a UUID when no X-Request-Id is sent", async () => {
     const res = await request(app).get("/missing");
     expect(res.headers["x-request-id"]).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
   });
 
@@ -33,7 +36,7 @@ describe("404 fallback and X-Request-Id echo", () => {
     const tooLong = "a".repeat(201);
     const res = await request(app).get("/missing").set("X-Request-Id", tooLong);
     expect(res.headers["x-request-id"]).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
   });
 

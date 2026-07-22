@@ -5,7 +5,10 @@ import { webhookStore } from "../stores";
 beforeEach(() => webhookStore.clear());
 
 describe("Webhooks lifecycle", () => {
-  const validBody = { url: "https://example.com/hook", events: ["pair.registered"] };
+  const validBody = {
+    url: "https://example.com/hook",
+    events: ["pair.registered"],
+  };
 
   it("POST /api/v1/webhooks creates a webhook and returns 201", async () => {
     const res = await request(app).post("/api/v1/webhooks").send(validBody);
@@ -109,7 +112,14 @@ describe("Webhooks lifecycle", () => {
     const { id } = create.body;
     const res = await request(app)
       .patch(`/api/v1/webhooks/${id}`)
-      .send({ events: ["pair.registered", "pair.registered", "quote.fulfilled", "quote.fulfilled"] });
+      .send({
+        events: [
+          "pair.registered",
+          "pair.registered",
+          "quote.fulfilled",
+          "quote.fulfilled",
+        ],
+      });
     expect(res.status).toBe(200);
     expect(res.body.events).toEqual(["pair.registered", "quote.fulfilled"]);
   });
@@ -198,7 +208,9 @@ describe("Webhooks lifecycle", () => {
   });
 
   it("POST rejects missing url with 400", async () => {
-    const res = await request(app).post("/api/v1/webhooks").send({ events: ["pair.registered"] });
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .send({ events: ["pair.registered"] });
     expect(res.status).toBe(400);
   });
 
@@ -213,7 +225,9 @@ describe("Webhooks lifecycle", () => {
     "http://[::1]/hook",
     "http://[fe80::1]/hook",
   ])("POST rejects SSRF-prone webhook host %s", async (url) => {
-    const res = await request(app).post("/api/v1/webhooks").send({ url, events: ["pair.registered"] });
+    const res = await request(app)
+      .post("/api/v1/webhooks")
+      .send({ url, events: ["pair.registered"] });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
     expect(res.body.message).toMatch(/url host must be public/);
@@ -223,7 +237,10 @@ describe("Webhooks lifecycle", () => {
   it("POST accepts a public https webhook URL", async () => {
     const res = await request(app)
       .post("/api/v1/webhooks")
-      .send({ url: "https://hooks.example.com/stableroute", events: ["pair.registered"] });
+      .send({
+        url: "https://hooks.example.com/stableroute",
+        events: ["pair.registered"],
+      });
     expect(res.status).toBe(201);
     expect(res.body.url).toBe("https://hooks.example.com/stableroute");
   });
@@ -238,7 +255,10 @@ describe("Webhooks lifecycle", () => {
   it("POST deduplicates duplicate event names", async () => {
     const res = await request(app)
       .post("/api/v1/webhooks")
-      .send({ url: "https://example.com/hook", events: ["pair.registered", "pair.registered"] });
+      .send({
+        url: "https://example.com/hook",
+        events: ["pair.registered", "pair.registered"],
+      });
     expect(res.status).toBe(201);
     expect(res.body.events).toEqual(["pair.registered"]);
   });

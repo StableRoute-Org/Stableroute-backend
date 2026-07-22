@@ -79,8 +79,8 @@ describe("pair read and unregister — 204 and 404 paths", () => {
       expect(
         list.body.pairs.some(
           (p: { source: string; destination: string }) =>
-            p.source === "REMSRC" && p.destination === "REMDST"
-        )
+            p.source === "REMSRC" && p.destination === "REMDST",
+        ),
       ).toBe(false);
     });
 
@@ -119,11 +119,15 @@ describe("pair read and unregister — 204 and 404 paths", () => {
       const events = await listEvents();
       expect(events.status).toBe(200);
       const unregistered = events.body.items.filter(
-        (e: { type: string; payload: { source: string; destination: string }; ts: number }) =>
+        (e: {
+          type: string;
+          payload: { source: string; destination: string };
+          ts: number;
+        }) =>
           e.type === "pair.unregistered" &&
           e.payload.source === "EVTSRC" &&
           e.payload.destination === "EVTDST" &&
-          e.ts >= beforeTs
+          e.ts >= beforeTs,
       );
       expect(unregistered.length).toBeGreaterThanOrEqual(1);
     });
@@ -131,14 +135,14 @@ describe("pair read and unregister — 204 and 404 paths", () => {
     it("does NOT record pair.unregistered when pair is not registered (404 path)", async () => {
       const eventsBefore = await listEvents();
       const countBefore = eventsBefore.body.items.filter(
-        (e: { type: string }) => e.type === "pair.unregistered"
+        (e: { type: string }) => e.type === "pair.unregistered",
       ).length;
 
       await deletePair("NOEVT", "PAIR"); // 404 — no event
 
       const eventsAfter = await listEvents();
       const countAfter = eventsAfter.body.items.filter(
-        (e: { type: string }) => e.type === "pair.unregistered"
+        (e: { type: string }) => e.type === "pair.unregistered",
       ).length;
 
       expect(countAfter).toBe(countBefore);

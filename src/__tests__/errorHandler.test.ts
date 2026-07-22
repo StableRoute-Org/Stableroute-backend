@@ -1,9 +1,10 @@
 import request from "supertest";
-import { Request, Response, NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import app from "../index";
-import { type Request, type Response, type NextFunction } from "express";
-
-type RequestWithId = Request & { id?: string };
 
 describe("Error handler — 413 payload_too_large", () => {
   it("returns 413 when body exceeds 100 KiB", async () => {
@@ -150,22 +151,23 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
       next(new Error("deliberate test error"));
     });
     // Re-use the same error handler shape from index.ts
-    testApp.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-      const isProduction = process.env.NODE_ENV === "production";
-      const message =
-        isProduction
+    testApp.use(
+      (err: unknown, req: Request, res: Response, _next: NextFunction) => {
+        const isProduction = process.env.NODE_ENV === "production";
+        const message = isProduction
           ? "An unexpected error occurred"
           : err instanceof Error
             ? err.message
             : "Unexpected server error";
-      res.status(500).json({
-        error: "internal_error",
-        message,
-        method: req.method,
-        path: req.path,
-        requestId: (req as Request & { id?: string }).id,
-      });
-    });
+        res.status(500).json({
+          error: "internal_error",
+          message,
+          method: req.method,
+          path: req.path,
+          requestId: (req as Request & { id?: string }).id,
+        });
+      },
+    );
 
     const testRes = await request(testApp).get("/boom");
     expect(testRes.status).toBe(500);
@@ -179,21 +181,25 @@ describe("Error handler — 500 internal_error (generic branch)", () => {
   it("500 response body does not include a stack trace", async () => {
     const testApp = express();
     testApp.use((req: Request, res: Response, next: NextFunction) => {
-      (req as Request & { id?: string }).id = require("node:crypto").randomUUID();
+      (req as Request & { id?: string }).id =
+        require("node:crypto").randomUUID();
       next();
     });
     testApp.get("/boom", (req: Request, res: Response, next: NextFunction) => {
       next(new Error("oops"));
     });
-    testApp.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-      res.status(500).json({
-        error: "internal_error",
-        message: err instanceof Error ? err.message : "Unexpected server error",
-        method: req.method,
-        path: req.path,
-        requestId: (req as Request & { id?: string }).id,
-      });
-    });
+    testApp.use(
+      (err: unknown, req: Request, res: Response, _next: NextFunction) => {
+        res.status(500).json({
+          error: "internal_error",
+          message:
+            err instanceof Error ? err.message : "Unexpected server error",
+          method: req.method,
+          path: req.path,
+          requestId: (req as Request & { id?: string }).id,
+        });
+      },
+    );
 
     const testRes = await request(testApp).get("/boom");
     expect(testRes.body.stack).toBeUndefined();

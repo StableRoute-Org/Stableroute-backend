@@ -64,7 +64,12 @@ describe("stores module", () => {
     it("evicts oldest entry beyond EVENT_LOG_CAP", () => {
       // Fill to cap using a valid EventType cast for test scaffolding
       for (let i = 0; i < EVENT_LOG_CAP; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "pair.refreshed" as EventType, payload: {} });
+        eventLog.push({
+          id: `e${i}`,
+          ts: i,
+          type: "pair.refreshed" as EventType,
+          payload: {},
+        });
       }
       recordEvent("pair.unregistered", { n: 1 });
       expect(eventLog.length).toBe(EVENT_LOG_CAP);
@@ -124,7 +129,12 @@ describe("stores module", () => {
   describe("trimEventLog", () => {
     it("removes oldest entries to fit within the new cap", () => {
       for (let i = 0; i < 10; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: { i } });
+        eventLog.push({
+          id: `e${i}`,
+          ts: i,
+          type: "pair.registered" as EventType,
+          payload: { i },
+        });
       }
       trimEventLog(5);
       expect(eventLog.length).toBe(5);
@@ -135,14 +145,24 @@ describe("stores module", () => {
 
     it("is a no-op when log is already within the cap", () => {
       for (let i = 0; i < 3; i++) {
-        eventLog.push({ id: `e${i}`, ts: i, type: "pair.registered" as EventType, payload: {} });
+        eventLog.push({
+          id: `e${i}`,
+          ts: i,
+          type: "pair.registered" as EventType,
+          payload: {},
+        });
       }
       trimEventLog(10);
       expect(eventLog.length).toBe(3);
     });
 
     it("clears the entire log when cap is 0", () => {
-      eventLog.push({ id: "x", ts: 1, type: "pair.registered" as EventType, payload: {} });
+      eventLog.push({
+        id: "x",
+        ts: 1,
+        type: "pair.registered" as EventType,
+        payload: {},
+      });
       trimEventLog(0);
       expect(eventLog.length).toBe(0);
     });
@@ -163,7 +183,12 @@ describe("stores module", () => {
     });
 
     it("clears apiKeyStore", () => {
-      apiKeyStore.set("srk_abc0", { label: "test", createdAt: 1, salt: "s", hash: "h" });
+      apiKeyStore.set("srk_abc0", {
+        label: "test",
+        createdAt: 1,
+        salt: "s",
+        hash: "h",
+      });
       resetStores();
       expect(apiKeyStore.size).toBe(0);
     });

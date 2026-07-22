@@ -1,6 +1,7 @@
 import { writeFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CURRENT_SCHEMA_VERSION,
   getStoreAdapter,
   InMemoryStoreAdapter,
   JsonFileStoreAdapter,
@@ -301,6 +302,166 @@ describe("Persistence Layer", () => {
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
 
       jest.restoreAllMocks();
+    });
+  });
+
+  describe("Schema Versioning & Migration", () => {
+    it("exports CURRENT_SCHEMA_VERSION as 1", () => {
+      expect(CURRENT_SCHEMA_VERSION).toBe(1);
+    });
+
+    it("saved snapshot includes schemaVersion field", () => {
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      const snap = getSnapshot();
+      adapter.save(snap);
+
+      const raw = JSON.parse(readFileSync(TEST_SNAP_PATH, "utf8"));
+      expect(raw).toHaveProperty("schemaVersion", CURRENT_SCHEMA_VERSION);
+    });
+
+    it("loads a snapshot with matching schemaVersion", () => {
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      pairRegistry.add("BTC::USDT");
+      adapter.save(getSnapshot());
+
+      resetStores();
+      const loaded = adapter.load();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(loaded!.pairRegistry).toContain("BTC::USDT");
+    });
+
+    it("refuses snapshot with newer schemaVersion", () => {
+      const futureSnapshot = {
+        schemaVersion: CURRENT_SCHEMA_VERSION + 1,
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify(futureSnapshot), "utf8");
+
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      expect(adapter.load()).toBeNull();
+    });
+
+    it("auto-migrates a v0 snapshot (no schemaVersion) and backfills pairMeta defaults", () => {
+      const v0Snapshot = {
+        pairRegistry: ["USDC::EURC"],
+        pairMeta: [
+          [
+            "USDC::EURC",
+            { feeBps: 10, minAmount: "1", maxAmount: "100", liquidity: "1000" },
+          ],
+        ],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify(v0Snapshot), "utf8");
+
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      const loaded = adapter.load();
+      expect(loaded).not.toBeNull();
+      // Version should be bumped
+      expect(loaded!.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      // Backfilled fields
+      expect(loaded!.pairMeta[0][1].enabled).toBe(true);
+      expect(loaded!.pairMeta[0][1].rate).toBe("1.0");
+      // Original data preserved
+      expect(loaded!.pairMeta[0][1].feeBps).toBe(10);
+      expect(loaded!.pairRegistry).toContain("USDC::EURC");
+    });
+
+    it("v0 migration preserves existing enabled and rate when present", () => {
+      const v0Snapshot = {
+        pairRegistry: [],
+        pairMeta: [
+          [
+            "XRP::USDC",
+            {
+              feeBps: 5,
+              minAmount: "10",
+              maxAmount: "1000",
+              liquidity: "50000",
+              enabled: false,
+              rate: "0.5",
+            },
+          ],
+        ],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify(v0Snapshot), "utf8");
+
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      const loaded = adapter.load();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.pairMeta[0][1].enabled).toBe(false);
+      expect(loaded!.pairMeta[0][1].rate).toBe("0.5");
+    });
+
+    it("v0 migration with partial pairMeta fields backfills only missing", () => {
+      const v0Snapshot = {
+        pairRegistry: [],
+        pairMeta: [
+          [
+            "ETH::BTC",
+            {
+              feeBps: 25,
+              minAmount: "0.01",
+              maxAmount: "100",
+              liquidity: "200",
+              enabled: false,
+            },
+          ],
+          [
+            "BTC::USDT",
+            {
+              feeBps: 10,
+              minAmount: "0.001",
+              maxAmount: "50",
+              liquidity: "10000",
+              rate: "60000",
+            },
+          ],
+        ],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify(v0Snapshot), "utf8");
+
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      const loaded = adapter.load();
+      expect(loaded).not.toBeNull();
+
+      const meta0 = loaded!.pairMeta[0][1];
+      expect(meta0.enabled).toBe(false);
+      expect(meta0.rate).toBe("1.0"); // backfilled
+
+      const meta1 = loaded!.pairMeta[1][1];
+      expect(meta1.enabled).toBe(true); // backfilled
+      expect(meta1.rate).toBe("60000"); // preserved
+    });
+
+    it("v0 snapshot with no pairs migrates cleanly", () => {
+      const v0Snapshot = {
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify(v0Snapshot), "utf8");
+
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      const loaded = adapter.load();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(loaded!.pairMeta).toHaveLength(0);
     });
   });
 

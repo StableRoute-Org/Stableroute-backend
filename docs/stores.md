@@ -222,6 +222,51 @@ Keeping all stores in one file makes the reset trivial: a single function call i
 
 ---
 
+---
+
+## Schema Versioning
+
+Persisted snapshots carry a `schemaVersion` integer so that the loader can
+reject or upgrade files written by different builds of the backend.
+
+### How it works
+
+1. **Every save** writes `schemaVersion: CURRENT_SCHEMA_VERSION` (defined in
+   `src/persistence.ts`).
+
+2. **Every load** runs the parsed snapshot through a migration chain
+   (`migrateSnapshot` → `migrateV0ToV1` …) before handing it to
+   `hydrateFromSnapshot`:
+
+   - If the snapshot has no `schemaVersion` it is treated as **version 0**
+     and run through every migration step.
+   - If the snapshot's version is **higher** than `CURRENT_SCHEMA_VERSION`
+     the load is **refused** — the running build is too old to understand
+     the data.
+   - Otherwise each intermediate migration between the stored version and
+     `CURRENT_SCHEMA_VERSION` is applied in order.
+
+3. **Hydration** (`hydrateFromSnapshot` in `src/stores.ts`) still performs
+   its own runtime data-integrity checks (e.g. discarding API key records
+   that lack `salt`/`hash`). The schema-migration layer guarantees the
+   structural shape is up to date before those checks run.
+
+### Current version: 1
+
+Version 1 added the `schemaVersion` field itself and backfills the
+`PairMeta.enabled` (default `true`) and `PairMeta.rate` (default `"1.0"`)
+properties that were added to the `PairMeta` type after the initial release.
+
+### Adding a future migration
+
+1. Bump `CURRENT_SCHEMA_VERSION` to the next integer.
+2. Add a `migrateV{from}ToV{to}` function in `src/persistence.ts`.
+3. Wire it into the `migrateSnapshot` chain.
+4. Write tests in `src/__tests__/persistence.test.ts`.
+
+**Convention:** never remove fields — only add or backfill them — so that
+data survives across multiple upgrade steps.
+
 ## See Also
 
 - [`src/stores.ts`](../src/stores.ts) — authoritative source of truth for types and initial values.

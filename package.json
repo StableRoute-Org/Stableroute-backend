@@ -25,6 +25,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "helmet": "^8.3.0",
+    "iconv-lite": "^0.7.3",
     "pino": "^9.6.0"
   },
   "devDependencies": {

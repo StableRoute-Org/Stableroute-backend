@@ -157,6 +157,107 @@ describe("handleShutdown — forced drain timeout", () => {
 });
 
 // ---------------------------------------------------------------------------
+// createServer — PORT resolution
+// ---------------------------------------------------------------------------
+
+describe("createServer — PORT resolution", () => {
+  const ORIGINAL_PORT = process.env.PORT;
+  let listenSpy: jest.SpyInstance;
+
+  afterEach(() => {
+    listenSpy?.mockRestore();
+    if (ORIGINAL_PORT === undefined) {
+      delete process.env.PORT;
+    } else {
+      process.env.PORT = ORIGINAL_PORT;
+    }
+  });
+
+  it("uses default port 3001 when PORT is unset", () => {
+    delete process.env.PORT;
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    expect(listenSpy).toHaveBeenCalledWith(3001, expect.any(Function));
+  });
+
+  it("uses a numeric PORT from environment", () => {
+    process.env.PORT = "4000";
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    // process.env always returns strings
+    expect(listenSpy).toHaveBeenCalledWith("4000", expect.any(Function));
+  });
+
+  it("passes a non-numeric PORT string through to listen", () => {
+    process.env.PORT = "abc";
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    expect(listenSpy).toHaveBeenCalledWith("abc", expect.any(Function));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createServer — listen callback
+// ---------------------------------------------------------------------------
+
+describe("createServer — listen callback", () => {
+  it("logs the resolved port exactly once on listen", async () => {
+    const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+    const server = createServer(app, 0);
+    await new Promise<void>((resolve) => server.on("listening", resolve));
+
+    // createServer's callback logs the raw port parameter (0), not the
+    // OS-assigned ephemeral port from server.address().
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      "StableRoute backend listening on http://localhost:0",
+    );
+
+    logSpy.mockRestore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createServer — listen error
+// ---------------------------------------------------------------------------
+
+describe("createServer — listen error", () => {
+  it("logs and exits non-zero when binding fails with EADDRINUSE", async () => {
+    const exitSpy = jest
+      .spyOn(process, "exit")
+      .mockImplementation((_code) => undefined as never);
+    const consoleErrorSpy = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    // Start a server on an ephemeral port so we know a port that's in use.
+    const server1 = createServer(app, 0);
+    await new Promise<void>((resolve) => server1.on("listening", resolve));
+    const addr = server1.address() as { port: number };
+    const usedPort = addr.port;
+
+    // Try to start another server on the same port — triggers EADDRINUSE.
+    const server2 = createServer(app, usedPort);
+    await new Promise<void>((resolve) => server2.on("error", () => resolve()));
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    consoleErrorSpy.mockRestore();
+    exitSpy.mockRestore();
+    await new Promise<void>((resolve) => server1.close(() => resolve()));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Server startup (existing suite — preserved)
 // ---------------------------------------------------------------------------
 

@@ -161,16 +161,89 @@ Use this as the baseline when registering a new pair before its on-chain data ha
 
 ```
 Process start
-  └─ Module initialised → all stores empty / at defaults
+  ├─ Module initialised → all stores empty / at defaults
+  └─ If PERSIST_PATH is set → JsonFileStoreAdapter loads snapshot from disk
+       ├─ File exists & valid → hydrate stores from snapshot
+       └─ File missing / corrupt / wrong shape → fall back to empty stores
+           (console.warn / console.error emitted)
 
 Runtime
-  └─ Route handlers read and mutate stores directly
+  ├─ Route handlers read and mutate stores directly
+  └─ Mutations trigger debounced auto-save (100 ms debounce)
+       ├─ writeFileSync + renameSync → snapshot written atomically
+       └─ I/O failure → error logged, in-memory state unaffected
 
 Process exit / crash / restart
-  └─ All state lost (no persistence yet)
+  └─ Latest snapshot read from disk on next start (if PERSIST_PATH is set)
 ```
 
 There is no lazy-initialisation; state is ready the moment `src/stores.ts` is first imported.
+
+---
+
+## Persistence (Snapshot to Disk)
+
+The `PERSIST_PATH` environment variable controls whether store state is persisted
+to disk as a JSON snapshot between restarts.
+
+### Adapter selection
+
+| `PERSIST_PATH`            | Adapter used                    | Behaviour                              |
+|---------------------------|---------------------------------|----------------------------------------|
+| unset / empty / `""`      | `InMemoryStoreAdapter`          | No disk I/O; state lost on restart     |
+| set to a file path        | `JsonFileStoreAdapter`          | State snapshotted to JSON file on disk |
+
+The factory function `getStoreAdapter()` (from `src/persistence.ts`) checks
+`process.env.PERSIST_PATH` on every call and returns the matching adapter.
+
+```typescript
+import { getStoreAdapter } from "./persistence";
+const adapter = getStoreAdapter();
+```
+
+### Snapshot shape (`StoreSnapshot`)
+
+```typescript
+interface StoreSnapshot {
+  pairRegistry: string[];
+  pairMeta: [string, PairMeta][];
+  apiKeyStore: [string, ApiKeyRecord][];
+  webhookStore: [string, WebhookRecord][];
+  eventLog: AppEvent[];
+}
+```
+
+### Recovery from corrupted snapshots
+
+`JsonFileStoreAdapter.load()` returns `null` (triggering a clean empty-store
+fallback) when the snapshot file:
+
+- Does not exist.
+- Is empty.
+- Contains invalid (unparseable) JSON.
+- Contains valid JSON that does not match the `StoreSnapshot` shape — e.g. an
+  array, a plain object with wrong field names, or a truncated object.
+
+A console warning is emitted on shape mismatches; parse errors are logged via
+`console.error`.  The process **never** crashes due to a corrupted snapshot
+— it falls back to fresh empty stores.
+
+### I/O failure resilience
+
+`JsonFileStoreAdapter.save()` writes atomically via a temp-file-then-rename
+strategy.  If `writeFileSync` or `renameSync` throws (e.g. `EACCES` when the
+target directory is unwritable):
+
+1. The error is logged via `console.error`.
+2. Any leftover `.tmp` file is cleaned up (best-effort, failures during
+   cleanup are silently ignored).
+3. The in-memory store state is **never** affected — the process continues
+   serving from memory.
+
+This means the backend is resilient to transient filesystem issues and
+misconfigured snapshot paths.  The debounced auto-save mechanism in
+`triggerSnapshot()` catches any adapter rejection and logs it, preventing
+unhandled promise rejections.
 
 ---
 

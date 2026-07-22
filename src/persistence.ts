@@ -95,6 +95,7 @@ export class JsonFileStoreAdapter implements StoreAdapter {
 
   /**
    * Write the snapshot atomically (write to temp file with 0o600 permissions, then rename).
+   * I/O errors are logged and silently absorbed — the in-memory store is never affected.
    */
   save(snapshot: StoreSnapshot): void {
     const tempPath = `${this.filePath}.tmp`;
@@ -109,7 +110,6 @@ export class JsonFileStoreAdapter implements StoreAdapter {
           unlinkSync(tempPath);
         }
       } catch {}
-      throw err;
     }
   }
 

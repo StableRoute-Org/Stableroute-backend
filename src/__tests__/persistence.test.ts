@@ -65,6 +65,26 @@ describe("Persistence Layer", () => {
       const adapter = getStoreAdapter();
       expect(adapter).toBeInstanceOf(JsonFileStoreAdapter);
     });
+
+    it("returns InMemoryStoreAdapter when PERSIST_PATH is empty string", () => {
+      process.env.PERSIST_PATH = "";
+      const adapter = getStoreAdapter();
+      expect(adapter).toBeInstanceOf(InMemoryStoreAdapter);
+    });
+
+    it("switches between adapters when PERSIST_PATH is toggled", () => {
+      // Start without
+      delete process.env.PERSIST_PATH;
+      expect(getStoreAdapter()).toBeInstanceOf(InMemoryStoreAdapter);
+
+      // Enable
+      process.env.PERSIST_PATH = TEST_SNAP_PATH;
+      expect(getStoreAdapter()).toBeInstanceOf(JsonFileStoreAdapter);
+
+      // Disable again
+      delete process.env.PERSIST_PATH;
+      expect(getStoreAdapter()).toBeInstanceOf(InMemoryStoreAdapter);
+    });
   });
 
   describe("InMemoryStoreAdapter", () => {
@@ -103,7 +123,31 @@ describe("Persistence Layer", () => {
       expect(adapter.load()).toBeNull();
     });
 
-    it("saves and loads snapshot successfully (round-trip)", async () => {
+    it("returns null for empty file", () => {
+      writeFileSync(TEST_SNAP_PATH, "", "utf8");
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      expect(adapter.load()).toBeNull();
+    });
+
+    it("returns null for truncated JSON (partial object)", () => {
+      writeFileSync(TEST_SNAP_PATH, '{"pairRegistry":', "utf8");
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      expect(adapter.load()).toBeNull();
+    });
+
+    it("returns null for valid JSON array (wrong top-level type)", () => {
+      writeFileSync(TEST_SNAP_PATH, JSON.stringify([]), "utf8");
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      expect(adapter.load()).toBeNull();
+    });
+
+    it("returns null for null JSON literal", () => {
+      writeFileSync(TEST_SNAP_PATH, "null", "utf8");
+      const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+      expect(adapter.load()).toBeNull();
+    });
+
+    it("saves and loads snapshot successfully (round-trip)", async () => {     
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
 
       // Mutate stores to have some test data
@@ -301,6 +345,92 @@ describe("Persistence Layer", () => {
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
 
       jest.restoreAllMocks();
+    });
+
+    describe("File I/O failure recovery", () => {
+      it("absorbs EACCES on writeFileSync and does not throw", () => {
+        const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+        const snap = getSnapshot();
+
+        jest.spyOn(fs, "writeFileSync").mockImplementation(() => {
+          const err: NodeJS.ErrnoException = new Error("EACCES");
+          err.code = "EACCES";
+          throw err;
+        });
+
+        expect(() => adapter.save(snap)).not.toThrow();
+        expect(existsSync(TEST_SNAP_PATH)).toBe(false);
+
+        jest.restoreAllMocks();
+      });
+
+      it("absorbs EACCES on renameSync and does not throw", () => {
+        const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+        const snap = getSnapshot();
+
+        // Let writeFileSync succeed but make renameSync fail
+        jest.spyOn(fs, "renameSync").mockImplementation(() => {
+          const err: NodeJS.ErrnoException = new Error("EACCES");
+          err.code = "EACCES";
+          throw err;
+        });
+
+        expect(() => adapter.save(snap)).not.toThrow();
+        // Temp file should exist since rename failed; load should still work (no snapshot file)
+        expect(existsSync(TEST_SNAP_PATH)).toBe(false);
+
+        jest.restoreAllMocks();
+      });
+
+      it("cleans up temp file after write failure", () => {
+        const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+        const snap = getSnapshot();
+        const tempPath = `${TEST_SNAP_PATH}.tmp`;
+
+        jest.spyOn(fs, "writeFileSync").mockImplementation(() => {
+          const err: NodeJS.ErrnoException = new Error("EACCES");
+          err.code = "EACCES";
+          throw err;
+        });
+
+        adapter.save(snap);
+        expect(existsSync(tempPath)).toBe(false);
+
+        jest.restoreAllMocks();
+      });
+
+      it("adapter remains usable after write failure (load still works)", () => {
+        const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
+
+        // First write a valid snapshot
+        const validSnap = {
+          pairRegistry: ["USDC::EURC"],
+          pairMeta: [],
+          apiKeyStore: [],
+          webhookStore: [],
+          eventLog: [],
+        };
+        adapter.save(validSnap);
+        expect(existsSync(TEST_SNAP_PATH)).toBe(true);
+
+        // Now make the next save fail
+        jest.spyOn(fs, "writeFileSync").mockImplementation(() => {
+          const err: NodeJS.ErrnoException = new Error("EACCES");
+          err.code = "EACCES";
+          throw err;
+        });
+
+        // This save should be absorbed (no throw)
+        const secondSnap = getSnapshot();
+        expect(() => adapter.save(secondSnap)).not.toThrow();
+
+        // Load should return the last GOOD snapshot from disk
+        const loaded = adapter.load();
+        expect(loaded).not.toBeNull();
+        expect(loaded!.pairRegistry).toEqual(["USDC::EURC"]);
+
+        jest.restoreAllMocks();
+      });
     });
   });
 

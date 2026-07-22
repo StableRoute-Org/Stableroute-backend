@@ -136,7 +136,7 @@ describe("Persistence Layer", () => {
       });
 
       const snapBefore = getSnapshot();
-      adapter.save(snapBefore);
+      await adapter.save(snapBefore);
 
       // Verify file actually exists
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
@@ -280,21 +280,20 @@ describe("Persistence Layer", () => {
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       const tempPath = `${TEST_SNAP_PATH}.tmp`;
 
-      // Mock writeFileSync to assert temp file exists before rename completes
-      const originalWriteFileSync = fs.writeFileSync;
+      // Spy on openSync to capture when the temp file is opened for writing
+      const originalOpenSync = fs.openSync;
       let tempFileExistedDuringWrite = false;
 
-      jest
-        .spyOn(fs, "writeFileSync")
-        .mockImplementation((path, data, options) => {
-          originalWriteFileSync(path, data, options);
-          if (path === tempPath) {
-            tempFileExistedDuringWrite = existsSync(tempPath);
-          }
-        });
+      jest.spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        const fd = originalOpenSync(path, flags, mode);
+        if (path === tempPath) {
+          tempFileExistedDuringWrite = existsSync(tempPath);
+        }
+        return fd;
+      });
 
       const snap = getSnapshot();
-      adapter.save(snap);
+      await adapter.save(snap);
 
       expect(tempFileExistedDuringWrite).toBe(true);
       expect(existsSync(tempPath)).toBe(false); // Cleaned up/renamed after save

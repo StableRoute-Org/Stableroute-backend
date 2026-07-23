@@ -5,7 +5,10 @@ import {
   registerSignalHandlers,
   handleShutdown,
   parseGraceMs,
-  parseFlushTimeoutMs,
+  parseTimeoutMs,
+  parseKeepAliveTimeout,
+  parseHeadersTimeout,
+  parseRequestTimeout,
   start,
   type ShutdownDeps,
 } from "../server";
@@ -477,5 +480,227 @@ describe("Server startup", () => {
     exitSpy.mockRestore();
 
     jest.restoreAllMocks();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseTimeoutMs
+// ---------------------------------------------------------------------------
+
+describe("parseTimeoutMs", () => {
+  const ENV_KEY = "__TEST_TIMEOUT__";
+
+  afterEach(() => {
+    delete process.env[ENV_KEY];
+  });
+
+  it("returns the default when the env var is unset", () => {
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the default when the env var is empty", () => {
+    process.env[ENV_KEY] = "";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the default when the env var is whitespace", () => {
+    process.env[ENV_KEY] = "  ";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the default for a non-numeric string", () => {
+    process.env[ENV_KEY] = "banana";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the default for zero", () => {
+    process.env[ENV_KEY] = "0";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the default for a negative value", () => {
+    process.env[ENV_KEY] = "-500";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+
+  it("returns the parsed value for a valid positive integer", () => {
+    process.env[ENV_KEY] = "30000";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(30_000);
+  });
+
+  it("floors a fractional value to an integer", () => {
+    process.env[ENV_KEY] = "7500.9";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(7_500);
+  });
+
+  it("returns Infinity when parsed Infinity is not finite", () => {
+    process.env[ENV_KEY] = "Infinity";
+    expect(parseTimeoutMs(ENV_KEY, 5_000)).toBe(5_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseKeepAliveTimeout
+// ---------------------------------------------------------------------------
+
+describe("parseKeepAliveTimeout", () => {
+  const DEFAULT = 5_000;
+
+  afterEach(() => {
+    delete process.env.KEEP_ALIVE_TIMEOUT_MS;
+  });
+
+  it("returns the default when KEEP_ALIVE_TIMEOUT_MS is unset", () => {
+    expect(parseKeepAliveTimeout()).toBe(DEFAULT);
+  });
+
+  it("reads from KEEP_ALIVE_TIMEOUT_MS", () => {
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "10000";
+    expect(parseKeepAliveTimeout()).toBe(10_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseHeadersTimeout
+// ---------------------------------------------------------------------------
+
+describe("parseHeadersTimeout", () => {
+  const DEFAULT = 61_000;
+
+  afterEach(() => {
+    delete process.env.HEADERS_TIMEOUT_MS;
+  });
+
+  it("returns the default when HEADERS_TIMEOUT_MS is unset", () => {
+    expect(parseHeadersTimeout()).toBe(DEFAULT);
+  });
+
+  it("reads from HEADERS_TIMEOUT_MS", () => {
+    process.env.HEADERS_TIMEOUT_MS = "120000";
+    expect(parseHeadersTimeout()).toBe(120_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRequestTimeout
+// ---------------------------------------------------------------------------
+
+describe("parseRequestTimeout", () => {
+  const DEFAULT = 300_000;
+
+  afterEach(() => {
+    delete process.env.REQUEST_TIMEOUT_MS;
+  });
+
+  it("returns the default when REQUEST_TIMEOUT_MS is unset", () => {
+    expect(parseRequestTimeout()).toBe(DEFAULT);
+  });
+
+  it("reads from REQUEST_TIMEOUT_MS", () => {
+    process.env.REQUEST_TIMEOUT_MS = "120000";
+    expect(parseRequestTimeout()).toBe(120_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createServer – HTTP socket timeouts
+// ---------------------------------------------------------------------------
+
+describe("createServer — HTTP socket timeouts", () => {
+  let server: http.Server;
+
+  afterEach(async () => {
+    if (server && server.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    delete process.env.KEEP_ALIVE_TIMEOUT_MS;
+    delete process.env.HEADERS_TIMEOUT_MS;
+    delete process.env.REQUEST_TIMEOUT_MS;
+  });
+
+  it("applies default timeout values when no env vars are set", () => {
+    server = createServer(app, 0);
+    expect(server.keepAliveTimeout).toBe(5_000);
+    expect(server.headersTimeout).toBe(61_000);
+    expect(server.requestTimeout).toBe(300_000);
+  });
+
+  it("reads custom timeout values from environment variables", () => {
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "10000";
+    process.env.HEADERS_TIMEOUT_MS = "20000";
+    process.env.REQUEST_TIMEOUT_MS = "30000";
+
+    server = createServer(app, 0);
+    expect(server.keepAliveTimeout).toBe(10_000);
+    expect(server.headersTimeout).toBe(20_000);
+    expect(server.requestTimeout).toBe(30_000);
+  });
+
+  it("falls back to defaults for individual unset env vars", () => {
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "10000";
+    // HEADERS_TIMEOUT_MS and REQUEST_TIMEOUT_MS left unset
+
+    server = createServer(app, 0);
+    expect(server.keepAliveTimeout).toBe(10_000);
+    expect(server.headersTimeout).toBe(61_000);
+    expect(server.requestTimeout).toBe(300_000);
+  });
+
+  it("does not warn when headersTimeout exceeds keepAliveTimeout", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "5000";
+    process.env.HEADERS_TIMEOUT_MS = "61000";
+
+    server = createServer(app, 0);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it("warns when headersTimeout equals keepAliveTimeout", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "10000";
+    process.env.HEADERS_TIMEOUT_MS = "10000";
+
+    server = createServer(app, 0);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "HEADERS_TIMEOUT_MS (10000) should exceed " +
+      "KEEP_ALIVE_TIMEOUT_MS (10000) to avoid " +
+      "spurious connection resets behind a load balancer.",
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("warns when headersTimeout is less than keepAliveTimeout", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    process.env.KEEP_ALIVE_TIMEOUT_MS = "60000";
+    process.env.HEADERS_TIMEOUT_MS = "30000";
+
+    server = createServer(app, 0);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "HEADERS_TIMEOUT_MS (30000) should exceed " +
+      "KEEP_ALIVE_TIMEOUT_MS (60000) to avoid " +
+      "spurious connection resets behind a load balancer.",
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("creates a server that still responds to requests", async () => {
+    server = createServer(app, 0);
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.on("listening", resolve));
+    }
+
+    const addr = server.address();
+    const port = addr && typeof addr === "object" ? addr.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(200);
   });
 });

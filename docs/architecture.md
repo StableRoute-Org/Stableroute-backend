@@ -9,7 +9,8 @@ This document describes the internal architecture of the StableRoute backend, co
 3. [Request Lifecycle Diagram](#request-lifecycle-diagram)
 4. [Error Short-Circuits](#error-short-circuits)
 5. [Canonical Error Envelope](#canonical-error-envelope)
-6. [Why Ordering Matters](#why-ordering-matters)
+6. [HTTP Socket Lifecycle](#http-socket-lifecycle)
+7. [Why Ordering Matters](#why-ordering-matters)
 
 ---
 
@@ -153,35 +154,51 @@ Clients can branch on `error` for programmatic handling and log `requestId` for 
 
 ---
 
-## Shutdown Lifecycle
+## HTTP Socket Lifecycle
 
-The `src/server.ts` module orchestrates a coordinated shut-down when the process receives `SIGTERM` or `SIGINT`. The sequence has three phases:
+The Node.js `http.Server` exposes several socket-level timeout tunables that
+govern how long the server waits for certain I/O events before closing the
+underlying TCP connection. These are set in `src/server.ts` from environment
+variables and are independent of the Express-level per-request timeout guard
+described in [Middleware Chain → Layer 3](#layer-details).
 
-| Phase | What happens | Exit code on failure |
-|-------|-------------|----------------------|
-| **1. HTTP drain** | `server.close()` stops accepting new connections and waits for in-flight requests to finish. A safety timer (`.unref()`'d) forces exit 1 if draining hangs longer than `SHUTDOWN_GRACE_MS` (default 10 s). | 1 |
-| **2. Adapter flush** | After a clean HTTP drain, the persistence snapshot is written via `saveSnapshotImmediately()`. A distinct timer (`.unref()`'d) bounds this flush to `FLUSH_TIMEOUT_MS` (default 5 s). The forced-exit timer from phase 1 is cleared so the flush has its own budget. | 0 (non-fatal) |
-| **3. Exit** | `process.exit(0)` is called. Flush errors or timeouts never escalate to a non-zero exit — persistence is best-effort at shutdown, matching the "fail open" pattern used by auto-save throughout the app. | — |
+| Env var | Default | Property | Purpose |
+|---------|---------|----------|---------|
+| `KEEP_ALIVE_TIMEOUT_MS` | 5 000 | `server.keepAliveTimeout` | Milliseconds to keep an idle socket open after the last response. Node.js default. |
+| `HEADERS_TIMEOUT_MS` | 61 000 | `server.headersTimeout` | Milliseconds to wait for complete HTTP request headers after the socket is established or after a keep-alive connection reuses the socket. |
+| `REQUEST_TIMEOUT_MS` | 300 000 | `server.requestTimeout` | Milliseconds to wait for the complete request body after headers have been fully received. Set `0` to disable. |
 
-### Grace & flush timeout configuration
+### Interaction with a fronting load balancer
 
-Both timeouts are read from environment variables at signal-registration time (not per-signal). Invalid or missing values fall back to the defaults.
+When a load balancer (e.g. AWS NLB/ALB, HAProxy, nginx) terminates TLS and
+proxies HTTP to this server, three rules must hold:
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `SHUTDOWN_GRACE_MS` | `10_000` | Max wall-clock time allowed for `server.close` to drain. |
-| `FLUSH_TIMEOUT_MS` | `5_000` | Max wall-clock time allowed for the adapter flush to complete. |
+1. **LB idle timeout > server `keepAliveTimeout`**  
+   The server should close idle sockets *before* the load balancer does. If the
+   LB timeout is shorter, the LB will send a request down a connection that the
+   server already considers closed, causing a 502 or connection reset.
 
-### Dependency injection for tests
+2. **`headersTimeout` > `keepAliveTimeout`**  
+   Node.js applies `headersTimeout` to every socket event, including the wait
+   for a new request on a keep-alive connection. If `headersTimeout ≤
+   keepAliveTimeout`, the server can close the socket while the load balancer
+   is still holding it open for the next request, producing the same reset
+   behaviour described above. The default of 61 000 (61 s) safely exceeds the
+   keep-alive default of 5 000 (5 s). A warning is emitted at startup when
+   this constraint is violated.
 
-`handleShutdown` accepts a `ShutdownDeps` object that injects `exit`, `setTimeout`, `flushAdapter`, `graceMs`, and `flushTimeoutMs`. Tests can provide controlled fakes:
+3. **`requestTimeout` is defensive**  
+   It prevents a single slow client from holding a socket indefinitely after
+   headers are received. The default of 300 000 (5 min) is generous; consider
+   lowering it if all clients are trusted (e.g. in a VPC).
 
-- `flushAdapter` — async function that the test can make resolve, reject, or hang.
-- `flushTimeoutMs` — controls how long `handleShutdown` waits before timing out the flush.
-
-The production wiring in `registerSignalHandlers` passes `saveSnapshotImmediately` as the flush adapter.
+A correctly configured deployment ensures that the server's keep-alive timeout
+is the shortest value in the chain: `server.keepAliveTimeout < LB idle timeout`
+and `server.headersTimeout > server.keepAliveTimeout`.
 
 ---
+
+## Why Ordering Matters
 
 The registration order is deliberate and each position choice has a reason:
 

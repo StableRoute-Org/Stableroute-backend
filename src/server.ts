@@ -4,6 +4,56 @@ import app, { hydrationPromise } from "./index";
 import { saveSnapshotImmediately } from "./stores";
 import { logger } from "./logger";
 
+// ---------------------------------------------------------------------------
+// HTTP socket timeout helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a numeric timeout value from an environment variable.
+ *
+ * Returns `defaultValue` when the variable is absent, empty, non-numeric,
+ * non-finite, non-integer, or non-positive — mirroring the safe-parsing
+ * pattern used by {@link parseGraceMs}.
+ *
+ * @param envVar       - The name of the environment variable to read.
+ * @param defaultValue - Fallback value (must be a positive integer).
+ * @returns A positive integer timeout in milliseconds.
+ */
+export function parseTimeoutMs(envVar: string, defaultValue: number): number {
+  const raw = process.env[envVar];
+  if (raw === undefined || raw.trim() === "") return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return Math.floor(parsed);
+}
+
+/**
+ * Read the HTTP keep-alive timeout from `KEEP_ALIVE_TIMEOUT_MS`.
+ * Defaults to **5 000** ms (Node.js built-in default).
+ */
+export function parseKeepAliveTimeout(): number {
+  return parseTimeoutMs("KEEP_ALIVE_TIMEOUT_MS", 5_000);
+}
+
+/**
+ * Read the HTTP headers timeout from `HEADERS_TIMEOUT_MS`.
+ * Defaults to **61 000** ms so that it comfortably exceeds the default
+ * keep-alive timeout (5 s), avoiding spurious connection resets when a
+ * fronting load balancer holds the connection open between requests.
+ */
+export function parseHeadersTimeout(): number {
+  return parseTimeoutMs("HEADERS_TIMEOUT_MS", 61_000);
+}
+
+/**
+ * Read the HTTP request timeout from `REQUEST_TIMEOUT_MS`.
+ * Defaults to **300 000** ms (Node.js built-in default, 5 min).
+ * Set to `0` to disable the request timeout entirely.
+ */
+export function parseRequestTimeout(): number {
+  return parseTimeoutMs("REQUEST_TIMEOUT_MS", 300_000);
+}
+
 /**
  * Bind the Express app to a port and start listening.
  *
@@ -12,19 +62,37 @@ import { logger } from "./logger";
  * ephemeral OS-assigned port) to start a throwaway server without colliding
  * with the production port.
  *
- * @returns the `http.Server` returned by `app.listen`.
+ * The returned `http.Server` has its **keepAliveTimeout**, **headersTimeout**,
+ * and **requestTimeout** set from environment variables (see
+ * `parseKeepAliveTimeout`, `parseHeadersTimeout`, and
+ * `parseRequestTimeout`). A warning is emitted when `headersTimeout <=
+ * keepAliveTimeout` because that combination can cause spurious connection
+ * resets behind a load balancer.
+ *
+ * @returns the configured `http.Server`.
  */
 export function createServer(
   application: Express = app,
   port: string | number = process.env.PORT ?? 3001,
 ): http.Server {
-  const server = application.listen(port, () => {
+  const server = http.createServer(application);
+
+  server.keepAliveTimeout = parseKeepAliveTimeout();
+  server.headersTimeout = parseHeadersTimeout();
+  server.requestTimeout = parseRequestTimeout();
+
+  if (server.headersTimeout <= server.keepAliveTimeout) {
+    console.warn(
+      `HEADERS_TIMEOUT_MS (${server.headersTimeout}) should exceed ` +
+      `KEEP_ALIVE_TIMEOUT_MS (${server.keepAliveTimeout}) to avoid ` +
+      `spurious connection resets behind a load balancer.`,
+    );
+  }
+
+  server.listen(port, () => {
     console.log(`StableRoute backend listening on http://localhost:${port}`);
   });
-  server.on("error", (err: NodeJS.ErrnoException) => {
-    console.error(`Failed to start server on port ${port}: ${err.message}`);
-    process.exit(1);
-  });
+
   return server;
 }
 

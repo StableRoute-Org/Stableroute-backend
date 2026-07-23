@@ -1,10 +1,6 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import express, {
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { logger } from "./logger";
@@ -898,6 +894,15 @@ app.get("/api/v1/version", (_req: Request, res: Response) => {
     buildTime: process.env.BUILD_TIME ?? "unknown",
     node: process.version,
   });
+});
+
+app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
+  setPaused(true);
+  res.json({ paused });
+});
+app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
+  setPaused(false);
+  res.json({ paused });
 });
 
 app.post("/api/v1/admin/pause", requireAdmin, (_req: Request, res: Response) => {

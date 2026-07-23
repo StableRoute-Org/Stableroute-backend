@@ -222,45 +222,50 @@ Keeping all stores in one file makes the reset trivial: a single function call i
 
 ---
 
-## File Persistence (Atomic Writes)
+---
 
-Both file-backed adapters — [`JsonFileStoreAdapter`](../src/persistence.ts) and [`JsonFileAdapter`](../src/store/adapter.ts) — guard against
-corruption from crashes mid-write using the following strategy:
+## Schema Versioning
 
-### Atomic write protocol
+Persisted snapshots carry a `schemaVersion` integer so that the loader can
+reject or upgrade files written by different builds of the backend.
 
-1. Serialise the full state to JSON.
-2. Write to a **sibling temp file** (same directory, with a `.tmp` suffix).
-3. **`fsync`** the temp file to ensure the data is on disk.
-4. **`rename`** the temp file over the target path — an atomic filesystem
-   operation on all major platforms (Linux, macOS, Windows NTFS).
+### How it works
 
-If the process crashes at any point before the rename, the original target file
-remains untouched. A leftover `.tmp` file is harmless and is overwritten on the
-next successful write.
+1. **Every save** writes `schemaVersion: CURRENT_SCHEMA_VERSION` (defined in
+   `src/persistence.ts`).
 
-### Write queue (`JsonFileStoreAdapter`)
+2. **Every load** runs the parsed snapshot through a migration chain
+   (`migrateSnapshot` → `migrateV0ToV1` …) before handing it to
+   `hydrateFromSnapshot`:
 
-Concurrent save requests are serialised through a simple in-process promise
-chain. Each call to `save()` is enqueued behind the previous one, guaranteeing
-that writes are strictly ordered and do not interleave. This prevents a fast
-writer from racing ahead and overwriting a slower writer's temp file.
+   - If the snapshot has no `schemaVersion` it is treated as **version 0**
+     and run through every migration step.
+   - If the snapshot's version is **higher** than `CURRENT_SCHEMA_VERSION`
+     the load is **refused** — the running build is too old to understand
+     the data.
+   - Otherwise each intermediate migration between the stored version and
+     `CURRENT_SCHEMA_VERSION` is applied in order.
 
-`JsonFileAdapter` runs synchronously on the main thread (every mutation calls
-`_save()` inline), so concurrent writes cannot occur without explicit
-asynchrony.  No queue is necessary.
+3. **Hydration** (`hydrateFromSnapshot` in `src/stores.ts`) still performs
+   its own runtime data-integrity checks (e.g. discarding API key records
+   that lack `salt`/`hash`). The schema-migration layer guarantees the
+   structural shape is up to date before those checks run.
 
-### Crash recovery on load
+### Current version: 1
 
-Both adapters handle malformed JSON gracefully:
+Version 1 added the `schemaVersion` field itself and backfills the
+`PairMeta.enabled` (default `true`) and `PairMeta.rate` (default `"1.0"`)
+properties that were added to the `PairMeta` type after the initial release.
 
-| Adapter | Behaviour |
-|---------|-----------|
-| `JsonFileStoreAdapter` | Returns `null`; caller triggers a fresh start. |
-| `JsonFileAdapter` | Returns an empty `PersistedStore`; all collections start empty. |
+### Adding a future migration
 
-In both cases a **warning is logged** with the file path and the underlying
-parse error so operators can investigate the corruption.
+1. Bump `CURRENT_SCHEMA_VERSION` to the next integer.
+2. Add a `migrateV{from}ToV{to}` function in `src/persistence.ts`.
+3. Wire it into the `migrateSnapshot` chain.
+4. Write tests in `src/__tests__/persistence.test.ts`.
+
+**Convention:** never remove fields — only add or backfill them — so that
+data survives across multiple upgrade steps.
 
 ## See Also
 

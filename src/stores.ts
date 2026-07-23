@@ -16,7 +16,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { loadPausedState, savePausedState } from "./pauseState";
-import { getStoreAdapter } from "./persistence";
+import { getStoreAdapter, CURRENT_SCHEMA_VERSION } from "./persistence";
 import { logger } from "./logger";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
@@ -387,6 +387,7 @@ let saveTimeout: NodeJS.Timeout | null = null;
  * Serialize the current store state into a StoreSnapshot.
  */
 export const getSnapshot = () => ({
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   pairRegistry: Array.from(pairRegistry),
   pairMeta: Array.from(pairMeta.entries()),
   apiKeyStore: Array.from(apiKeyStore.entries()),

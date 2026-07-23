@@ -38,9 +38,17 @@ describe("Persistence Layer", () => {
         unlinkSync(tempFile);
       } catch {}
     }
+
+    // Suppress console.error and console.warn for error-handling tests
+    // These tests intentionally trigger errors to verify error handling works
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    jest.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    // Restore console mocks
+    jest.restoreAllMocks();
+
     delete process.env.PERSIST_PATH;
     if (existsSync(TEST_SNAP_PATH)) {
       try {

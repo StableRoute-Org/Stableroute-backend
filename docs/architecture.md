@@ -153,7 +153,35 @@ Clients can branch on `error` for programmatic handling and log `requestId` for 
 
 ---
 
-## Why Ordering Matters
+## Shutdown Lifecycle
+
+The `src/server.ts` module orchestrates a coordinated shut-down when the process receives `SIGTERM` or `SIGINT`. The sequence has three phases:
+
+| Phase | What happens | Exit code on failure |
+|-------|-------------|----------------------|
+| **1. HTTP drain** | `server.close()` stops accepting new connections and waits for in-flight requests to finish. A safety timer (`.unref()`'d) forces exit 1 if draining hangs longer than `SHUTDOWN_GRACE_MS` (default 10 s). | 1 |
+| **2. Adapter flush** | After a clean HTTP drain, the persistence snapshot is written via `saveSnapshotImmediately()`. A distinct timer (`.unref()`'d) bounds this flush to `FLUSH_TIMEOUT_MS` (default 5 s). The forced-exit timer from phase 1 is cleared so the flush has its own budget. | 0 (non-fatal) |
+| **3. Exit** | `process.exit(0)` is called. Flush errors or timeouts never escalate to a non-zero exit — persistence is best-effort at shutdown, matching the "fail open" pattern used by auto-save throughout the app. | — |
+
+### Grace & flush timeout configuration
+
+Both timeouts are read from environment variables at signal-registration time (not per-signal). Invalid or missing values fall back to the defaults.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SHUTDOWN_GRACE_MS` | `10_000` | Max wall-clock time allowed for `server.close` to drain. |
+| `FLUSH_TIMEOUT_MS` | `5_000` | Max wall-clock time allowed for the adapter flush to complete. |
+
+### Dependency injection for tests
+
+`handleShutdown` accepts a `ShutdownDeps` object that injects `exit`, `setTimeout`, `flushAdapter`, `graceMs`, and `flushTimeoutMs`. Tests can provide controlled fakes:
+
+- `flushAdapter` — async function that the test can make resolve, reject, or hang.
+- `flushTimeoutMs` — controls how long `handleShutdown` waits before timing out the flush.
+
+The production wiring in `registerSignalHandlers` passes `saveSnapshotImmediately` as the flush adapter.
+
+---
 
 The registration order is deliberate and each position choice has a reason:
 

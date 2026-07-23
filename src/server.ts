@@ -1,6 +1,8 @@
 import http from "node:http";
 import type { Express } from "express";
 import app, { hydrationPromise } from "./index";
+import { saveSnapshotImmediately } from "./stores";
+import { logger } from "./logger";
 
 /**
  * Bind the Express app to a port and start listening.
@@ -38,6 +40,25 @@ export function parseGraceMs(): number {
   return Math.floor(parsed);
 }
 
+/** Default timeout in milliseconds for the adapter flush during shutdown. */
+const DEFAULT_FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * Parse the adapter flush timeout from an environment variable.
+ *
+ * Reads `FLUSH_TIMEOUT_MS`. If the value is absent, non-numeric, not a
+ * finite integer, or non-positive the default of `5_000` ms is returned.
+ *
+ * @returns flush timeout in milliseconds (positive integer, default 5 000).
+ */
+export function parseFlushTimeoutMs(): number {
+  const raw = process.env.FLUSH_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FLUSH_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_FLUSH_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
+
 /** Injectable dependencies for {@link handleShutdown}. */
 export interface ShutdownDeps {
   /** Called instead of `process.exit` so tests can intercept exit codes. */
@@ -46,6 +67,17 @@ export interface ShutdownDeps {
   setTimeout: (fn: () => void, ms: number) => NodeJS.Timeout;
   /** Grace period in milliseconds before the forced-exit timer fires. */
   graceMs?: number;
+  /**
+   * Optional async flush of the persistence adapter before exit.
+   * Called after the HTTP server drains and before process.exit.
+   * A failure or timeout is logged but never prevents a clean (exit 0) shutdown.
+   */
+  flushAdapter?: () => Promise<void>;
+  /**
+   * Timeout in milliseconds for `flushAdapter`. Defaults to {@link DEFAULT_FLUSH_TIMEOUT_MS}.
+   * Ignored when `flushAdapter` is not provided.
+   */
+  flushTimeoutMs?: number;
 }
 
 /**
@@ -55,6 +87,10 @@ export interface ShutdownDeps {
  * - Exits **0** when `server.close` completes without error (clean drain).
  * - Exits **1** when `server.close` calls back with an error.
  * - Exits **1** when the drain hangs longer than `graceMs` milliseconds.
+ *
+ * After a successful HTTP drain, the optional {@link ShutdownDeps.flushAdapter}
+ * is invoked with a bounded timeout. Flush failures or timeouts are logged but
+ * never escalate to a non-zero exit — persistence is best-effort at shutdown.
  *
  * The forced-exit timer is `.unref()`'d so it never keeps the event loop
  * alive on its own in production.
@@ -71,22 +107,45 @@ export function handleShutdown(
   const graceMs = deps.graceMs ?? parseGraceMs();
   console.log(`Received ${signal}, draining…`);
 
+  const timer = deps.setTimeout(() => {
+    console.error(`Forced exit after ${graceMs}ms drain timeout`);
+    deps.exit(1);
+  }, graceMs);
+  if (typeof timer.unref === "function") timer.unref();
+
   server.close((err) => {
+    // Clear the forced-exit timer now that server.close resolved.
+    clearTimeout(timer);
+
     if (err) {
       console.error("server.close error:", err);
       deps.exit(1);
       return;
     }
-    deps.exit(0);
+
+    // Flush the persistence adapter after a clean HTTP drain.
+    if (deps.flushAdapter) {
+      const flushTimeoutMs = deps.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        const flushTimer = deps.setTimeout(() => {
+          reject(new Error(`adapter flush timed out after ${flushTimeoutMs}ms`));
+        }, flushTimeoutMs);
+        if (typeof flushTimer.unref === "function") flushTimer.unref();
+      });
+
+      Promise.race([deps.flushAdapter(), timeoutPromise])
+        .then(() => {
+          logger.info("adapter flushed successfully during shutdown");
+          deps.exit(0);
+        })
+        .catch((flushErr) => {
+          logger.error({ err: flushErr }, "adapter flush failed during shutdown");
+          deps.exit(0);
+        });
+    } else {
+      deps.exit(0);
+    }
   });
-
-  const timer = deps.setTimeout(() => {
-    console.error(`Forced exit after ${graceMs}ms drain timeout`);
-    deps.exit(1);
-  }, graceMs);
-
-  // In production the timer must not keep the process alive on its own.
-  if (typeof timer.unref === "function") timer.unref();
 }
 
 /**
@@ -102,6 +161,10 @@ export function registerSignalHandlers(server: http.Server): void {
   const productionDeps: ShutdownDeps = {
     exit: (code) => process.exit(code),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
+    flushAdapter: async () => {
+      await saveSnapshotImmediately();
+    },
+    flushTimeoutMs: parseFlushTimeoutMs(),
   };
   process.on("SIGTERM", () =>
     handleShutdown(server, "SIGTERM", productionDeps),

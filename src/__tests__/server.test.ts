@@ -5,6 +5,7 @@ import {
   registerSignalHandlers,
   handleShutdown,
   parseGraceMs,
+  parseFlushTimeoutMs,
   start,
   type ShutdownDeps,
 } from "../server";
@@ -29,7 +30,10 @@ function makeFakeServer() {
 }
 
 /** Build injectable deps for `handleShutdown` that never really exit or wait. */
-function makeDeps(graceMs = 10_000) {
+function makeDeps(
+  graceMs = 10_000,
+  overrides?: Partial<ShutdownDeps>,
+) {
   const exitCodes: number[] = [];
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const deps: ShutdownDeps = {
@@ -40,6 +44,7 @@ function makeDeps(graceMs = 10_000) {
       return { unref: () => {} } as unknown as NodeJS.Timeout;
     },
     graceMs,
+    ...overrides,
   };
   return { deps, exitCodes, timers };
 }
@@ -87,6 +92,52 @@ describe("parseGraceMs", () => {
   it("falls back to 10 000 for an empty string", () => {
     process.env.SHUTDOWN_GRACE_MS = "  ";
     expect(parseGraceMs()).toBe(10_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseFlushTimeoutMs
+// ---------------------------------------------------------------------------
+
+describe("parseFlushTimeoutMs", () => {
+  const originalEnv = process.env.FLUSH_TIMEOUT_MS;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.FLUSH_TIMEOUT_MS;
+    } else {
+      process.env.FLUSH_TIMEOUT_MS = originalEnv;
+    }
+  });
+
+  it("returns 5 000 when FLUSH_TIMEOUT_MS is unset", () => {
+    delete process.env.FLUSH_TIMEOUT_MS;
+    expect(parseFlushTimeoutMs()).toBe(5_000);
+  });
+
+  it("returns the parsed value for a valid positive integer string", () => {
+    process.env.FLUSH_TIMEOUT_MS = "3000";
+    expect(parseFlushTimeoutMs()).toBe(3_000);
+  });
+
+  it("falls back to 5 000 for a non-numeric string", () => {
+    process.env.FLUSH_TIMEOUT_MS = "banana";
+    expect(parseFlushTimeoutMs()).toBe(5_000);
+  });
+
+  it("falls back to 5 000 for zero", () => {
+    process.env.FLUSH_TIMEOUT_MS = "0";
+    expect(parseFlushTimeoutMs()).toBe(5_000);
+  });
+
+  it("falls back to 5 000 for a negative value", () => {
+    process.env.FLUSH_TIMEOUT_MS = "-500";
+    expect(parseFlushTimeoutMs()).toBe(5_000);
+  });
+
+  it("falls back to 5 000 for an empty string", () => {
+    process.env.FLUSH_TIMEOUT_MS = "  ";
+    expect(parseFlushTimeoutMs()).toBe(5_000);
   });
 });
 
@@ -153,6 +204,105 @@ describe("handleShutdown — forced drain timeout", () => {
     timers[0].fn();
 
     expect(exitCodes).toEqual([1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleShutdown — adapter flush
+// ---------------------------------------------------------------------------
+
+describe("handleShutdown — adapter flush", () => {
+  it("calls flushAdapter after successful server.close and exits 0", async () => {
+    const server = makeFakeServer();
+    const flushAdapter = jest.fn().mockResolvedValue(undefined);
+    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
+
+    handleShutdown(server, "SIGTERM", deps);
+
+    server.triggerClose();
+    // Wait for microtasks so the Promise.race settlement runs.
+    await new Promise(process.nextTick);
+
+    expect(flushAdapter).toHaveBeenCalledTimes(1);
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it("does not call flushAdapter when server.close errors", () => {
+    const server = makeFakeServer();
+    const flushAdapter = jest.fn().mockResolvedValue(undefined);
+    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose(new Error("not listening"));
+
+    expect(flushAdapter).not.toHaveBeenCalled();
+    expect(exitCodes).toEqual([1]);
+  });
+
+  it("exits 0 when flushAdapter rejects (non-fatal)", async () => {
+    const server = makeFakeServer();
+    const flushAdapter = jest.fn().mockRejectedValue(new Error("disk full"));
+    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+    // Wait for microtasks so the rejected Promise.race settles.
+    await new Promise(process.nextTick);
+
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it("exits 0 when flushAdapter times out (non-fatal)", async () => {
+    const server = makeFakeServer();
+    // A promise that never settles — simulates a hung flush.
+    const flushAdapter = jest.fn().mockReturnValue(new Promise(() => {}));
+    const { deps, exitCodes, timers } = makeDeps(10_000, {
+      flushAdapter,
+      flushTimeoutMs: 200,
+    });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+    // Let microtasks settle so the race begins.
+    await new Promise(process.nextTick);
+
+    expect(flushAdapter).toHaveBeenCalledTimes(1);
+    // No exit yet — flush is still pending.
+    expect(exitCodes).toEqual([]);
+
+    // Fire the flush timeout timer manually (it was created via deps.setTimeout).
+    expect(timers.length >= 2).toBe(true);
+    timers[1].fn();
+    // Let microtasks (Promise race rejection, .catch) settle.
+    await new Promise(process.nextTick);
+
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it("exits 0 when flushAdapter is not provided (preserved behaviour)", () => {
+    const server = makeFakeServer();
+    const { deps, exitCodes } = makeDeps();
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it("arms the flush timer with the configured timeout", () => {
+    const server = makeFakeServer();
+    const flushAdapter = jest.fn().mockResolvedValue(undefined);
+    const { deps, timers } = makeDeps(10_000, {
+      flushAdapter,
+      flushTimeoutMs: 300,
+    });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+
+    // timer[0] = forced-exit timer, timer[1] = flush timeout timer
+    expect(timers.length >= 2).toBe(true);
+    expect(timers[1].ms).toBe(300);
   });
 });
 
@@ -298,8 +448,6 @@ describe("Server startup", () => {
   });
 
   it("registerSignalHandlers responds to SIGTERM by starting graceful shutdown", async () => {
-    jest.useFakeTimers();
-
     const server = createServer(app, 0);
     if (!server.listening) {
       await new Promise<void>((resolve) => server.on("listening", resolve));
@@ -313,15 +461,19 @@ describe("Server startup", () => {
 
     process.emit("SIGTERM");
 
-    // Wait for the close callback to trigger process.exit(0)
+    // Wait for the close callback to fire
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
+
+    // Drain microtasks so the async flushAdapter .then() calls process.exit(0).
+    // process.nextTick runs before Promise microtasks; after it fires, the
+    // pending promise callbacks (including the flush chain) are drained too.
+    await new Promise<void>((resolve) => process.nextTick(resolve));
 
     expect(exitSpy).toHaveBeenCalledWith(0);
     exitSpy.mockRestore();
 
     jest.restoreAllMocks();
-    jest.useRealTimers();
   });
 });

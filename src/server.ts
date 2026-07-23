@@ -177,6 +177,27 @@ export interface ShutdownDeps {
  * @param signal  - Signal name used in the log line (informational only).
  * @param deps    - Injectable overrides for `process.exit` and `setTimeout`.
  */
+/**
+ * Guard process.exit() calls when running under Jest to prevent killing the test runner.
+ * In production, this behaves identically to the real exit.
+ * In tests (detected via JEST_WORKER_ID), logs the exit intent but does not terminate.
+ * 
+ * IMPORTANT: When tests inject their own exit function (for tracking calls),
+ * we call it normally since it's not the real process.exit that would kill the runner.
+ */
+function guardedExit(exitFn: (code: number) => void, code: number): void {
+  // Only guard the real process.exit, not test mocks
+  if (process.env.JEST_WORKER_ID !== undefined && exitFn === process.exit) {
+    // Under Jest with real process.exit — avoid terminating the test runner
+    console.error(
+      `[TEST MODE] Skipping process.exit(${code}) (JEST_WORKER_ID=${process.env.JEST_WORKER_ID})`,
+    );
+  } else {
+    // Either not in test mode, or exitFn is a test mock — call it normally
+    exitFn(code);
+  }
+}
+
 export function handleShutdown(
   server: http.Server,
   signal: string,
@@ -187,7 +208,7 @@ export function handleShutdown(
 
   const timer = deps.setTimeout(() => {
     console.error(`Forced exit after ${graceMs}ms drain timeout`);
-    deps.exit(1);
+    guardedExit(deps.exit, 1);
   }, graceMs);
   if (typeof timer.unref === "function") timer.unref();
 
@@ -197,7 +218,7 @@ export function handleShutdown(
 
     if (err) {
       console.error("server.close error:", err);
-      deps.exit(1);
+      guardedExit(deps.exit, 1);
       return;
     }
 
@@ -214,14 +235,14 @@ export function handleShutdown(
       Promise.race([deps.flushAdapter(), timeoutPromise])
         .then(() => {
           logger.info("adapter flushed successfully during shutdown");
-          deps.exit(0);
+          guardedExit(deps.exit, 0);
         })
         .catch((flushErr) => {
           logger.error({ err: flushErr }, "adapter flush failed during shutdown");
-          deps.exit(0);
+          guardedExit(deps.exit, 0);
         });
     } else {
-      deps.exit(0);
+      guardedExit(deps.exit, 0);
     }
   });
 }

@@ -13,7 +13,16 @@
  * @module store/adapter
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  renameSync,
+  openSync,
+  fsyncSync,
+  closeSync,
+  unlinkSync,
+} from "node:fs";
 import type {
   PairMeta,
   AppEvent,
@@ -231,12 +240,18 @@ export class JsonFileAdapter implements StorageAdapter {
     }
     try {
       return JSON.parse(readFileSync(this.filePath, "utf8")) as PersistedStore;
-    } catch {
+    } catch (err) {
+      console.warn(
+        "[store] failed to parse snapshot file, starting fresh:",
+        this.filePath,
+        err,
+      );
       return { pairs: [], meta: {}, keys: {}, webhooks: {}, events: [] };
     }
   }
 
   private _save(): void {
+    const tempPath = `${this.filePath}.tmp`;
     const data: PersistedStore = {
       pairs: Array.from(this.pairs),
       meta: Object.fromEntries(this.meta),
@@ -244,7 +259,23 @@ export class JsonFileAdapter implements StorageAdapter {
       webhooks: Object.fromEntries(this.webhooks),
       events: this.events,
     };
-    writeFileSync(this.filePath, JSON.stringify(data), "utf8");
+    try {
+      const fd = openSync(tempPath, "w", 0o600);
+      try {
+        writeFileSync(fd, JSON.stringify(data), { encoding: "utf8" });
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tempPath, this.filePath);
+    } catch (err) {
+      try {
+        if (existsSync(tempPath)) {
+          unlinkSync(tempPath);
+        }
+      } catch {}
+      throw err;
+    }
   }
 
   pairsAll(): Set<string> {

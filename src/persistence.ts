@@ -4,6 +4,9 @@ import {
   readFileSync,
   existsSync,
   unlinkSync,
+  openSync,
+  fsyncSync,
+  closeSync,
 } from "node:fs";
 import {
   type PairMeta,
@@ -60,6 +63,7 @@ export class InMemoryStoreAdapter implements StoreAdapter {
  */
 export class JsonFileStoreAdapter implements StoreAdapter {
   private readonly filePath: string;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   /**
    * @param filePath - The path to the snapshot file.
@@ -94,13 +98,40 @@ export class JsonFileStoreAdapter implements StoreAdapter {
   }
 
   /**
-   * Write the snapshot atomically (write to temp file with 0o600 permissions, then rename).
+   * Write the snapshot atomically (write to temp file, fsync, then rename).
+   * Concurrent saves are serialized via an in-process write queue.
    */
-  save(snapshot: StoreSnapshot): void {
+  save(snapshot: StoreSnapshot): Promise<void> {
+    return this.enqueue(() => this.writeSnapshot(snapshot));
+  }
+
+  /**
+   * Enqueue a synchronous write function, returning a promise that resolves
+   * after the function completes.  This serializes concurrent save requests.
+   */
+  private enqueue(fn: () => void): Promise<void> {
+    this.writeQueue = this.writeQueue.then(() => {
+      fn();
+    });
+    return this.writeQueue;
+  }
+
+  /**
+   * Perform the actual file write: write to a temp file, fsync, then rename
+   * over the target path for an atomic replace.  Cleans up the temp file on
+   * error.
+   */
+  private writeSnapshot(snapshot: StoreSnapshot): void {
     const tempPath = `${this.filePath}.tmp`;
     try {
       const data = JSON.stringify(snapshot, null, 2);
-      writeFileSync(tempPath, data, { encoding: "utf8", mode: 0o600 });
+      const fd = openSync(tempPath, "w", 0o600);
+      try {
+        writeFileSync(fd, data, { encoding: "utf8" });
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       renameSync(tempPath, this.filePath);
     } catch (err) {
       console.error("[persistence] failed to save snapshot atomically:", err);

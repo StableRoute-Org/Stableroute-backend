@@ -222,6 +222,46 @@ Keeping all stores in one file makes the reset trivial: a single function call i
 
 ---
 
+## File Persistence (Atomic Writes)
+
+Both file-backed adapters — [`JsonFileStoreAdapter`](../src/persistence.ts) and [`JsonFileAdapter`](../src/store/adapter.ts) — guard against
+corruption from crashes mid-write using the following strategy:
+
+### Atomic write protocol
+
+1. Serialise the full state to JSON.
+2. Write to a **sibling temp file** (same directory, with a `.tmp` suffix).
+3. **`fsync`** the temp file to ensure the data is on disk.
+4. **`rename`** the temp file over the target path — an atomic filesystem
+   operation on all major platforms (Linux, macOS, Windows NTFS).
+
+If the process crashes at any point before the rename, the original target file
+remains untouched. A leftover `.tmp` file is harmless and is overwritten on the
+next successful write.
+
+### Write queue (`JsonFileStoreAdapter`)
+
+Concurrent save requests are serialised through a simple in-process promise
+chain. Each call to `save()` is enqueued behind the previous one, guaranteeing
+that writes are strictly ordered and do not interleave. This prevents a fast
+writer from racing ahead and overwriting a slower writer's temp file.
+
+`JsonFileAdapter` runs synchronously on the main thread (every mutation calls
+`_save()` inline), so concurrent writes cannot occur without explicit
+asynchrony.  No queue is necessary.
+
+### Crash recovery on load
+
+Both adapters handle malformed JSON gracefully:
+
+| Adapter | Behaviour |
+|---------|-----------|
+| `JsonFileStoreAdapter` | Returns `null`; caller triggers a fresh start. |
+| `JsonFileAdapter` | Returns an empty `PersistedStore`; all collections start empty. |
+
+In both cases a **warning is logged** with the file path and the underlying
+parse error so operators can investigate the corruption.
+
 ## See Also
 
 - [`src/stores.ts`](../src/stores.ts) — authoritative source of truth for types and initial values.

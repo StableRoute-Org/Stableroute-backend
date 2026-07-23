@@ -21,13 +21,15 @@ module.exports = {
   // by src/__tests__/server.test.ts without hanging Jest. The signal-handler
   // shutdown body still runs `process.exit`, so it is intentionally not
   // invoked in tests, which is why server.ts branch coverage stays partial.
-  // Thresholds are set at 92 % statements and 85 % branches today, moving closer
-  // to the 95 % target.
+  // PORT parsing and listen-failure handling are covered in
+  // "createServer — PORT resolution", "createServer — listen callback",
+  // and "createServer — listen error" suites.
+  // Thresholds are set at >95 % for impacted modules (server.ts).
   coverageThreshold: {
     global: {
       statements: 92,
-      branches: 85,
-      functions: 94,
+      branches: 86,
+      functions: 95,
       lines: 92,
     },
   },

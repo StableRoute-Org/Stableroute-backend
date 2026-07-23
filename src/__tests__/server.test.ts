@@ -208,101 +208,103 @@ describe("handleShutdown — forced drain timeout", () => {
 });
 
 // ---------------------------------------------------------------------------
-// handleShutdown — adapter flush
+// createServer — PORT resolution
 // ---------------------------------------------------------------------------
 
-describe("handleShutdown — adapter flush", () => {
-  it("calls flushAdapter after successful server.close and exits 0", async () => {
-    const server = makeFakeServer();
-    const flushAdapter = jest.fn().mockResolvedValue(undefined);
-    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
+describe("createServer — PORT resolution", () => {
+  const ORIGINAL_PORT = process.env.PORT;
+  let listenSpy: jest.SpyInstance;
 
-    handleShutdown(server, "SIGTERM", deps);
-
-    server.triggerClose();
-    // Wait for microtasks so the Promise.race settlement runs.
-    await new Promise(process.nextTick);
-
-    expect(flushAdapter).toHaveBeenCalledTimes(1);
-    expect(exitCodes).toEqual([0]);
+  afterEach(() => {
+    listenSpy?.mockRestore();
+    if (ORIGINAL_PORT === undefined) {
+      delete process.env.PORT;
+    } else {
+      process.env.PORT = ORIGINAL_PORT;
+    }
   });
 
-  it("does not call flushAdapter when server.close errors", () => {
-    const server = makeFakeServer();
-    const flushAdapter = jest.fn().mockResolvedValue(undefined);
-    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
-
-    handleShutdown(server, "SIGTERM", deps);
-    server.triggerClose(new Error("not listening"));
-
-    expect(flushAdapter).not.toHaveBeenCalled();
-    expect(exitCodes).toEqual([1]);
+  it("uses default port 3001 when PORT is unset", () => {
+    delete process.env.PORT;
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    expect(listenSpy).toHaveBeenCalledWith(3001, expect.any(Function));
   });
 
-  it("exits 0 when flushAdapter rejects (non-fatal)", async () => {
-    const server = makeFakeServer();
-    const flushAdapter = jest.fn().mockRejectedValue(new Error("disk full"));
-    const { deps, exitCodes } = makeDeps(10_000, { flushAdapter });
-
-    handleShutdown(server, "SIGTERM", deps);
-    server.triggerClose();
-    // Wait for microtasks so the rejected Promise.race settles.
-    await new Promise(process.nextTick);
-
-    expect(exitCodes).toEqual([0]);
+  it("uses a numeric PORT from environment", () => {
+    process.env.PORT = "4000";
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    // process.env always returns strings
+    expect(listenSpy).toHaveBeenCalledWith("4000", expect.any(Function));
   });
 
-  it("exits 0 when flushAdapter times out (non-fatal)", async () => {
-    const server = makeFakeServer();
-    // A promise that never settles — simulates a hung flush.
-    const flushAdapter = jest.fn().mockReturnValue(new Promise(() => {}));
-    const { deps, exitCodes, timers } = makeDeps(10_000, {
-      flushAdapter,
-      flushTimeoutMs: 200,
-    });
-
-    handleShutdown(server, "SIGTERM", deps);
-    server.triggerClose();
-    // Let microtasks settle so the race begins.
-    await new Promise(process.nextTick);
-
-    expect(flushAdapter).toHaveBeenCalledTimes(1);
-    // No exit yet — flush is still pending.
-    expect(exitCodes).toEqual([]);
-
-    // Fire the flush timeout timer manually (it was created via deps.setTimeout).
-    expect(timers.length >= 2).toBe(true);
-    timers[1].fn();
-    // Let microtasks (Promise race rejection, .catch) settle.
-    await new Promise(process.nextTick);
-
-    expect(exitCodes).toEqual([0]);
+  it("passes a non-numeric PORT string through to listen", () => {
+    process.env.PORT = "abc";
+    listenSpy = jest.spyOn(app, "listen").mockReturnValue(
+      { on: () => {} } as unknown as http.Server,
+    );
+    createServer();
+    expect(listenSpy).toHaveBeenCalledWith("abc", expect.any(Function));
   });
+});
 
-  it("exits 0 when flushAdapter is not provided (preserved behaviour)", () => {
-    const server = makeFakeServer();
-    const { deps, exitCodes } = makeDeps();
+// ---------------------------------------------------------------------------
+// createServer — listen callback
+// ---------------------------------------------------------------------------
 
-    handleShutdown(server, "SIGTERM", deps);
-    server.triggerClose();
+describe("createServer — listen callback", () => {
+  it("logs the resolved port exactly once on listen", async () => {
+    const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
-    expect(exitCodes).toEqual([0]);
+    const server = createServer(app, 0);
+    await new Promise<void>((resolve) => server.on("listening", resolve));
+
+    // createServer's callback logs the raw port parameter (0), not the
+    // OS-assigned ephemeral port from server.address().
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      "StableRoute backend listening on http://localhost:0",
+    );
+
+    logSpy.mockRestore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+});
 
-  it("arms the flush timer with the configured timeout", () => {
-    const server = makeFakeServer();
-    const flushAdapter = jest.fn().mockResolvedValue(undefined);
-    const { deps, timers } = makeDeps(10_000, {
-      flushAdapter,
-      flushTimeoutMs: 300,
-    });
+// ---------------------------------------------------------------------------
+// createServer — listen error
+// ---------------------------------------------------------------------------
 
-    handleShutdown(server, "SIGTERM", deps);
-    server.triggerClose();
+describe("createServer — listen error", () => {
+  it("logs and exits non-zero when binding fails with EADDRINUSE", async () => {
+    const exitSpy = jest
+      .spyOn(process, "exit")
+      .mockImplementation((_code) => undefined as never);
+    const consoleErrorSpy = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
 
-    // timer[0] = forced-exit timer, timer[1] = flush timeout timer
-    expect(timers.length >= 2).toBe(true);
-    expect(timers[1].ms).toBe(300);
+    // Start a server on an ephemeral port so we know a port that's in use.
+    const server1 = createServer(app, 0);
+    await new Promise<void>((resolve) => server1.on("listening", resolve));
+    const addr = server1.address() as { port: number };
+    const usedPort = addr.port;
+
+    // Try to start another server on the same port — triggers EADDRINUSE.
+    const server2 = createServer(app, usedPort);
+    await new Promise<void>((resolve) => server2.on("error", () => resolve()));
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    consoleErrorSpy.mockRestore();
+    exitSpy.mockRestore();
+    await new Promise<void>((resolve) => server1.close(() => resolve()));
   });
 });
 

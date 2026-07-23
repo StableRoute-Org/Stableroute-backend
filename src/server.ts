@@ -18,9 +18,14 @@ export function createServer(
   application: Express = app,
   port: string | number = process.env.PORT ?? 3001,
 ): http.Server {
-  return application.listen(port, () => {
+  const server = application.listen(port, () => {
     console.log(`StableRoute backend listening on http://localhost:${port}`);
   });
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`Failed to start server on port ${port}: ${err.message}`);
+    process.exit(1);
+  });
+  return server;
 }
 
 /**

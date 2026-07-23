@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
@@ -896,15 +896,6 @@ app.get("/api/v1/version", (_req: Request, res: Response) => {
   });
 });
 
-app.post("/api/v1/admin/pause", (_req: Request, res: Response) => {
-  setPaused(true);
-  res.json({ paused });
-});
-app.post("/api/v1/admin/unpause", (_req: Request, res: Response) => {
-  setPaused(false);
-  res.json({ paused });
-});
-
 app.post("/api/v1/admin/pause", requireAdmin, (_req: Request, res: Response) => {
   setPaused(true);
   recordEvent("admin.paused", {});
@@ -1104,11 +1095,11 @@ export const timingSafeCompare = (a: string, b: string): boolean => {
  * - `401 unauthorized` — Authorization header absent or not in Bearer form.
  * - `401 unauthorized` — Token present but does not match `ADMIN_TOKEN`.
  */
-export const requireAdmin = (
+export function requireAdmin(
   req: Request,
   res: Response,
   next: NextFunction,
-): void => {
+): void {
   const adminToken = process.env.ADMIN_TOKEN;
   // If the operator has not configured a token, skip the guard (dev/test mode).
   if (!adminToken) {
@@ -1123,7 +1114,7 @@ export const requireAdmin = (
     return;
   }
   next();
-};
+}
 
 /**
  * Fixed catalog of authorization scopes an API key may carry. A key's scopes

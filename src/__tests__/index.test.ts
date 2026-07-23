@@ -1915,6 +1915,11 @@ describe("StableRoute Backend", () => {
     const DST = "CHCK";
 
     beforeEach(async () => {
+      // Some earlier tests toggle pause / read-only mode; ensure the service is
+      // writable so the pair actually gets created (otherwise the write is
+      // rejected and later PATCHes 404 on an absent pair).
+      await request(app).post("/api/v1/admin/unpause");
+      await request(app).post("/api/v1/admin/read-write");
       await request(app)
         .post("/api/v1/pairs")
         .send({ source: SRC, destination: DST });

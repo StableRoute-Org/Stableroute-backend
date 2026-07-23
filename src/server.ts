@@ -75,7 +75,9 @@ export function createServer(
   application: Express = app,
   port: string | number = process.env.PORT ?? 3001,
 ): http.Server {
-  const server = http.createServer(application);
+  const server = application.listen(port, () => {
+    console.log(`StableRoute backend listening on http://localhost:${port}`);
+  });
 
   server.keepAliveTimeout = parseKeepAliveTimeout();
   server.headersTimeout = parseHeadersTimeout();
@@ -89,8 +91,11 @@ export function createServer(
     );
   }
 
-  server.listen(port, () => {
-    console.log(`StableRoute backend listening on http://localhost:${port}`);
+  // Surface a fatal bind error (e.g. EADDRINUSE) and exit non-zero so a
+  // process supervisor can restart us instead of running half-bound.
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`Failed to start server: ${err.message}`);
+    process.exit(1);
   });
 
   return server;

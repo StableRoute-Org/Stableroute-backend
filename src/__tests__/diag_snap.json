@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "pairRegistry": [
+    "A::B"
+  ],
+  "pairMeta": [],
+  "apiKeyStore": [],
+  "webhookStore": [],
+  "eventLog": []
+}

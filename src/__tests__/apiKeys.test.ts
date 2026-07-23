@@ -1,6 +1,6 @@
 import { type Request, type Response } from "express";
 import request from "supertest";
-import app, { requireScope, requireAdmin, timingSafeCompare } from "../index";
+import app, { requireScope, timingSafeCompare } from "../index";
 import {
   resetStores,
   apiKeyStore,

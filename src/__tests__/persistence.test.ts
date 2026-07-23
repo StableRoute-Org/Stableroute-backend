@@ -393,24 +393,25 @@ describe("Persistence Layer", () => {
           throw err;
         });
 
-        adapter.save(snap);
+        void adapter.save(snap);
         expect(existsSync(tempPath)).toBe(false);
 
         jest.restoreAllMocks();
       });
 
-      it("adapter remains usable after write failure (load still works)", () => {
+      it("adapter remains usable after write failure (load still works)", async () => {
         const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
 
         // First write a valid snapshot
         const validSnap = {
+          schemaVersion: 1,
           pairRegistry: ["USDC::EURC"],
           pairMeta: [],
           apiKeyStore: [],
           webhookStore: [],
           eventLog: [],
         };
-        adapter.save(validSnap);
+        await adapter.save(validSnap);
         expect(existsSync(TEST_SNAP_PATH)).toBe(true);
 
         // Now make the next save fail
@@ -420,9 +421,11 @@ describe("Persistence Layer", () => {
           throw err;
         });
 
-        // This save should be absorbed (no throw)
+        // This save fails internally but is absorbed (atomic writer swallows
+        // the error), so it resolves without throwing.
         const secondSnap = getSnapshot();
-        expect(() => adapter.save(secondSnap)).not.toThrow();
+        await expect(adapter.save(secondSnap)).resolves.toBeUndefined();
+        jest.restoreAllMocks();
 
         // Load should return the last GOOD snapshot from disk
         const loaded = adapter.load();
@@ -439,19 +442,19 @@ describe("Persistence Layer", () => {
       expect(CURRENT_SCHEMA_VERSION).toBe(1);
     });
 
-    it("saved snapshot includes schemaVersion field", () => {
+    it("saved snapshot includes schemaVersion field", async () => {
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       const snap = getSnapshot();
-      adapter.save(snap);
+      await adapter.save(snap);
 
       const raw = JSON.parse(readFileSync(TEST_SNAP_PATH, "utf8"));
       expect(raw).toHaveProperty("schemaVersion", CURRENT_SCHEMA_VERSION);
     });
 
-    it("loads a snapshot with matching schemaVersion", () => {
+    it("loads a snapshot with matching schemaVersion", async () => {
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       pairRegistry.add("BTC::USDT");
-      adapter.save(getSnapshot());
+      await adapter.save(getSnapshot());
 
       resetStores();
       const loaded = adapter.load();

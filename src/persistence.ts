@@ -198,8 +198,8 @@ export class JsonFileStoreAdapter implements StoreAdapter {
   }
 
   /**
-   * Write the snapshot atomically (write to temp file, fsync, then rename).
-   * Concurrent saves are serialized via an in-process write queue.
+   * Write the snapshot atomically (write to temp file with 0o600 permissions, then rename).
+   * I/O errors are logged and silently absorbed — the in-memory store is never affected.
    */
   save(snapshot: StoreSnapshot): Promise<void> {
     return this.enqueue(() => this.writeSnapshot(snapshot));
@@ -240,7 +240,6 @@ export class JsonFileStoreAdapter implements StoreAdapter {
           unlinkSync(tempPath);
         }
       } catch {}
-      throw err;
     }
   }
 

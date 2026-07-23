@@ -212,6 +212,51 @@ describe("handleShutdown — forced drain timeout", () => {
 });
 
 // ---------------------------------------------------------------------------
+// handleShutdown — adapter flush after a clean drain
+// ---------------------------------------------------------------------------
+
+describe("handleShutdown — adapter flush", () => {
+  it("flushes the adapter and exits 0 after a clean drain", async () => {
+    const server = makeFakeServer();
+    let flushed = false;
+    const { deps, exitCodes } = makeDeps(10_000, {
+      flushAdapter: async () => {
+        flushed = true;
+      },
+    });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+
+    // Let the flush promise race settle.
+    await new Promise((r) => setImmediate(r));
+
+    expect(flushed).toBe(true);
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it("still exits 0 when the adapter flush times out", async () => {
+    const server = makeFakeServer();
+    // flushAdapter never resolves so the flush timeout path is exercised.
+    const { deps, exitCodes, timers } = makeDeps(10_000, {
+      flushAdapter: () => new Promise<void>(() => {}),
+      flushTimeoutMs: 5_000,
+    });
+
+    handleShutdown(server, "SIGTERM", deps);
+    server.triggerClose();
+
+    // timers[0] is the drain safety timer; timers[1] is the flush timeout.
+    expect(timers.length).toBeGreaterThanOrEqual(2);
+    timers[1].fn();
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(exitCodes).toEqual([0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createServer — PORT resolution
 // ---------------------------------------------------------------------------
 

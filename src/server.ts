@@ -76,7 +76,7 @@ export function createServer(
   port: string | number = process.env.PORT ?? 3001,
 ): http.Server {
   const server = application.listen(port, () => {
-    console.log(`StableRoute backend listening on http://localhost:${port}`);
+    logger.info(`StableRoute backend listening on http://localhost:${port}`);
   });
 
   server.keepAliveTimeout = parseKeepAliveTimeout();
@@ -84,7 +84,7 @@ export function createServer(
   server.requestTimeout = parseRequestTimeout();
 
   if (server.headersTimeout <= server.keepAliveTimeout) {
-    console.warn(
+    logger.warn(
       `HEADERS_TIMEOUT_MS (${server.headersTimeout}) should exceed ` +
       `KEEP_ALIVE_TIMEOUT_MS (${server.keepAliveTimeout}) to avoid ` +
       `spurious connection resets behind a load balancer.`,
@@ -94,7 +94,7 @@ export function createServer(
   // Surface a fatal bind error (e.g. EADDRINUSE) and exit non-zero so a
   // process supervisor can restart us instead of running half-bound.
   server.on("error", (err: NodeJS.ErrnoException) => {
-    console.error(`Failed to start server: ${err.message}`);
+    logger.error(`Failed to start server: ${err.message}`);
     process.exit(1);
   });
 
@@ -189,7 +189,7 @@ function guardedExit(exitFn: (code: number) => void, code: number): void {
   // Only guard the real process.exit, not test mocks
   if (process.env.JEST_WORKER_ID !== undefined && exitFn === process.exit) {
     // Under Jest with real process.exit — avoid terminating the test runner
-    console.error(
+    logger.warn(
       `[TEST MODE] Skipping process.exit(${code}) (JEST_WORKER_ID=${process.env.JEST_WORKER_ID})`,
     );
   } else {
@@ -204,10 +204,10 @@ export function handleShutdown(
   deps: ShutdownDeps,
 ): void {
   const graceMs = deps.graceMs ?? parseGraceMs();
-  console.log(`Received ${signal}, draining…`);
+  logger.info(`Received ${signal}, draining…`);
 
   const timer = deps.setTimeout(() => {
-    console.error(`Forced exit after ${graceMs}ms drain timeout`);
+    logger.error(`Forced exit after ${graceMs}ms drain timeout`);
     guardedExit(deps.exit, 1);
   }, graceMs);
   if (typeof timer.unref === "function") timer.unref();
@@ -217,7 +217,7 @@ export function handleShutdown(
     clearTimeout(timer);
 
     if (err) {
-      console.error("server.close error:", err);
+      logger.error({ err }, "server.close error");
       guardedExit(deps.exit, 1);
       return;
     }

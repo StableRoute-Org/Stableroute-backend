@@ -13,6 +13,7 @@ import {
   start,
   type ShutdownDeps,
 } from "../server";
+import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -263,7 +264,7 @@ describe("createServer — PORT resolution", () => {
 
 describe("createServer — listen callback", () => {
   it("logs the resolved port exactly once on listen", async () => {
-    const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const logSpy = jest.spyOn(logger, "info").mockImplementation(() => {});
 
     const server = createServer(app, 0);
     await new Promise<void>((resolve) => server.on("listening", resolve));
@@ -289,8 +290,8 @@ describe("createServer — listen error", () => {
     const exitSpy = jest
       .spyOn(process, "exit")
       .mockImplementation((_code) => undefined as never);
-    const consoleErrorSpy = jest
-      .spyOn(console, "error")
+    const loggerErrorSpy = jest
+      .spyOn(logger, "error")
       .mockImplementation(() => {});
 
     // Start a server on an ephemeral port so we know a port that's in use.
@@ -303,10 +304,10 @@ describe("createServer — listen error", () => {
     const server2 = createServer(app, usedPort);
     await new Promise<void>((resolve) => server2.on("error", () => resolve()));
 
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(loggerErrorSpy).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
 
-    consoleErrorSpy.mockRestore();
+    loggerErrorSpy.mockRestore();
     exitSpy.mockRestore();
     await new Promise<void>((resolve) => server1.close(() => resolve()));
   });
@@ -648,7 +649,7 @@ describe("createServer — HTTP socket timeouts", () => {
   });
 
   it("does not warn when headersTimeout exceeds keepAliveTimeout", () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => {});
 
     process.env.KEEP_ALIVE_TIMEOUT_MS = "5000";
     process.env.HEADERS_TIMEOUT_MS = "61000";
@@ -660,7 +661,7 @@ describe("createServer — HTTP socket timeouts", () => {
   });
 
   it("warns when headersTimeout equals keepAliveTimeout", () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => {});
 
     process.env.KEEP_ALIVE_TIMEOUT_MS = "10000";
     process.env.HEADERS_TIMEOUT_MS = "10000";
@@ -676,7 +677,7 @@ describe("createServer — HTTP socket timeouts", () => {
   });
 
   it("warns when headersTimeout is less than keepAliveTimeout", () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => {});
 
     process.env.KEEP_ALIVE_TIMEOUT_MS = "60000";
     process.env.HEADERS_TIMEOUT_MS = "30000";

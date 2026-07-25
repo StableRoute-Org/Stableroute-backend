@@ -1,10 +1,12 @@
+import express, { type Request, type Response, type NextFunction } from "express";
 import request from "supertest";
 import app, {
   evictRateBuckets,
   parseTrustProxy,
   pruneExpiredRateBuckets,
 } from "../index";
-import { rateBuckets, RATE_BUCKETS_MAX_IPS, resetStores } from "../stores";
+import { resolveClientIp } from "../utils/clientIp";
+import { config, rateBuckets, RATE_BUCKETS_MAX_IPS, resetStores } from "../stores";
 
 // Each test advances the clock by 120 s relative to the previous test's
 // base so that bucket entries from prior tests are always outside the
@@ -273,5 +275,273 @@ describe("rate limiter lazy GC", () => {
     rateBuckets.set("10.0.2.2", [now - WINDOW_MS - 1]);
     expect(pruneExpiredRateBuckets(now + 1000, WINDOW_MS)).toBe(0);
     expect(rateBuckets.has("10.0.2.2")).toBe(true);
+  });
+
+  it("fires again after the GC interval elapses", () => {
+    const t1 = 16_000_000;
+    rateBuckets.set("10.0.3.1", [t1 - WINDOW_MS - 1]);
+    // First call: GC fires (lastGcAt starts at 0)
+    expect(pruneExpiredRateBuckets(t1, WINDOW_MS)).toBe(1);
+    expect(rateBuckets.has("10.0.3.1")).toBe(false);
+
+    // Second call within interval — GC is skipped
+    rateBuckets.set("10.0.3.2", [t1 - WINDOW_MS - 1]);
+    expect(pruneExpiredRateBuckets(t1 + 30_000, WINDOW_MS)).toBe(0);
+    expect(rateBuckets.has("10.0.3.2")).toBe(true); // still there because GC didn't run
+
+    // Third call past interval — GC fires again
+    const t3 = t1 + 60_001;
+    expect(pruneExpiredRateBuckets(t3, WINDOW_MS)).toBe(1);
+    expect(rateBuckets.has("10.0.3.2")).toBe(false);
+  });
+});
+
+describe("rate limiter — window boundary edge cases", () => {
+  const WINDOW_MS = 60_000;
+
+  beforeEach(() => {
+    resetStores();
+  });
+
+  afterEach(() => {
+    resetStores();
+  });
+
+  it("retains timestamps strictly inside the window (now - t < windowMs)", () => {
+    const ip = "10.0.0.5";
+    const now = 20_000_000;
+    // t is one ms inside the window: now - t === WINDOW_MS - 1
+    rateBuckets.set(ip, [now - WINDOW_MS + 1]);
+    const result = evictRateBuckets(ip, now, WINDOW_MS);
+    expect(result).toHaveLength(1);
+    expect(rateBuckets.has(ip)).toBe(true);
+  });
+
+  it("evicts timestamps at or beyond the window boundary", () => {
+    const ip = "10.0.0.6";
+    const now = 20_000_000;
+    // Exactly at boundary (now - t === windowMs) — the `<` filter rejects it
+    rateBuckets.set(ip, [now - WINDOW_MS]);
+    const result = evictRateBuckets(ip, now, WINDOW_MS);
+    expect(result).toHaveLength(0);
+    expect(rateBuckets.has(ip)).toBe(false);
+  });
+
+  it("evicts timestamps one ms past the boundary", () => {
+    const ip = "10.0.0.7";
+    const now = 20_000_000;
+    rateBuckets.set(ip, [now - WINDOW_MS - 1]);
+    const result = evictRateBuckets(ip, now, WINDOW_MS);
+    expect(result).toHaveLength(0);
+    expect(rateBuckets.has(ip)).toBe(false);
+  });
+
+  it("partially evicts a mixed bucket (some in-window, some expired)", () => {
+    const ip = "10.0.0.8";
+    const now = 20_000_000;
+    rateBuckets.set(ip, [
+      now - WINDOW_MS - 1,   // expired
+      now - 1000,            // live (now - 1000 < WINDOW_MS → 59_000 < 60_000)
+      now - WINDOW_MS,       // exactly at boundary — expired
+    ]);
+    const result = evictRateBuckets(ip, now, WINDOW_MS);
+    expect(result).toEqual([now - 1000]);
+    expect(rateBuckets.has(ip)).toBe(true);
+  });
+
+  it("handles multiple timestamps at the same millisecond", () => {
+    const ip = "10.0.0.8";
+    const now = 20_000_000;
+    const bucket = [now, now, now];
+    rateBuckets.set(ip, bucket);
+
+    const result = evictRateBuckets(ip, now, WINDOW_MS);
+    expect(result).toHaveLength(3);
+  });
+});
+
+describe("rate limiter — HTTP middleware integration", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  afterEach(() => {
+    resetStores();
+  });
+
+  const buildApp = () => {
+    const testApp = express();
+    testApp.use((req: Request, res: Response, next: NextFunction) => {
+      const ip = resolveClientIp(
+        req.headers["x-forwarded-for"],
+        req.ip ?? req.socket.remoteAddress,
+      );
+      const now = Date.now();
+      const windowMs = config.rateLimitWindowMs ?? 60_000;
+      pruneExpiredRateBuckets(now, windowMs);
+      const limitPerWindow = config.rateLimitPerWindow ?? 60;
+      const bucket = evictRateBuckets(ip, now, windowMs);
+      if (bucket.length >= limitPerWindow) {
+        res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
+        res.status(429).json({
+          error: "rate_limited",
+          message: `more than ${limitPerWindow} requests per ${windowMs / 1000}s`,
+        });
+        return;
+      }
+      bucket.push(now);
+      rateBuckets.set(ip, bucket);
+      next();
+    });
+    testApp.get("/test", (_req: Request, res: Response) => {
+      res.json({ ok: true });
+    });
+    return testApp;
+  };
+
+  it("allows requests within the configured limit", async () => {
+    config.rateLimitPerWindow = 5;
+    const testApp = buildApp();
+    for (let i = 0; i < 5; i++) {
+      const res = await request(testApp).get("/test");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+    }
+  });
+
+  it("rejects the first request beyond the limit with 429", async () => {
+    config.rateLimitPerWindow = 5;
+    const testApp = buildApp();
+    for (let i = 0; i < 5; i++) {
+      await request(testApp).get("/test");
+    }
+    const res = await request(testApp).get("/test");
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe("rate_limited");
+    expect(res.body.message).toContain("5");
+  });
+
+  it("sets Retry-After header to the window duration in seconds (rounded up)", async () => {
+    config.rateLimitPerWindow = 3;
+    config.rateLimitWindowMs = 30_000;
+    const testApp = buildApp();
+    for (let i = 0; i < 3; i++) {
+      await request(testApp).get("/test");
+    }
+    const res = await request(testApp).get("/test");
+    expect(res.status).toBe(429);
+    expect(res.headers["retry-after"]).toBe("30");
+  });
+
+  it("different IPs have independent rate-limit counters", async () => {
+    config.rateLimitPerWindow = 3;
+    const testApp = buildApp();
+    for (let i = 0; i < 3; i++) {
+      await request(testApp).get("/test").set("X-Forwarded-For", "10.0.0.1");
+    }
+    // 10.0.0.1 should be blocked
+    const resA = await request(testApp)
+      .get("/test")
+      .set("X-Forwarded-For", "10.0.0.1");
+    expect(resA.status).toBe(429);
+
+    // 10.0.0.2 should still be allowed
+    const resB = await request(testApp)
+      .get("/test")
+      .set("X-Forwarded-For", "10.0.0.2");
+    expect(resB.status).toBe(200);
+  });
+
+  it("allows a new request after the window expires", async () => {
+    config.rateLimitPerWindow = 3;
+    const testApp = buildApp();
+    for (let i = 0; i < 3; i++) {
+      await request(testApp).get("/test");
+    }
+    // Blocked now
+    const blocked = await request(testApp).get("/test");
+    expect(blocked.status).toBe(429);
+
+    // Advance the mock clock past the 60 s window
+    const advanced = baseTime + 60_001;
+    jest.spyOn(Date, "now").mockReturnValue(advanced);
+
+    const allowed = await request(testApp).get("/test");
+    expect(allowed.status).toBe(200);
+  });
+
+  it("respects live config changes to rateLimitPerWindow", async () => {
+    config.rateLimitPerWindow = 60; // baseline default
+    const testApp = buildApp();
+    // Make 5 requests — should pass with the wide limit
+    for (let i = 0; i < 5; i++) {
+      await request(testApp).get("/test");
+    }
+    // Tighten the limit to 5 — the 6th request should now fail
+    config.rateLimitPerWindow = 5;
+    const res = await request(testApp).get("/test");
+    expect(res.status).toBe(429);
+  });
+
+  it("respects live config changes to rateLimitWindowMs", async () => {
+    config.rateLimitPerWindow = 60;
+    const testApp = buildApp();
+    // Make 5 requests
+    for (let i = 0; i < 5; i++) {
+      await request(testApp).get("/test");
+    }
+    // Shrink window to 1 ms — all existing timestamps should age out
+    config.rateLimitWindowMs = 1;
+    const res = await request(testApp).get("/test");
+    expect(res.status).toBe(200);
+  });
+
+  it("uses fallback defaults when config keys are deleted", async () => {
+    delete config.rateLimitPerWindow;
+    delete config.rateLimitWindowMs;
+    const testApp = buildApp();
+    // Default limit is 60 — send 60 requests, all should pass
+    for (let i = 0; i < 60; i++) {
+      const res = await request(testApp).get("/test");
+      expect(res.status).toBe(200);
+    }
+    // 61st should be blocked
+    const res = await request(testApp).get("/test");
+    expect(res.status).toBe(429);
+    expect(res.headers["retry-after"]).toBe("60");
+  });
+});
+
+describe("resolveClientIp — IP resolution for rate limiting", () => {
+  it("uses the first IP from X-Forwarded-For", () => {
+    expect(resolveClientIp("10.0.0.1", "192.168.1.1")).toBe("10.0.0.1");
+  });
+
+  it("picks the first address when X-Forwarded-For contains a chain", () => {
+    expect(
+      resolveClientIp("10.0.0.1, 192.168.1.1, 10.0.0.2", "127.0.0.1"),
+    ).toBe("10.0.0.1");
+  });
+
+  it("trims whitespace from the first X-Forwarded-For value", () => {
+    expect(resolveClientIp("  10.0.0.1  ", "192.168.1.1")).toBe("10.0.0.1");
+  });
+
+  it("falls back to remoteAddress when X-Forwarded-For is absent", () => {
+    expect(resolveClientIp(undefined, "192.168.1.1")).toBe("192.168.1.1");
+  });
+
+  it("falls back to 'unknown' when both sources are absent", () => {
+    expect(resolveClientIp(undefined, undefined)).toBe("unknown");
+  });
+
+  it("returns 'unknown' when X-Forwarded-For is an empty string", () => {
+    expect(resolveClientIp("", "192.168.1.1")).toBe("192.168.1.1");
+  });
+
+  it("handles X-Forwarded-For as an array (Express duplicate-header format)", () => {
+    expect(resolveClientIp(["10.0.0.1", "10.0.0.2"], "192.168.1.1")).toBe(
+      "10.0.0.1",
+    );
   });
 });

@@ -1,3 +1,4 @@
+
 import { type Request, type Response } from "express";
 import request from "supertest";
 import app, { requireScope, timingSafeCompare } from "../index";

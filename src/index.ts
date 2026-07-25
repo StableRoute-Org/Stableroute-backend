@@ -54,6 +54,9 @@ const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 /** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
 const BULK_ABSOLUTE_MAX = 10_000;
 
+/** Default cap for bulk endpoints when the config value is not set. */
+const DEFAULT_BULK_MAX_ITEMS = 100;
+
 const app = express();
 
 // --- Persistence Hydration on startup ---
@@ -2187,9 +2190,13 @@ const aggregatePairStats = (): {
   let pairsWithFee = 0;
   const assets = new Set<string>();
   for (const k of pairRegistry) {
-    const [source, destination] = k.split("::");
-    assets.add(source);
-    assets.add(destination);
+    const parts = k.split("::");
+    const source = parts[0];
+    const destination = parts[1];
+    if (source !== undefined && destination !== undefined) {
+      assets.add(source);
+      assets.add(destination);
+    }
     if ((pairMeta.get(k)?.feeBps ?? 0) > 0) pairsWithFee += 1;
   }
   return { pairsWithFee, distinctAssets: assets.size };
@@ -2360,7 +2367,7 @@ app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
  */
 app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   const { pairs } = req.body ?? {};
-  const maxItems = config.bulkMaxItems;
+  const maxItems = config.bulkMaxItems ?? DEFAULT_BULK_MAX_ITEMS;
   if (!Array.isArray(pairs) || pairs.length === 0 || pairs.length > maxItems) {
     sendError(
       res,
@@ -2446,7 +2453,7 @@ const parseSlippageBps = (v: unknown): number | null => {
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
-  const maxItems = config.bulkMaxItems; // driven by config.bulkMaxItems
+  const maxItems = config.bulkMaxItems ?? DEFAULT_BULK_MAX_ITEMS;
   if (!Array.isArray(items) || items.length === 0 || items.length > maxItems) {
     sendError(
       res,

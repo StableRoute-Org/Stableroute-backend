@@ -211,14 +211,14 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
       });
     }
     expect(eventLog.length).toBe(EVENT_LOG_CAP);
-    expect(eventLog[0].id).toBe(sentinel);
+    expect(eventLog.at(0)?.id).toBe(sentinel);
 
     // Push one more via recordEvent — should evict the sentinel
     recordEvent("pair.unregistered", { source: "X", destination: "Y" });
 
     expect(eventLog.length).toBe(EVENT_LOG_CAP);
-    expect(eventLog[0].id).not.toBe(sentinel);
-    expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
+    expect(eventLog.at(0)?.id).not.toBe(sentinel);
+    expect(eventLog.at(eventLog.length - 1)?.type).toBe("pair.unregistered");
   });
 
   it("does not evict entries when log is below EVENT_LOG_CAP", () => {
@@ -227,8 +227,8 @@ describe("GET /api/v1/events — filtering, limit, and capacity", () => {
     recordEvent("pair.registered", { source: "C", destination: "D" });
     expect(eventLog.length).toBe(2);
     // Both entries still present
-    expect(eventLog[0].payload.source).toBe("A");
-    expect(eventLog[1].payload.source).toBe("C");
+    expect(eventLog.at(0)?.payload.source).toBe("A");
+    expect(eventLog.at(1)?.payload.source).toBe("C");
   });
 
   // ─── security: no sensitive payload fields ───────────────────────────────

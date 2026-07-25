@@ -54,11 +54,11 @@ describe("stores module", () => {
     it("appends an event with id, ts, type, and payload", () => {
       recordEvent("pair.registered", { foo: "bar" });
       expect(eventLog.length).toBe(1);
-      const evt = eventLog[0];
-      expect(evt.type).toBe("pair.registered");
-      expect(evt.payload).toEqual({ foo: "bar" });
-      expect(typeof evt.id).toBe("string");
-      expect(typeof evt.ts).toBe("number");
+      const evt = eventLog.at(0);
+      expect(evt?.type).toBe("pair.registered");
+      expect(evt?.payload).toEqual({ foo: "bar" });
+      expect(typeof evt?.id).toBe("string");
+      expect(typeof evt?.ts).toBe("number");
     });
 
     it("evicts oldest entry beyond EVENT_LOG_CAP", () => {
@@ -73,8 +73,8 @@ describe("stores module", () => {
       }
       recordEvent("pair.unregistered", { n: 1 });
       expect(eventLog.length).toBe(EVENT_LOG_CAP);
-      expect(eventLog[0].type).toBe("pair.refreshed"); // oldest of original fill
-      expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
+      expect(eventLog.at(0)?.type).toBe("pair.refreshed"); // oldest of original fill
+      expect(eventLog.at(eventLog.length - 1)?.type).toBe("pair.unregistered");
     });
 
     it("evicts based on config.eventLogCap when configured to a lower value", () => {
@@ -85,7 +85,7 @@ describe("stores module", () => {
       expect(eventLog.length).toBe(5);
       recordEvent("pair.unregistered" as EventType, { n: 1 });
       expect(eventLog.length).toBe(5);
-      expect(eventLog[eventLog.length - 1].type).toBe("pair.unregistered");
+      expect(eventLog.at(eventLog.length - 1)?.type).toBe("pair.unregistered");
     });
 
     it("evicts with a cap of 1 (edge case)", () => {
@@ -94,7 +94,9 @@ describe("stores module", () => {
       expect(eventLog.length).toBe(1);
       recordEvent("pair.unregistered" as EventType, {});
       expect(eventLog.length).toBe(1);
-      expect(eventLog[0].type).toBe("pair.unregistered");
+      const firstEntry = eventLog.at(0);
+      expect(firstEntry).toBeDefined();
+      expect(firstEntry?.type).toBe("pair.unregistered");
     });
 
     it("falls back to EVENT_LOG_CAP if config.eventLogCap is zero or invalid", () => {
@@ -139,8 +141,8 @@ describe("stores module", () => {
       trimEventLog(5);
       expect(eventLog.length).toBe(5);
       // oldest removed; remaining are the 5 newest
-      expect(eventLog[0].payload).toEqual({ i: 5 });
-      expect(eventLog[4].payload).toEqual({ i: 9 });
+      expect(eventLog.at(0)?.payload).toEqual({ i: 5 });
+      expect(eventLog.at(4)?.payload).toEqual({ i: 9 });
     });
 
     it("is a no-op when log is already within the cap", () => {

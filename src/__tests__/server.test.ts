@@ -173,7 +173,7 @@ describe("handleShutdown — clean drain", () => {
 
     handleShutdown(server, "SIGINT", deps);
 
-    expect(timers[0].ms).toBe(3_000);
+    expect(timers.at(0)?.ms).toBe(3_000);
   });
 });
 
@@ -206,7 +206,9 @@ describe("handleShutdown — forced drain timeout", () => {
 
     // Timer armed but server.close never resolved — simulate timeout firing.
     expect(timers).toHaveLength(1);
-    timers[0].fn();
+    const firstTimer = timers.at(0);
+    expect(firstTimer).toBeDefined();
+    firstTimer?.fn();
 
     expect(exitCodes).toEqual([1]);
   });
@@ -249,7 +251,7 @@ describe("handleShutdown — adapter flush", () => {
 
     // timers[0] is the drain safety timer; timers[1] is the flush timeout.
     expect(timers.length).toBeGreaterThanOrEqual(2);
-    timers[1].fn();
+    timers.at(1)?.fn();
 
     await new Promise((r) => setImmediate(r));
 

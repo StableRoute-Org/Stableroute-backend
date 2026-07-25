@@ -746,7 +746,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   // Split on comma to get individual media-range tokens; strip quality params.
   const types = accept
     .split(",")
-    .map((t) => t.split(";")[0].trim().toLowerCase());
+    .map((t) => (t.split(";").at(0) ?? "").trim().toLowerCase());
 
   const acceptable = types.some(
     (t) => t === "*/*" || t === "application/json" || t === "application/*",
@@ -1108,7 +1108,7 @@ export function requireAdmin(
   }
   const auth = req.header("authorization") ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(auth);
-  const supplied = match ? match[1] : "";
+  const supplied = match ? match.at(1) ?? "" : "";
   if (!timingSafeCompare(supplied, adminToken)) {
     sendError(res, req, 401, "unauthorized", "valid admin token required");
     return;
@@ -1227,7 +1227,7 @@ const mintApiKey = (): {
 };
 
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
-  const { prefix } = req.params;
+  const prefix = req.params.prefix ?? "";
   if (!apiKeyStore.has(prefix)) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
@@ -1371,7 +1371,7 @@ const ROTATION_GRACE_MS = 60 * 60 * 1000;
  * @route POST /api/v1/api-keys/:prefix/rotate
  */
 app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
-  const { prefix } = req.params;
+  const prefix = req.params.prefix ?? "";
   const predecessor = apiKeyStore.get(prefix);
   if (!predecessor) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
@@ -1403,7 +1403,7 @@ app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   if (!webhookStore.has(id)) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
@@ -1566,7 +1566,7 @@ app.post(
  * @route GET /api/v1/webhooks/:id
  */
 app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
@@ -1589,7 +1589,7 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
  */
 app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["events"])) return;
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
@@ -1679,8 +1679,8 @@ const normalizePairParams = (
   req: Request,
   res: Response,
 ): { source: string; destination: string } | null => {
-  const source = normalizeAsset(req.params.source);
-  const destination = normalizeAsset(req.params.destination);
+  const source = normalizeAsset(req.params.source ?? "");
+  const destination = normalizeAsset(req.params.destination ?? "");
   if (source === null || destination === null) {
     sendError(
       res,
@@ -1974,7 +1974,8 @@ app.patch(
 app.post(
   "/api/v1/pairs/:source/:destination/reset",
   (req: Request, res: Response) => {
-    const { source, destination } = req.params;
+    const source = req.params.source ?? "";
+    const destination = req.params.destination ?? "";
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(res, req, 404, "not_found", "pair not registered");
@@ -1991,7 +1992,8 @@ app.post(
 app.delete(
   "/api/v1/pairs/:source/:destination",
   (req: Request, res: Response) => {
-    const { source, destination } = req.params;
+    const source = req.params.source ?? "";
+    const destination = req.params.destination ?? "";
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(
@@ -2011,7 +2013,8 @@ app.delete(
 
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
+  const source = req.params.source ?? "";
+  const destination = req.params.destination ?? "";
   if (!pairRegistry.has(pairKey(source, destination))) {
     sendError(
       res,

@@ -28,7 +28,7 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
 
     const second = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", etag);
+      .set("If-None-Match", etag ?? "");
     expect(second.status).toBe(304);
     expect(second.text).toBe("");
   });
@@ -36,6 +36,7 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
   it("mutating the set changes the ETag so a stale If-None-Match yields 200", async () => {
     const before = await request(app).get("/api/v1/pairs");
     const staleEtag = before.headers.etag;
+    const staleEtagStr = typeof staleEtag === "string" ? staleEtag : "";
 
     // Mutate the registry with a fresh, unique pair.
     const reg = await request(app)
@@ -45,7 +46,7 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
 
     const after = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", staleEtag);
+      .set("If-None-Match", staleEtagStr);
     expect(after.status).toBe(200);
     expect(after.headers.etag).toBeDefined();
     expect(after.headers.etag).not.toBe(staleEtag);
@@ -107,7 +108,7 @@ describe("HEAD /api/v1/pairs — ETag without body", () => {
 
     const res = await request(app)
       .head("/api/v1/pairs")
-      .set("If-None-Match", etag);
+      .set("If-None-Match", etag ?? "");
     expect(res.status).toBe(304);
     // HEAD responses carry no body — supertest returns undefined for res.text
     expect(res.body).toEqual({});

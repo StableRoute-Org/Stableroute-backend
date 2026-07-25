@@ -88,22 +88,22 @@ export type ApiKeyRecord = {
   label: string;
   createdAt: number;
   /** Granted authorization scopes; empty array means read-only. Defaults to [] if omitted. */
-  scopes?: string[];
+  scopes?: string[] | undefined;
   /**
    * Epoch-ms timestamp at which this key was rotated and replaced by a
    * successor. Absent on keys that have not been rotated.
    */
-  rotatedAt?: number;
+  rotatedAt?: number | undefined;
   /**
    * Absolute epoch-ms deadline after which a rotated (predecessor) key is
    * considered invalid. Both predecessor and successor remain valid until
    * this deadline, giving callers an overlap window. Absent until rotation.
    */
-  graceExpiresAt?: number;
+  graceExpiresAt?: number | undefined;
   /** Epoch-ms when key expires; absent = never expires. */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
   /** Epoch-ms of last successful authentication; absent until first use. */
-  lastUsedAt?: number;
+  lastUsedAt?: number | undefined;
   /** Per-key random salt (hex-encoded) used to derive {@link hash}. */
   salt: string;
   /** Keyed hash of the raw key, derived via {@link hashApiKeySecret}. */

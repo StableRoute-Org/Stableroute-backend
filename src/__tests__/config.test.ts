@@ -66,7 +66,9 @@ describe("config GET/PATCH", () => {
   // ────────────────────────────────────────────────────────────────
 
   it("PATCH bulkMaxItems persists on the next GET", async () => {
-    const next = original.bulkMaxItems + 7;
+    const bulkMaxItems = original.bulkMaxItems;
+    if (bulkMaxItems === undefined) throw new Error("bulkMaxItems missing from original config");
+    const next = bulkMaxItems + 7;
     const patch = await request(app)
       .patch("/api/v1/config")
       .send({ bulkMaxItems: next });
@@ -78,7 +80,9 @@ describe("config GET/PATCH", () => {
   });
 
   it("PATCH rateLimitPerWindow persists on the next GET", async () => {
-    const next = original.rateLimitPerWindow + 13;
+    const rateLimitPerWindow = original.rateLimitPerWindow;
+    if (rateLimitPerWindow === undefined) throw new Error("rateLimitPerWindow missing from original config");
+    const next = rateLimitPerWindow + 13;
     const patch = await request(app)
       .patch("/api/v1/config")
       .send({ rateLimitPerWindow: next });
@@ -90,7 +94,7 @@ describe("config GET/PATCH", () => {
   });
 
   it("PATCH rateLimitWindowMs persists on the next GET", async () => {
-    const next = original.rateLimitWindowMs + 5_000;
+    const next = (original.rateLimitWindowMs ?? 0) + 5_000;
     const patch = await request(app)
       .patch("/api/v1/config")
       .send({ rateLimitWindowMs: next });
@@ -147,10 +151,10 @@ describe("config GET/PATCH", () => {
     expect(patch.status).toBe(200);
     expect(patch.body.config).toEqual(
       expect.objectContaining({
-        rateLimitPerWindow: original.rateLimitPerWindow,
-        rateLimitWindowMs: original.rateLimitWindowMs,
-        bulkMaxItems: original.bulkMaxItems,
-        eventLogCap: original.eventLogCap,
+        rateLimitPerWindow: original.rateLimitPerWindow ?? 0,
+        rateLimitWindowMs: original.rateLimitWindowMs ?? 0,
+        bulkMaxItems: original.bulkMaxItems ?? 0,
+        eventLogCap: original.eventLogCap ?? 0,
       }),
     );
   });
@@ -385,8 +389,8 @@ describe("config GET/PATCH", () => {
     expect(res.status).toBe(200);
     expect(eventLog.length).toBe(5);
     // oldest-first eviction: remaining entries are the 5 newest
-    expect(eventLog[0].payload).toEqual({ i: 15 });
-    expect(eventLog[4].payload).toEqual({ i: 19 });
+    expect(eventLog.at(0)?.payload).toEqual({ i: 15 });
+    expect(eventLog.at(4)?.payload).toEqual({ i: 19 });
   });
 
   it("GET /api/v1/events limit clamp respects configured eventLogCap", async () => {
@@ -421,7 +425,9 @@ describe("config GET/PATCH", () => {
     expect(res.status).toBe(200);
     expect(eventLog.length).toBe(1);
     // Only the newest entry survives
-    expect(eventLog[0].payload).toEqual({ i: 4 });
+    const firstEntry = eventLog.at(0);
+    expect(firstEntry).toBeDefined();
+    expect(firstEntry?.payload).toEqual({ i: 4 });
   });
 
   it("PATCH eventLogCap does not trim when buffer is already within new cap", async () => {
@@ -453,7 +459,7 @@ describe("config GET/PATCH", () => {
     }
     expect(eventLog.length).toBe(5);
     // No trim needed; buffer is at cap
-    expect(eventLog[0].payload).toEqual({ i: 0 });
+    expect(eventLog.at(0)?.payload).toEqual({ i: 0 });
   });
 
   it("PATCH eventLogCap accepts EVENT_LOG_CAP_MAX (boundary)", async () => {

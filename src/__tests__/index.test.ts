@@ -920,7 +920,7 @@ describe("StableRoute Backend", () => {
       expect(Number(match1![1])).toBe(config.rateLimitPerWindow);
 
       // Change the config and verify the gauge updates
-      const previous = config.rateLimitPerWindow;
+      const previous = config.rateLimitPerWindow ?? 60;
       config.rateLimitPerWindow = 120;
 
       const res2 = await request(app).get("/api/v1/metrics");
@@ -2063,10 +2063,11 @@ describe("StableRoute Backend", () => {
       const first = await request(app).get("/api/v1/pairs");
       const etag = first.headers["etag"];
       expect(etag).toBeTruthy();
+      const etagStr = typeof etag === "string" ? etag : "";
 
       const second = await request(app)
         .get("/api/v1/pairs")
-        .set("If-None-Match", etag);
+        .set("If-None-Match", etagStr);
       expect(second.status).toBe(304);
     });
   });
@@ -2618,7 +2619,7 @@ describe("StableRoute Backend", () => {
         const res304 = await request(app)
           .get("/api/v1/pairs")
           .query({ limit: 1 })
-          .set("If-None-Match", etag);
+          .set("If-None-Match", etag ?? "");
         expect(res304.status).toBe(304);
       });
     });

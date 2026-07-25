@@ -1974,9 +1974,7 @@ app.patch(
 app.post(
   "/api/v1/pairs/:source/:destination/reset",
   (req: Request, res: Response) => {
-    const normalized = normalizePairParams(req, res);
-    if (!normalized) return;
-    const { source, destination } = normalized;
+    const { source, destination } = req.params;
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(res, req, 404, "not_found", "pair not registered");
@@ -1993,9 +1991,7 @@ app.post(
 app.delete(
   "/api/v1/pairs/:source/:destination",
   (req: Request, res: Response) => {
-    const normalized = normalizePairParams(req, res);
-    if (!normalized) return;
-    const { source, destination } = normalized;
+    const { source, destination } = req.params;
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(
@@ -2015,9 +2011,7 @@ app.delete(
 
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const normalized = normalizePairParams(req, res);
-  if (!normalized) return;
-  const { source, destination } = normalized;
+  const { source, destination } = req.params;
   if (!pairRegistry.has(pairKey(source, destination))) {
     sendError(
       res,

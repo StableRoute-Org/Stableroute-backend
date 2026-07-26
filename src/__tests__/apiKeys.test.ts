@@ -1,3 +1,4 @@
+
 import { type Request, type Response } from "express";
 import request from "supertest";
 import app, { requireScope, timingSafeCompare } from "../index";
@@ -200,6 +201,18 @@ describe("api-keys lifecycle", () => {
       expect(res.status).toBe(201);
       expect(res.body.label).toBe("b".repeat(64));
     });
+
+    it("rejects non-string or missing label with 400 invalid_request + requestId", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({});
+      expect(res.status).toBe(400);
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
+    });
   });
 
   describe("GET /api/v1/api-keys", () => {
@@ -258,6 +271,58 @@ describe("api-keys lifecycle", () => {
       const res = await request(app).delete("/api/v1/api-keys/deadbeef");
       expect(res.status).toBe(404);
       expectCanonicalError(res.body, res.headers["x-request-id"] ?? "", "not_found");
+    });
+  });
+
+  describe("Full End-to-End API Key Lifecycle", () => {
+    it("executes full create -> list projection -> delete -> 404 lifecycle", async () => {
+      // 1. Create API key
+      const createRes = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "e2e-lifecycle-key" });
+      expect(createRes.status).toBe(201);
+      const fullKey: string = createRes.body.key;
+      expect(fullKey).toMatch(/^srk_[0-9a-f]+$/);
+      expect(createRes.body.label).toBe("e2e-lifecycle-key");
+
+      const derivedPrefix = fullKey.slice(0, 8);
+      expect(derivedPrefix.length).toBe(8);
+
+      // 2. List API keys and verify projection (8-char prefix, no raw key)
+      const listRes = await request(app).get("/api/v1/api-keys");
+      expect(listRes.status).toBe(200);
+      const listedKey = listRes.body.items.find(
+        (item: { prefix: string }) => item.prefix === derivedPrefix,
+      );
+      expect(listedKey).toBeDefined();
+      expect(listedKey.prefix).toBe(derivedPrefix);
+      expect(listedKey.label).toBe("e2e-lifecycle-key");
+      expect(typeof listedKey.createdAt).toBe("number");
+      expect(JSON.stringify(listRes.body)).not.toContain(fullKey);
+
+      // 3. Delete by prefix (204)
+      const deleteRes = await request(app).delete(
+        `/api/v1/api-keys/${derivedPrefix}`,
+      );
+      expect(deleteRes.status).toBe(204);
+
+      // 4. Verify key is removed from list
+      const listAfterRes = await request(app).get("/api/v1/api-keys");
+      const listedAfter = listAfterRes.body.items.find(
+        (item: { prefix: string }) => item.prefix === derivedPrefix,
+      );
+      expect(listedAfter).toBeUndefined();
+
+      // 5. Subsequent delete returns 404
+      const deleteAgainRes = await request(app).delete(
+        `/api/v1/api-keys/${derivedPrefix}`,
+      );
+      expect(deleteAgainRes.status).toBe(404);
+      expectCanonicalError(
+        deleteAgainRes.body,
+        deleteAgainRes.headers["x-request-id"],
+        "not_found",
+      );
     });
   });
 });

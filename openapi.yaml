@@ -318,6 +318,73 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+    post:
+      summary: Record an audit event
+      operationId: postEvent
+      description: |
+        Append a custom audit event to the in-memory event log. The body is
+        validated against a strict schema; unknown top-level fields, wrong
+        types, out-of-range string lengths, or payload values that exceed the
+        documented limits are rejected with a structured `400 invalid_request`
+        response and a machine-readable `message`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              additionalProperties: false
+              properties:
+                type:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: |
+                    Canonical event type. Must be one of the values exposed by
+                    `KNOWN_EVENT_TYPES` (e.g. `pair.registered`,
+                    `apikey.created`, `admin.paused`).
+                  example: pair.registered
+                payload:
+                  type: object
+                  description: |
+                    Free-form structured data attached to the event. Bounded by
+                    the backend: at most 32 keys per object, 32 entries per
+                    array, 256 characters per string value or key, and 3
+                    levels of nesting.
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Event recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, ts, type, payload]
+                properties:
+                  id:
+                    type: string
+                  ts:
+                    type: integer
+                    description: Unix epoch ms.
+                  type:
+                    type: string
+                  payload:
+                    type: object
+        "400":
+          description: |
+            Malformed body. Returns a structured `invalid_request` envelope
+            with a `message` describing the first rejection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "415":
+          description: Content-Type other than application/json.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/config:
     get:

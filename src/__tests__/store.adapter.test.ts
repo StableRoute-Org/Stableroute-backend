@@ -277,7 +277,7 @@ describe("JsonFileAdapter", () => {
     expect(b.keysGet("srk_abc")).toEqual(sampleKey());
     expect(b.webhooksGet("wh_1")).toEqual(sampleWebhook());
     expect(b.eventsGet()).toHaveLength(1);
-    expect(b.eventsGet()[0].type).toBe("pair.registered");
+    expect(b.eventsGet().at(0)?.type).toBe("pair.registered");
   });
 
   it("starts with empty state when file does not exist", () => {

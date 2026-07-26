@@ -164,7 +164,7 @@ describe("API-key scopes", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
       expect((res.body.message as string).toLowerCase()).toMatch(
@@ -179,7 +179,7 @@ describe("API-key scopes", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
     });
@@ -189,7 +189,7 @@ describe("API-key scopes", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
     });
@@ -202,7 +202,7 @@ describe("API-key scopes", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
     });

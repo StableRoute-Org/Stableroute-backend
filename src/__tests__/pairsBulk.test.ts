@@ -425,8 +425,8 @@ describe("POST /api/v1/pairs/bulk", () => {
 
     const newEvents = eventLog.slice(eventsBefore);
     expect(newEvents).toHaveLength(1);
-    expect(newEvents[0].type).toBe("pair.refreshed");
-    expect(newEvents[0].payload).toMatchObject({
+    expect(newEvents.at(0)?.type).toBe("pair.refreshed");
+    expect(newEvents.at(0)?.payload).toMatchObject({
       source: "USDC",
       destination: "EURC",
     });
@@ -449,13 +449,13 @@ describe("POST /api/v1/pairs/bulk", () => {
 
     const newEvents = eventLog.slice(eventsBefore);
     expect(newEvents).toHaveLength(2);
-    expect(newEvents[0].type).toBe("pair.registered");
-    expect(newEvents[0].payload).toMatchObject({
+    expect(newEvents.at(0)?.type).toBe("pair.registered");
+    expect(newEvents.at(0)?.payload).toMatchObject({
       source: "USDC",
       destination: "EURC",
     });
-    expect(newEvents[1].type).toBe("pair.registered");
-    expect(newEvents[1].payload).toMatchObject({
+    expect(newEvents.at(1)?.type).toBe("pair.registered");
+    expect(newEvents.at(1)?.payload).toMatchObject({
       source: "XLM",
       destination: "USDC",
     });

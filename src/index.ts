@@ -54,6 +54,9 @@ const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 /** Absolute ceiling for bulk item counts — operators cannot raise beyond this. */
 const BULK_ABSOLUTE_MAX = 10_000;
 
+/** Default cap for bulk endpoints when the config value is not set. */
+const DEFAULT_BULK_MAX_ITEMS = 100;
+
 const app = express();
 
 // --- Persistence Hydration on startup ---
@@ -746,7 +749,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   // Split on comma to get individual media-range tokens; strip quality params.
   const types = accept
     .split(",")
-    .map((t) => t.split(";")[0].trim().toLowerCase());
+    .map((t) => (t.split(";").at(0) ?? "").trim().toLowerCase());
 
   const acceptable = types.some(
     (t) => t === "*/*" || t === "application/json" || t === "application/*",
@@ -1108,7 +1111,7 @@ export function requireAdmin(
   }
   const auth = req.header("authorization") ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(auth);
-  const supplied = match ? match[1] : "";
+  const supplied = match ? match.at(1) ?? "" : "";
   if (!timingSafeCompare(supplied, adminToken)) {
     sendError(res, req, 401, "unauthorized", "valid admin token required");
     return;
@@ -1227,7 +1230,7 @@ const mintApiKey = (): {
 };
 
 app.delete("/api/v1/api-keys/:prefix", (req: Request, res: Response) => {
-  const { prefix } = req.params;
+  const prefix = req.params.prefix ?? "";
   if (!apiKeyStore.has(prefix)) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
     return;
@@ -1371,7 +1374,7 @@ const ROTATION_GRACE_MS = 60 * 60 * 1000;
  * @route POST /api/v1/api-keys/:prefix/rotate
  */
 app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
-  const { prefix } = req.params;
+  const prefix = req.params.prefix ?? "";
   const predecessor = apiKeyStore.get(prefix);
   if (!predecessor) {
     sendError(res, req, 404, "not_found", `no key with prefix ${prefix}`);
@@ -1403,7 +1406,7 @@ app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
 });
 
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   if (!webhookStore.has(id)) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
@@ -1566,7 +1569,7 @@ app.post(
  * @route GET /api/v1/webhooks/:id
  */
 app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
@@ -1589,7 +1592,7 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
  */
 app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["events"])) return;
-  const { id } = req.params;
+  const id = req.params.id ?? "";
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
@@ -1679,8 +1682,8 @@ const normalizePairParams = (
   req: Request,
   res: Response,
 ): { source: string; destination: string } | null => {
-  const source = normalizeAsset(req.params.source);
-  const destination = normalizeAsset(req.params.destination);
+  const source = normalizeAsset(req.params.source ?? "");
+  const destination = normalizeAsset(req.params.destination ?? "");
   if (source === null || destination === null) {
     sendError(
       res,
@@ -1974,7 +1977,8 @@ app.patch(
 app.post(
   "/api/v1/pairs/:source/:destination/reset",
   (req: Request, res: Response) => {
-    const { source, destination } = req.params;
+    const source = req.params.source ?? "";
+    const destination = req.params.destination ?? "";
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(res, req, 404, "not_found", "pair not registered");
@@ -1991,7 +1995,8 @@ app.post(
 app.delete(
   "/api/v1/pairs/:source/:destination",
   (req: Request, res: Response) => {
-    const { source, destination } = req.params;
+    const source = req.params.source ?? "";
+    const destination = req.params.destination ?? "";
     const k = pairKey(source, destination);
     if (!pairRegistry.has(k)) {
       sendError(
@@ -2011,7 +2016,8 @@ app.delete(
 
 /** Read a single registered pair. */
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
-  const { source, destination } = req.params;
+  const source = req.params.source ?? "";
+  const destination = req.params.destination ?? "";
   if (!pairRegistry.has(pairKey(source, destination))) {
     sendError(
       res,
@@ -2184,9 +2190,13 @@ const aggregatePairStats = (): {
   let pairsWithFee = 0;
   const assets = new Set<string>();
   for (const k of pairRegistry) {
-    const [source, destination] = k.split("::");
-    assets.add(source);
-    assets.add(destination);
+    const parts = k.split("::");
+    const source = parts[0];
+    const destination = parts[1];
+    if (source !== undefined && destination !== undefined) {
+      assets.add(source);
+      assets.add(destination);
+    }
     if ((pairMeta.get(k)?.feeBps ?? 0) > 0) pairsWithFee += 1;
   }
   return { pairsWithFee, distinctAssets: assets.size };
@@ -2357,7 +2367,7 @@ app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
  */
 app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
   const { pairs } = req.body ?? {};
-  const maxItems = config.bulkMaxItems;
+  const maxItems = config.bulkMaxItems ?? DEFAULT_BULK_MAX_ITEMS;
   if (!Array.isArray(pairs) || pairs.length === 0 || pairs.length > maxItems) {
     sendError(
       res,
@@ -2443,7 +2453,7 @@ const parseSlippageBps = (v: unknown): number | null => {
 
 app.post("/api/v1/quote/bulk", (req: Request, res: Response) => {
   const { items } = req.body ?? {};
-  const maxItems = config.bulkMaxItems; // driven by config.bulkMaxItems
+  const maxItems = config.bulkMaxItems ?? DEFAULT_BULK_MAX_ITEMS;
   if (!Array.isArray(items) || items.length === 0 || items.length > maxItems) {
     sendError(
       res,

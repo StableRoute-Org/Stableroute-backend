@@ -67,7 +67,7 @@ describe("requireAdmin middleware — constant-time admin token check", () => {
     process.env.ADMIN_TOKEN = "admin-secret-token-123";
     const res = await request(app).get("/api/v1/admin/status");
     expect(res.status).toBe(401);
-    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+    expectCanonicalError(res.body, res.headers["x-request-id"] ?? "", "unauthorized");
   });
 
   it("rejects requests with wrong admin token", async () => {
@@ -76,7 +76,7 @@ describe("requireAdmin middleware — constant-time admin token check", () => {
       .get("/api/v1/admin/status")
       .set("Authorization", "Bearer wrong-admin-token");
     expect(res.status).toBe(401);
-    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+    expectCanonicalError(res.body, res.headers["x-request-id"] ?? "", "unauthorized");
   });
 
   it("accepts requests with correct admin token", async () => {
@@ -93,7 +93,7 @@ describe("requireAdmin middleware — constant-time admin token check", () => {
       .get("/api/v1/admin/status")
       .set("Authorization", "Bearer shortextra");
     expect(res.status).toBe(401);
-    expectCanonicalError(res.body, res.headers["x-request-id"], "unauthorized");
+    expectCanonicalError(res.body, res.headers["x-request-id"] ?? "", "unauthorized");
   });
 
   it("rejects empty bearer token", async () => {
@@ -176,7 +176,7 @@ describe("api-keys lifecycle", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
     });
@@ -188,7 +188,7 @@ describe("api-keys lifecycle", () => {
       expect(res.status).toBe(400);
       expectCanonicalError(
         res.body,
-        res.headers["x-request-id"],
+        res.headers["x-request-id"] ?? "",
         "invalid_request",
       );
     });
@@ -257,7 +257,7 @@ describe("api-keys lifecycle", () => {
     it("returns 404 not_found for an unknown prefix", async () => {
       const res = await request(app).delete("/api/v1/api-keys/deadbeef");
       expect(res.status).toBe(404);
-      expectCanonicalError(res.body, res.headers["x-request-id"], "not_found");
+      expectCanonicalError(res.body, res.headers["x-request-id"] ?? "", "not_found");
     });
   });
 });

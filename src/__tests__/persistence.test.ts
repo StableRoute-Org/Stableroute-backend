@@ -504,14 +504,16 @@ describe("Persistence Layer", () => {
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       const loaded = adapter.load();
       expect(loaded).not.toBeNull();
+      const pm0 = loaded?.pairMeta.at(0);
+      expect(pm0).toBeDefined();
       // Version should be bumped
-      expect(loaded!.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(loaded?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
       // Backfilled fields
-      expect(loaded!.pairMeta[0][1].enabled).toBe(true);
-      expect(loaded!.pairMeta[0][1].rate).toBe("1.0");
+      expect(pm0?.[1].enabled).toBe(true);
+      expect(pm0?.[1].rate).toBe("1.0");
       // Original data preserved
-      expect(loaded!.pairMeta[0][1].feeBps).toBe(10);
-      expect(loaded!.pairRegistry).toContain("USDC::EURC");
+      expect(pm0?.[1].feeBps).toBe(10);
+      expect(loaded?.pairRegistry).toContain("USDC::EURC");
     });
 
     it("v0 migration preserves existing enabled and rate when present", () => {
@@ -539,8 +541,10 @@ describe("Persistence Layer", () => {
       const adapter = new JsonFileStoreAdapter(TEST_SNAP_PATH);
       const loaded = adapter.load();
       expect(loaded).not.toBeNull();
-      expect(loaded!.pairMeta[0][1].enabled).toBe(false);
-      expect(loaded!.pairMeta[0][1].rate).toBe("0.5");
+      const pm0 = loaded?.pairMeta.at(0);
+      expect(pm0).toBeDefined();
+      expect(pm0?.[1].enabled).toBe(false);
+      expect(pm0?.[1].rate).toBe("0.5");
     });
 
     it("v0 migration with partial pairMeta fields backfills only missing", () => {
@@ -578,13 +582,17 @@ describe("Persistence Layer", () => {
       const loaded = adapter.load();
       expect(loaded).not.toBeNull();
 
-      const meta0 = loaded!.pairMeta[0][1];
-      expect(meta0.enabled).toBe(false);
-      expect(meta0.rate).toBe("1.0"); // backfilled
+      const metaEntry0 = loaded?.pairMeta.at(0);
+      expect(metaEntry0).toBeDefined();
+      const meta0 = metaEntry0?.[1];
+      expect(meta0?.enabled).toBe(false);
+      expect(meta0?.rate).toBe("1.0"); // backfilled
 
-      const meta1 = loaded!.pairMeta[1][1];
-      expect(meta1.enabled).toBe(true); // backfilled
-      expect(meta1.rate).toBe("60000"); // preserved
+      const metaEntry1 = loaded?.pairMeta.at(1);
+      expect(metaEntry1).toBeDefined();
+      const meta1 = metaEntry1?.[1];
+      expect(meta1?.enabled).toBe(true); // backfilled
+      expect(meta1?.rate).toBe("60000"); // preserved
     });
 
     it("v0 snapshot with no pairs migrates cleanly", () => {

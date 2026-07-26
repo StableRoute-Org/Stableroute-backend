@@ -59,7 +59,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
 
     const second = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", etag);
+      .set("If-None-Match", etag ?? "");
     expect(second.status).toBe(304);
   });
 
@@ -69,7 +69,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
 
     const second = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", etag);
+      .set("If-None-Match", etag ?? "");
     expect(second.status).toBe(304);
     expect(second.text).toBe("");
   });
@@ -80,7 +80,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
 
     const second = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", etag);
+      .set("If-None-Match", etag ?? "");
     expect(second.status).toBe(304);
     expect(Object.keys(second.body).length).toBe(0);
   });
@@ -121,7 +121,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
     for (let i = 0; i < 3; i++) {
       const cached = await request(app)
         .get("/api/v1/pairs")
-        .set("If-None-Match", cachedEtag);
+        .set("If-None-Match", cachedEtag ?? "");
       expect(cached.status).toBe(304);
     }
   });
@@ -155,7 +155,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
 
     const after = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", staleEtag);
+      .set("If-None-Match", staleEtag ?? "");
     expect(after.status).toBe(200);
     expect(after.headers.etag).not.toBe(staleEtag);
 
@@ -180,7 +180,7 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
 
     const res = await request(app)
       .get("/api/v1/pairs")
-      .set("If-None-Match", oldEtag);
+      .set("If-None-Match", oldEtag ?? "");
 
     // The status is either 304 (if ETag coincidentally matches) or 200 with a new ETag.
     if (res.status === 200) {

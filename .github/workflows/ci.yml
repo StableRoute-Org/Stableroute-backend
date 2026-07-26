@@ -24,9 +24,40 @@ jobs:
       - name: Validate openapi.yaml
         run: swagger-cli validate openapi.yaml
 
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: node scripts/audit-deps.js
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
   build-test:
     runs-on: ubuntu-latest
-    needs: validate-openapi
+    needs: [validate-openapi, dependency-audit]
     steps:
       - uses: actions/checkout@v4
 

@@ -27,8 +27,8 @@
     "express": "^4.21.0",
     "helmet": "^8.3.0",
     "iconv-lite": "^0.7.3",
-    "js-yaml": "^5.2.2",
-    "pino": "^9.6.0"
+    "pino": "^9.6.0",
+    "resolve-cwd": "^3.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

@@ -13,7 +13,16 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
     await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
   });
 
-  it("first GET returns 200 with a weak ETag header", async () => {
+  it("first GET returns 200 with a weak ETag header and valid JSON pairs array", async () => {
+    const res = await request(app).get("/api/v1/pairs");
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeDefined();
+    expect(res.headers.etag).toMatch(/^W\//);
+    expect(typeof res.body).toBe("object");
+    expect(Array.isArray(res.body.pairs)).toBe(true);
+  });
+
+  it("GET without If-None-Match header returns 200 with ETag header and pairs array", async () => {
     const res = await request(app).get("/api/v1/pairs");
     expect(res.status).toBe(200);
     expect(res.headers.etag).toBeDefined();
@@ -31,14 +40,15 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
       .set("If-None-Match", etag ?? "");
     expect(second.status).toBe(304);
     expect(second.text).toBe("");
+    expect(Object.keys(second.body).length).toBe(0);
   });
 
-  it("mutating the set changes the ETag so a stale If-None-Match yields 200", async () => {
+  it("registering a pair changes the ETag so a stale If-None-Match yields 200", async () => {
     const before = await request(app).get("/api/v1/pairs");
     const staleEtag = before.headers.etag;
     const staleEtagStr = typeof staleEtag === "string" ? staleEtag : "";
 
-    // Mutate the registry with a fresh, unique pair.
+    // Mutate the registry by registering a fresh, unique pair.
     const reg = await request(app)
       .post("/api/v1/pairs")
       .send({ source: SRC, destination: DST });
@@ -61,6 +71,36 @@ describe("ETag / conditional GET on /api/v1/pairs", () => {
           p.source === SRC && p.destination === DST,
       ),
     ).toBe(true);
+  });
+
+  it("unregistering a pair changes the ETag so a stale If-None-Match yields 200", async () => {
+    // Ensure SRC/DST is registered
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: SRC, destination: DST });
+
+    const before = await request(app).get("/api/v1/pairs");
+    const staleEtag = before.headers.etag;
+
+    // Unregister (delete) the pair
+    const del = await request(app).delete(`/api/v1/pairs/${SRC}/${DST}`);
+    expect([200, 204]).toContain(del.status);
+
+    const after = await request(app)
+      .get("/api/v1/pairs")
+      .set("If-None-Match", staleEtag);
+    expect(after.status).toBe(200);
+    expect(after.headers.etag).toBeDefined();
+    expect(after.headers.etag).not.toBe(staleEtag);
+
+    const body = JSON.parse(after.text);
+    expect(Array.isArray(body.pairs)).toBe(true);
+    expect(
+      body.pairs.some(
+        (p: { source: string; destination: string }) =>
+          p.source === SRC && p.destination === DST,
+      ),
+    ).toBe(false);
   });
 });
 

@@ -1,0 +1,15 @@
+name: "CodeQL Configuration for StableRoute Backend"
+
+paths:
+  - src
+
+paths-ignore:
+  - src/**/__tests__/**
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/coverage/**"
+
+packs:
+  - codeql/javascript-typescript:
+      - codeql/javascript-queries
+      - codeql/javascript-experimental

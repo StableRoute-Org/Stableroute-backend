@@ -33,12 +33,17 @@ rationale), a Mermaid request-flow diagram, and the canonical error envelope.
    ```bash
    npm install
    ```
-3. Build and test:
+3. Copy the environment configuration template:
+   ```bash
+   cp .env.example .env
+   ```
+   See [Configuration](#configuration) for details on available variables.
+4. Build and test:
    ```bash
    npm run build
    npm test
    ```
-4. Run locally:
+5. Run locally:
    ```bash
    npm run dev
    ```
@@ -48,15 +53,42 @@ rationale), a Mermaid request-flow diagram, and the canonical error envelope.
 
 ## Configuration
 
-The backend is configured entirely through environment variables. The
-table below lists every variable the code reads — there are no others.
+The backend is configured entirely through environment variables. The table below lists every environment variable the code currently reads — there are no others.
 
-| Variable   | Purpose                                                                                              | Default       | Example       |
-|------------|------------------------------------------------------------------------------------------------------|---------------|---------------|
-| `PORT`     | TCP port the HTTP server binds to.                                                                   | `3001`        | `8080`        |
-| `NODE_ENV` | Runtime mode. Setting it to `test` disables the rate limiter and per-request logging (used by Jest). | _(unset)_     | `production`  |
-| `GIT_COMMIT` | Commit SHA surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `a1b2c3d`     |
-| `BUILD_TIME` | Build timestamp surfaced by `GET /api/v1/version`. Injected by the deploy pipeline; falls back to `"unknown"`. | _(unset)_ | `2026-01-01T00:00:00Z` |
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `PORT` | TCP port the HTTP server binds to. | `3001` | `8080` |
+| `NODE_ENV` | Runtime mode (`development`, `production`, `test`). Setting `test` disables logging and rate limiting for Jest. | _(unset)_ | `production` |
+| `LOG_LEVEL` | Pino logger verbosity level (`trace`, `debug`, `info`, `warn`, `error`, `fatal`, `silent`). | `info` | `debug` |
+| `ADMIN_TOKEN` | Secret Bearer token required for administrative endpoints (`/api/v1/admin/*`). Requests are rejected if unset. | _(unset)_ | `dev-admin-secret-token` |
+| `CORS_ALLOWED_ORIGINS` | Allowed origin(s) for Cross-Origin Resource Sharing (CORS). Supports single origin or comma-separated list. | `*` | `http://localhost:3000` |
+| `TRUST_PROXY` | Express trust proxy setting (`loopback`, `linklocal`, `unroutable`, boolean, IP list, or hop count). | _(unset)_ | `loopback` |
+| `ALLOW_UNREGISTERED_QUOTES` | Permit quote requests for asset pairs not explicitly registered in the pair registry (`true`/`false`). | `false` | `true` |
+| `STORAGE_BACKEND` | Data persistence backend strategy (`memory` or `json-file`). | `memory` | `json-file` |
+| `STORAGE_FILE` | File path for store persistence when `STORAGE_BACKEND=json-file`. | `./stableroute-data.json` | `./data/store.json` |
+| `PERSIST_PATH` | File path for JSON store persistence adapter override. | _(unset)_ | `./stableroute-store.json` |
+| `PAUSE_STATE_FILE` | Custom file path for persisting service pause state across restarts. | `./pause-state.json` | `./data/pause-state.json` |
+| `REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds before responding with `503 request_timeout`. | `10000` | `15000` |
+| `KEEP_ALIVE_TIMEOUT_MS` | HTTP server keep-alive socket timeout in milliseconds. | `5000` | `10000` |
+| `HEADERS_TIMEOUT_MS` | HTTP server headers timeout in milliseconds. Should exceed `KEEP_ALIVE_TIMEOUT_MS`. | `61000` | `65000` |
+| `IDEMPOTENCY_TTL_MS` | Time-to-live in milliseconds for cached idempotent request responses. | `86400000` | `43200000` |
+| `IDEMPOTENCY_CACHE_MAX` | Maximum number of response entries stored in the idempotency LRU cache. | `10000` | `50000` |
+| `SHUTDOWN_GRACE_MS` | Grace period in milliseconds given for active requests to finish before forced process exit. | `10000` | `15000` |
+| `FLUSH_TIMEOUT_MS` | Timeout in milliseconds for flushing pending persistence operations during shutdown. | `5000` | `8000` |
+| `GIT_COMMIT` | Commit SHA surfaced by `GET /api/v1/version`. Injected by deploy pipeline. | `unknown` | `a1b2c3d` |
+| `BUILD_TIME` | Build ISO 8601 timestamp surfaced by `GET /api/v1/version`. Injected by deploy pipeline. | `unknown` | `2026-01-01T00:00:00Z` |
+
+### Environment Template (`.env.example`)
+
+[.env.example](.env.example) is the template for these variables. Copy it to `.env` and edit the values for local development:
+
+```bash
+cp .env.example .env
+```
+
+> **Note on Security & Git:** `.env` is git-ignored (see [.gitignore](.gitignore)), so your local `.env` file is never committed to version control. **Never commit `.env` or real production secrets.** `.env.example` contains safe placeholder defaults and inline comments for contributors.
+
+Note that Node.js / Express does not automatically auto-load `.env` at runtime unless variables are exported into your shell, supplied via your process manager, or loaded using Node's `--env-file` flag.
 
 ### Build/version endpoint
 
@@ -71,17 +103,6 @@ operators can confirm which build is live during an incident:
 `GIT_COMMIT`/`BUILD_TIME` env vars (each falling back to `"unknown"`); `node`
 is `process.version`. No health checks run and no secrets are exposed.
 
-`.env.example` is the template for these variables. Copy it to `.env`
-and edit the values for local development:
-
-```bash
-cp .env.example .env
-```
-
-`.env` is git-ignored (see `.gitignore`), so your local values are never
-committed. The application does not auto-load `.env`; export the
-variables into your shell (or use your process manager / `--env-file`)
-before starting the server.
 
 ## Scripts
 

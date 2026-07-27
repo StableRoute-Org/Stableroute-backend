@@ -7,7 +7,6 @@ import {
   rateBuckets,
   config,
   paused,
-  readOnly,
   pairKey,
   defaultMeta,
   recordEvent,
@@ -31,10 +30,8 @@ import {
   setHydrating,
   getSnapshot,
   hydrateFromSnapshot,
-  triggerSnapshot,
   type EventType,
   type ApiKeyRecord,
-  type PairMeta,
 } from "../stores";
 
 describe("stores module", () => {

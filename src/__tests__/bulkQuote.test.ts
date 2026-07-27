@@ -289,4 +289,29 @@ describe("POST /api/v1/quote/bulk", () => {
 
     await request(app).post("/api/v1/admin/read-write");
   });
+
+  it("returns ok:false with error:pair_disabled when a pair is registered but disabled", async () => {
+    await request(app)
+      .post("/api/v1/pairs")
+      .send({ source: "USDC", destination: "EURC" })
+      .expect(201);
+
+    await request(app)
+      .patch("/api/v1/pairs/USDC/EURC/enabled")
+      .send({ enabled: false })
+      .expect(200);
+
+    const res = await request(app)
+      .post("/api/v1/quote/bulk")
+      .send({
+        items: [{ source_asset: "USDC", dest_asset: "EURC", amount: "100" }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toMatchObject({
+      index: 0,
+      ok: false,
+      error: "pair_disabled",
+    });
+  });
 });

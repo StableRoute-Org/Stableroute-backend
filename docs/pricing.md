@@ -310,8 +310,39 @@ Stellar's 1–12 character alphanumeric asset code limit. `source_asset` and
 | Min/max/liquidity | Stored per-pair; enforced at quote time via `checkQuoteBounds` |
 | Pure pricing module | [`src/pricing.ts`](../src/pricing.ts) — no Express/store dependency, unit tested in [`src/__tests__/pricing.test.ts`](../src/__tests__/pricing.test.ts) |
 
+## 9. Quote caching
+
+To prevent redundant execution and cut down computation time for identical pricing requests, a brief in-memory cache is implemented for the `GET /api/v1/quote` endpoint.
+
+### Cache key structure
+The cache key is unique and consists of the following components:
+1. `source_asset`
+2. `dest_asset`
+3. Normalized `amount` (string representation of parsed BigInt)
+4. Pair-meta version counter (increments on every pair metadata modification)
+
+```typescript
+const cacheKey = `${source_asset}::${dest_asset}::${parsedAmount.toString()}::${version}`;
+```
+
+### Cache invalidation
+Cache entries are automatically invalidated in the following events:
+- **Patched**: When pair metadata (e.g. `fee_bps`, `rate`, `liquidity`, etc.) is updated via any PATCH endpoint.
+- **Reset**: When pair metadata is reset to factory defaults via `/reset`.
+- **Disabled/Enabled**: When a pair is enabled or disabled.
+- **Unregistered**: When a pair is deleted from the pair registry.
+
+### Configuration
+The cache TTL is not hardcoded and is controlled dynamically by the operator through the runtime configuration key `quote_ttl_ms` (exposed via `/api/v1/config` GET/PATCH endpoints, defaulting to `30_000` ms).
+
+### Metrics
+Total hit and miss counts are exposed at `/api/v1/metrics`:
+- `stableroute_quote_cache_hits_total`: Cumulative count of cache hits.
+- `stableroute_quote_cache_misses_total`: Cumulative count of cache misses.
+
 ---
 
 *See [api.md](api.md) for the full HTTP endpoint reference and `curl` examples,
 and [quote-bounds.md](quote-bounds.md) / [fee-bps.md](fee-bps.md) for more on
 the underlying `PairMeta` fields.*
+

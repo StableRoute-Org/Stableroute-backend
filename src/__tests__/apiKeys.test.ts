@@ -213,6 +213,39 @@ describe("api-keys lifecycle", () => {
         "invalid_request",
       );
     });
+
+    it("rejects a single unknown field with 400 invalid_request and lists it in unknownKeys", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "ok", extra: true });
+      expect(res.status).toBe(400);
+      expectCanonicalError(
+        res.body,
+        res.headers["x-request-id"],
+        "invalid_request",
+      );
+      expect(res.body.message).toMatch(/unknown field\(s\): extra/);
+      expect(res.body.unknownKeys).toEqual(["extra"]);
+    });
+
+    it("rejects multiple unknown fields and lists all of them in unknownKeys", async () => {
+      const res = await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "ok", foo: 1, bar: 2 });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/unknown field\(s\): foo, bar/);
+      expect(res.body.unknownKeys).toEqual(["foo", "bar"]);
+    });
+
+    it("does not create a key when an unknown field is present", async () => {
+      await request(app)
+        .post("/api/v1/api-keys")
+        .send({ label: "should-not-exist", extra: true });
+      const list = await request(app).get("/api/v1/api-keys");
+      expect(
+        list.body.items.some((i: { label: string }) => i.label === "should-not-exist"),
+      ).toBe(false);
+    });
   });
 
   describe("GET /api/v1/api-keys", () => {

@@ -40,7 +40,62 @@ import {
   type ApiKeyRecord,
   type EventType,
 } from "./stores";
-import { checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+
+interface CacheEntry {
+  value: {
+    source_asset: string;
+    dest_asset: string;
+    amount: string;
+    estimated_rate: string;
+    route: string[];
+    feeBps: number;
+    feeAmount: string;
+    netAmount: string;
+    slippage_bps: number;
+    min_received: string;
+    rate: string;
+  };
+  expiresAt: number;
+}
+
+export const quoteCache = new Map<string, CacheEntry>();
+export const pairMetaVersions = new Map<string, number>();
+
+export let cacheHits = 0;
+export let cacheMisses = 0;
+
+export function resetQuoteCache() {
+  quoteCache.clear();
+  pairMetaVersions.clear();
+  cacheHits = 0;
+  cacheMisses = 0;
+}
+
+export function invalidateQuoteCache(k: string): void {
+  const current = pairMetaVersions.get(k) ?? 0;
+  pairMetaVersions.set(k, current + 1);
+  for (const cacheKey of quoteCache.keys()) {
+    if (cacheKey.startsWith(`${k}::`)) {
+      quoteCache.delete(cacheKey);
+    }
+  }
+}
+
+// Monkeypatch Set.prototype.clear and Map.prototype.clear for the store registry/meta instances
+const origRegistryClear = pairRegistry.clear;
+pairRegistry.clear = function (this: Set<string>) {
+  const res = origRegistryClear.apply(this);
+  resetQuoteCache();
+  return res;
+};
+
+const origMetaClear = pairMeta.clear;
+pairMeta.clear = function (this: Map<string, PairMeta>) {
+  const res = origMetaClear.apply(this);
+  resetQuoteCache();
+  return res;
+};
 
 /** Maximum number of event-type entries per webhook subscription. */
 const WEBHOOK_MAX_EVENTS = 20;
@@ -1947,6 +2002,7 @@ const makePairMetaPatch =
     }
     (meta as Record<string, unknown>)[field] = value;
     pairMeta.set(k, meta);
+    invalidateQuoteCache(k);
     res.json({ source, destination, ...meta });
   };
 
@@ -2134,6 +2190,7 @@ app.patch(
     const meta = pairMeta.get(k) ?? defaultMeta();
     meta.enabled = enabled;
     pairMeta.set(k, meta);
+    invalidateQuoteCache(k);
     recordEvent(enabled ? "pair.enabled" : "pair.disabled", {
       source,
       destination,
@@ -2164,6 +2221,7 @@ app.post(
     }
     const meta = defaultMeta();
     pairMeta.set(k, meta);
+    invalidateQuoteCache(k);
     recordEvent("pair.meta.reset", { source, destination });
     res.json({ source, destination, ...meta });
   },
@@ -2187,6 +2245,7 @@ app.delete(
       return;
     }
     pairRegistry.delete(k);
+    invalidateQuoteCache(k);
     recordEvent("pair.unregistered", { source, destination });
     res.status(204).send();
   },
@@ -2342,6 +2401,12 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
       ([type, count]) =>
         `stableroute_events_by_type{type="${escapeLabelValue(type)}"} ${count}`,
     ),
+    "# HELP stableroute_quote_cache_hits_total Total number of quote cache hits.",
+    "# TYPE stableroute_quote_cache_hits_total counter",
+    `stableroute_quote_cache_hits_total ${cacheHits}`,
+    "# HELP stableroute_quote_cache_misses_total Total number of quote cache misses.",
+    "# TYPE stableroute_quote_cache_misses_total counter",
+    `stableroute_quote_cache_misses_total ${cacheMisses}`,
     ...buildStoreGaugeLines(),
   ];
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
@@ -2425,6 +2490,54 @@ const pairsEtag = (body: string): string =>
   `W/"${createHash("sha1").update(body).digest("base64").slice(0, 16)}"`;
 
 /**
+ * HEAD /api/v1/pairs
+ *
+ * Returns the same ETag, Content-Type, and Content-Length as GET but with
+ * no body. A well-behaved cache can use this to learn the current ETag and
+ * body size without transferring the full pairs list.
+ *
+ * Honors If-None-Match: responds 304 when the client's cached ETag matches,
+ * and 200 (empty body) otherwise. Respects the pause guard identically to GET.
+ */
+app.head("/api/v1/pairs", (req: Request, res: Response) => {
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "limit must be a single integer",
+    );
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+
+  const cursorResult = parseCursor(req.query.cursor);
+  if (cursorResult === "bad") {
+    sendError(res, req, 400, "invalid_request", "cursor is invalid");
+    return;
+  }
+  const offset = cursorResult ?? 0;
+
+  const allPairs = Array.from(pairRegistry).map((k) => {
+    const [source, destination] = k.split("::");
+    return { source, destination };
+  });
+  const { page, nextCursor } = paginate(allPairs, limit, offset);
+  const body = JSON.stringify({ pairs: page, nextCursor });
+  const etag = pairsEtag(body);
+  if (req.header("if-none-match") === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.setHeader("ETag", etag);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Length", Buffer.byteLength(body).toString());
+  res.status(200).end();
+});
+
+/**
  * List every registered (source, destination) pair.
  * Response: { pairs: [{ source, destination }, ...] }
  */
@@ -2465,29 +2578,6 @@ app.get("/api/v1/pairs", (req: Request, res: Response) => {
 });
 
 /**
- * HEAD /api/v1/pairs
- *
- * Returns the same ETag, Content-Type, and Content-Length as GET but with
- * no body. A well-behaved cache can use this to learn the current ETag and
- * body size without transferring the full pairs list.
- *
- * Honors If-None-Match: responds 304 when the client's cached ETag matches,
- * and 200 (empty body) otherwise. Respects the pause guard identically to GET.
- */
-app.head("/api/v1/pairs", (req: Request, res: Response) => {
-  const body = serializePairs();
-  const etag = pairsEtag(body);
-  if (req.header("if-none-match") === etag) {
-    res.status(304).end();
-    return;
-  }
-  res.setHeader("ETag", etag);
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader("Content-Length", Buffer.byteLength(body).toString());
-  res.status(200).end();
-});
-
-/**
  * Register a pair (test-only / operator surface; will move behind an
  * admin auth guard once the gateway lands). Body: { source, destination }.
  * Returns 201 on first-write, 200 on idempotent re-write.
@@ -2518,6 +2608,7 @@ app.post("/api/v1/pairs", idempotencyGuard, (req: Request, res: Response) => {
   const key = pairKey(source, destination);
   const isNew = !pairRegistry.has(key);
   pairRegistry.add(key);
+  invalidateQuoteCache(key);
   recordEvent(isNew ? "pair.registered" : "pair.refreshed", {
     source,
     destination,
@@ -2570,6 +2661,7 @@ app.post("/api/v1/pairs/bulk", (req: Request, res: Response) => {
       const key = pairKey(source, destination);
       const isNew = !pairRegistry.has(key);
       pairRegistry.add(key);
+      invalidateQuoteCache(key);
       recordEvent(isNew ? "pair.registered" : "pair.refreshed", {
         source,
         destination,
@@ -2797,7 +2889,8 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
     );
   }
 
-  const meta = pairMeta.get(pairKey(source_asset, dest_asset)) ?? defaultMeta();
+  const pKey = pairKey(source_asset, dest_asset);
+  const meta = pairMeta.get(pKey) ?? defaultMeta();
   const boundsViolation = checkQuoteBounds(meta, parsedAmount);
   if (boundsViolation) {
     return sendError(
@@ -2808,7 +2901,49 @@ app.get("/api/v1/quote", (req: Request, res: Response) => {
       boundsViolation.message,
     );
   }
+
+  const version = pairMetaVersions.get(pKey) ?? 0;
+  const cacheKey = `${source_asset}::${dest_asset}::${parsedAmount.toString()}::${version}`;
+  const cached = quoteCache.get(cacheKey);
+  const now = Date.now();
+
+  if (cached && cached.expiresAt > now) {
+    cacheHits += 1;
+    const { feeBps, feeAmount, netAmount, rate } = cached.value;
+    const minReceived = applySlippage(BigInt(netAmount), slippage_bps);
+    return res.json({
+      source_asset,
+      dest_asset,
+      amount: parsedAmount.toString(),
+      estimated_rate: rate,
+      route: [source_asset, dest_asset],
+      feeBps,
+      feeAmount,
+      netAmount,
+      slippage_bps,
+      min_received: minReceived.toString(),
+    });
+  }
+
+  cacheMisses += 1;
   const priced = priceQuote(meta, parsedAmount, slippage_bps);
+
+  quoteCache.set(cacheKey, {
+    value: {
+      source_asset,
+      dest_asset,
+      amount: parsedAmount.toString(),
+      estimated_rate: priced.rate,
+      route: [source_asset, dest_asset],
+      feeBps: priced.feeBps,
+      feeAmount: priced.feeAmount.toString(),
+      netAmount: priced.netAmount.toString(),
+      slippage_bps,
+      min_received: priced.minReceived.toString(),
+      rate: priced.rate,
+    },
+    expiresAt: now + (config.quote_ttl_ms ?? 30000),
+  });
 
   res.json({
     source_asset,

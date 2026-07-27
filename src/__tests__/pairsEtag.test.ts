@@ -190,4 +190,25 @@ describe("GET /api/v1/pairs — ETag and 304 conditional request coverage", () =
       expect(res.status).toBe(304);
     }
   });
+
+  describe("HEAD /api/v1/pairs — ETag and 304 conditional request coverage", () => {
+    it("HEAD returns 200 with an ETag and Content-Type, empty body", async () => {
+      const res = await request(app).head("/api/v1/pairs");
+      expect(res.status).toBe(200);
+      expect(res.headers.etag).toBeDefined();
+      expect(res.headers["content-type"]).toContain("application/json");
+      expect(res.text).toBeFalsy();
+    });
+
+    it("HEAD with matching If-None-Match returns 304", async () => {
+      const first = await request(app).head("/api/v1/pairs");
+      expect(first.status).toBe(200);
+      const etag = first.headers.etag;
+
+      const second = await request(app)
+        .head("/api/v1/pairs")
+        .set("If-None-Match", etag ?? "");
+      expect(second.status).toBe(304);
+    });
+  });
 });

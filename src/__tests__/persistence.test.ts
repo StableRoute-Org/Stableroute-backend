@@ -5,6 +5,9 @@ import {
   getStoreAdapter,
   InMemoryStoreAdapter,
   JsonFileStoreAdapter,
+  isValidSnapshot,
+  migrateSnapshot,
+  validateSnapshotShape,
 } from "../persistence";
 import {
   pairRegistry,
@@ -742,6 +745,205 @@ describe("Persistence Layer", () => {
       expect(existsSync(TEST_SNAP_PATH)).toBe(true);
       const data = JSON.parse(readFileSync(TEST_SNAP_PATH, "utf8"));
       expect(data.pairRegistry).toContain("BTC::USDT");
+    });
+  });
+
+  // ─── Shared validation helper (#414) ─────────────────────────────────────
+  //
+  // These tests pin down the contract of the new `validateSnapshotShape`
+  // helper that replaces the duplicated "is this a structurally valid snapshot"
+  // preambles in `migrateSnapshot` and `isValidSnapshot`. They are deliberately
+  // exhaustive so that any future change to the snapshot contract has to update
+  // the helper (and this test) together.
+
+  describe("validateSnapshotShape (shared persistence helper)", () => {
+    const validBase = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      pairRegistry: [],
+      pairMeta: [],
+      apiKeyStore: [],
+      webhookStore: [],
+      eventLog: [],
+    };
+
+    it("accepts a fully-valid snapshot object", () => {
+      expect(validateSnapshotShape(validBase)).toBe(true);
+    });
+
+    it("accepts a snapshot whose array fields hold arbitrary element types", () => {
+      // The shape helper only checks array-ness; element types are the
+      // caller's concern (migrate / hydrate / etc.).
+      const loose = {
+        schemaVersion: 1,
+        pairRegistry: [123, "x", null],
+        pairMeta: [{}],
+        apiKeyStore: [[1, 2]],
+        webhookStore: [{ url: "x" }],
+        eventLog: [{ type: "x" }],
+      };
+      expect(validateSnapshotShape(loose)).toBe(true);
+    });
+
+    it("rejects null", () => {
+      expect(validateSnapshotShape(null)).toBe(false);
+    });
+
+    it("rejects undefined", () => {
+      expect(validateSnapshotShape(undefined)).toBe(false);
+    });
+
+    it("rejects primitive types (number, string, boolean)", () => {
+      expect(validateSnapshotShape(42)).toBe(false);
+      expect(validateSnapshotShape("snapshot")).toBe(false);
+      expect(validateSnapshotShape(true)).toBe(false);
+    });
+
+    it("rejects a top-level array (wrong root type)", () => {
+      expect(validateSnapshotShape([])).toBe(false);
+      expect(validateSnapshotShape([1, 2, 3])).toBe(false);
+    });
+
+    it("rejects when pairRegistry is missing", () => {
+      const { pairRegistry: _omit, ...rest } = validBase;
+      void _omit;
+      expect(validateSnapshotShape(rest)).toBe(false);
+    });
+
+    it("rejects when pairMeta is missing", () => {
+      const { pairMeta: _omit, ...rest } = validBase;
+      void _omit;
+      expect(validateSnapshotShape(rest)).toBe(false);
+    });
+
+    it("rejects when apiKeyStore is missing", () => {
+      const { apiKeyStore: _omit, ...rest } = validBase;
+      void _omit;
+      expect(validateSnapshotShape(rest)).toBe(false);
+    });
+
+    it("rejects when webhookStore is missing", () => {
+      const { webhookStore: _omit, ...rest } = validBase;
+      void _omit;
+      expect(validateSnapshotShape(rest)).toBe(false);
+    });
+
+    it("rejects when eventLog is missing", () => {
+      const { eventLog: _omit, ...rest } = validBase;
+      void _omit;
+      expect(validateSnapshotShape(rest)).toBe(false);
+    });
+
+    it("rejects when any array field is the wrong type (string instead of array)", () => {
+      expect(
+        validateSnapshotShape({ ...validBase, pairRegistry: "not-an-array" }),
+      ).toBe(false);
+      expect(validateSnapshotShape({ ...validBase, pairMeta: 0 })).toBe(false);
+      expect(
+        validateSnapshotShape({ ...validBase, apiKeyStore: {} }),
+      ).toBe(false);
+      expect(
+        validateSnapshotShape({ ...validBase, webhookStore: null }),
+      ).toBe(false);
+      expect(
+        validateSnapshotShape({ ...validBase, eventLog: false }),
+      ).toBe(false);
+    });
+
+    it("accepts snapshots with extra, unknown top-level fields", () => {
+      // The helper is intentionally permissive: extra fields are forwarded
+      // to the caller's deeper validation. (Currently a no-op for the
+      // persistence layer, but documented for future call sites.)
+      const withExtras = { ...validBase, something: "extra", note: 42 };
+      expect(validateSnapshotShape(withExtras)).toBe(true);
+    });
+  });
+
+  describe("isValidSnapshot (delegates to validateSnapshotShape)", () => {
+    it("rejects when validateSnapshotShape rejects", () => {
+      // null / wrong-type roots must be filtered out by the shared helper.
+      expect(isValidSnapshot(null)).toBe(false);
+      expect(isValidSnapshot([])).toBe(false);
+      expect(
+        isValidSnapshot({
+          schemaVersion: 1,
+          pairRegistry: "nope",
+          pairMeta: [],
+          apiKeyStore: [],
+          webhookStore: [],
+          eventLog: [],
+        }),
+      ).toBe(false);
+    });
+
+    it("rejects when schemaVersion is not a number", () => {
+      const candidate = {
+        schemaVersion: "1",
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      expect(isValidSnapshot(candidate)).toBe(false);
+    });
+
+    it("accepts a complete, numeric-schemaVersion snapshot", () => {
+      const candidate = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        pairRegistry: ["USDC::EURC"],
+        pairMeta: [],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      expect(isValidSnapshot(candidate)).toBe(true);
+    });
+  });
+
+  describe("migrateSnapshot (delegates to validateSnapshotShape)", () => {
+    it("returns null when the shared helper rejects the input", () => {
+      // A non-object root must short-circuit at the preamble, never
+      // reaching the migration chain.
+      expect(migrateSnapshot(null)).toBeNull();
+      expect(migrateSnapshot([])).toBeNull();
+      expect(
+        migrateSnapshot({
+          schemaVersion: 1,
+          // missing every array field
+        }),
+      ).toBeNull();
+    });
+
+    it("preserves the existing migration behaviour for a v0 snapshot", () => {
+      const v0 = {
+        pairRegistry: ["USDC::EURC"],
+        pairMeta: [
+          [
+            "USDC::EURC",
+            { feeBps: 10, minAmount: "1", maxAmount: "100", liquidity: "1000" },
+          ],
+        ],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      const migrated = migrateSnapshot(v0);
+      expect(migrated).not.toBeNull();
+      expect(migrated?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(migrated?.pairMeta[0]?.[1].enabled).toBe(true);
+      expect(migrated?.pairMeta[0]?.[1].rate).toBe("1.0");
+    });
+
+    it("still refuses snapshots with a newer schemaVersion", () => {
+      const newer = {
+        schemaVersion: CURRENT_SCHEMA_VERSION + 5,
+        pairRegistry: [],
+        pairMeta: [],
+        apiKeyStore: [],
+        webhookStore: [],
+        eventLog: [],
+      };
+      expect(migrateSnapshot(newer)).toBeNull();
     });
   });
 });

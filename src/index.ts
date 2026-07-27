@@ -57,6 +57,24 @@ const BULK_ABSOLUTE_MAX = 10_000;
 /** Default cap for bulk endpoints when the config value is not set. */
 const DEFAULT_BULK_MAX_ITEMS = 100;
 
+/** Minimum length of an event `type` field accepted by POST /api/v1/events. */
+const EVENT_TYPE_MIN_LENGTH = 1;
+
+/** Maximum length of an event `type` field accepted by POST /api/v1/events. */
+const EVENT_TYPE_MAX_LENGTH = 128;
+
+/** Maximum number of keys allowed in the top-level `payload` object. */
+const EVENT_PAYLOAD_MAX_KEYS = 32;
+
+/** Maximum byte-length of a single string value within a `payload`. */
+const EVENT_PAYLOAD_MAX_STRING_LENGTH = 256;
+
+/** Maximum number of entries allowed in a single `payload` array. */
+const EVENT_PAYLOAD_MAX_ARRAY_ITEMS = 32;
+
+/** Maximum nesting depth allowed for the recursive `payload` shape. */
+const EVENT_PAYLOAD_MAX_DEPTH = 3;
+
 const app = express();
 
 // --- Persistence Hydration on startup ---
@@ -1051,6 +1069,166 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   const { page, nextCursor } = paginate(items, limit, offset);
   res.json({ items: page, nextCursor });
 });
+
+/**
+ * Strict, recursive validator for the `payload` object accepted by
+ * `POST /api/v1/events`.
+ *
+ * Enforces three limits on the supplied value tree:
+ * 1. Nesting depth (`EVENT_PAYLOAD_MAX_DEPTH`) — prevents deeply-nested objects
+ *    that would explode memory and serialisation time.
+ * 2. Collection cardinality (`EVENT_PAYLOAD_MAX_KEYS`,
+ *    `EVENT_PAYLOAD_MAX_ARRAY_ITEMS`) — caps how wide a single payload may grow.
+ * 3. Per-string length (`EVENT_PAYLOAD_MAX_STRING_LENGTH`) — also applied to
+ *    object keys so a caller cannot push a huge label into a single key.
+ *
+ * Permitted value types are: `string`, `number` (finite only), `boolean`,
+ * `null`, `Array`, and `Object`. Anything else (functions, symbols, `undefined`
+ * in object positions, bigints) is rejected. `Date` is not specially handled —
+ * it serialises to a string on the wire, so callers should pass an ISO string
+ * rather than a `Date` instance.
+ *
+ * The validator is exported so the test suite can exercise every edge case
+ * without having to spin up an HTTP server.
+ *
+ * @param value   - The value currently being inspected.
+ * @param depth   - Current recursion depth (root call passes 0).
+ * @returns `null` when the value is well-formed, otherwise a human-readable
+ *          reason that the route handler can echo back to the client.
+ */
+export const validateEventPayload = (
+  value: unknown,
+  depth = 0,
+): string | null => {
+  if (depth > EVENT_PAYLOAD_MAX_DEPTH) {
+    return `payload nesting depth exceeds ${EVENT_PAYLOAD_MAX_DEPTH}`;
+  }
+  if (value === null) return null;
+  if (typeof value === "string") {
+    if (value.length > EVENT_PAYLOAD_MAX_STRING_LENGTH) {
+      return `payload string values must be <= ${EVENT_PAYLOAD_MAX_STRING_LENGTH} chars`;
+    }
+    return null;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return "payload number values must be finite";
+    }
+    return null;
+  }
+  if (typeof value === "boolean") return null;
+  if (Array.isArray(value)) {
+    if (value.length > EVENT_PAYLOAD_MAX_ARRAY_ITEMS) {
+      return `payload arrays may contain at most ${EVENT_PAYLOAD_MAX_ARRAY_ITEMS} entries`;
+    }
+    for (let i = 0; i < value.length; i++) {
+      const err = validateEventPayload(value[i], depth + 1);
+      if (err !== null) return err;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (keys.length > EVENT_PAYLOAD_MAX_KEYS) {
+      return `payload objects may have at most ${EVENT_PAYLOAD_MAX_KEYS} keys`;
+    }
+    for (const k of keys) {
+      if (k.length > EVENT_PAYLOAD_MAX_STRING_LENGTH) {
+        return `payload keys must be <= ${EVENT_PAYLOAD_MAX_STRING_LENGTH} chars`;
+      }
+      const err = validateEventPayload(obj[k], depth + 1);
+      if (err !== null) return err;
+    }
+    return null;
+  }
+  return "payload values must be string, number, boolean, null, array, or object";
+};
+
+/**
+ * Validate the JSON body of `POST /api/v1/events` and extract the
+ * canonical `{ type, payload }` pair.
+ *
+ * Returns a discriminated result so the route handler can short-circuit with
+ * a single 400 response without duplicating the rejection strings.
+ *
+ * Validation rules:
+ * - The body must be a JSON object (no arrays, no null).
+ * - The only allowed top-level keys are `type` and `payload` (enforced by the
+ *   upstream `rejectUnknownKeys` guard, but a defensive re-check keeps this
+ *   helper usable in isolation in tests).
+ * - `type` must be a string of length [EVENT_TYPE_MIN_LENGTH, EVENT_TYPE_MAX_LENGTH]
+ *   and must be one of {@link KNOWN_EVENT_TYPES}.
+ * - `payload`, when present, must be a JSON object that satisfies
+ *   {@link validateEventPayload}.
+ */
+export const validateEventWriteBody = (
+  body: unknown,
+):
+  | { ok: true; type: EventType; payload: Record<string, unknown> }
+  | { ok: false; message: string } => {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be a JSON object" };
+  }
+  const obj = body as Record<string, unknown>;
+  const unknown = Object.keys(obj).filter(
+    (k) => k !== "type" && k !== "payload",
+  );
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      message: `unknown field(s): ${unknown.join(", ")}`,
+    };
+  }
+  const { type, payload } = obj as { type?: unknown; payload?: unknown };
+  if (type === undefined) {
+    return { ok: false, message: "type is required" };
+  }
+  if (typeof type !== "string") {
+    return { ok: false, message: "type must be a string" };
+  }
+  if (type.length < EVENT_TYPE_MIN_LENGTH || type.length > EVENT_TYPE_MAX_LENGTH) {
+    return {
+      ok: false,
+      message: `type must be ${EVENT_TYPE_MIN_LENGTH}-${EVENT_TYPE_MAX_LENGTH} chars`,
+    };
+  }
+  if (!(KNOWN_EVENT_TYPES as ReadonlyArray<string>).includes(type)) {
+    return {
+      ok: false,
+      message: `type must be one of: ${KNOWN_EVENT_TYPES.join(", ")}`,
+    };
+  }
+  let safePayload: Record<string, unknown> = {};
+  if (payload !== undefined) {
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    ) {
+      return { ok: false, message: "payload must be a JSON object" };
+    }
+    const err = validateEventPayload(payload, 0);
+    if (err !== null) return { ok: false, message: err };
+    safePayload = payload as Record<string, unknown>;
+  }
+  return { ok: true, type: type as EventType, payload: safePayload };
+};
+
+app.post(
+  "/api/v1/events",
+  idempotencyGuard,
+  (req: Request, res: Response) => {
+    if (rejectUnknownKeys(req, res, ["type", "payload"])) return;
+    const result = validateEventWriteBody(req.body ?? {});
+    if (!result.ok) {
+      sendError(res, req, 400, "invalid_request", result.message);
+      return;
+    }
+    const event = recordEvent(result.type, result.payload);
+    res.status(201).json(event);
+  },
+);
 
 /**
  * Constant-time string comparison that never short-circuits on a length mismatch.

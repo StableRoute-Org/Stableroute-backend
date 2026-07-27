@@ -291,6 +291,11 @@ export const trimEventLog = (cap: number): void => {
  * Append an event to the bounded event log, evicting the oldest entry
  * when the log exceeds the effective cap.
  *
+ * Returns the freshly-created {@link AppEvent} (with its generated `id` and
+ * `ts`) so callers — e.g. the `POST /api/v1/events` route handler — can
+ * surface the canonical record in the response. Existing callers that ignore
+ * the return value remain unaffected.
+ *
  * @param type - Must be one of the canonical {@link EventType} values; TypeScript
  *   enforces this at the call site so stray string literals are caught at compile time.
  * @param payload - Arbitrary structured data attached to the event.
@@ -298,10 +303,17 @@ export const trimEventLog = (cap: number): void => {
 export const recordEvent = (
   type: EventType,
   payload: Record<string, unknown>,
-): void => {
-  eventLog.push({ id: randomUUID(), ts: Date.now(), type, payload });
+): AppEvent => {
+  const event: AppEvent = {
+    id: randomUUID(),
+    ts: Date.now(),
+    type,
+    payload,
+  };
+  eventLog.push(event);
   const cap = effectiveEventLogCap();
   if (eventLog.length > cap) eventLog.shift();
+  return event;
 };
 
 /**

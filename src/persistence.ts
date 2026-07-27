@@ -38,19 +38,62 @@ export interface StoreSnapshot {
 // ─── Schema migration helpers ──────────────────────────────────────────────
 
 /**
- * Runtime type-guard that checks a (migrated) object matches the StoreSnapshot shape.
+ * Static list of top-level fields the {@link StoreSnapshot} must carry as
+ * arrays. Centralised so the type-guard and any new validation entry point
+ * stay in lock-step — adding a new collection only requires extending this
+ * tuple once and the helper enforces it everywhere.
  */
-function isValidSnapshot(data: unknown): data is StoreSnapshot {
+const SNAPSHOT_ARRAY_FIELDS = [
+  "pairRegistry",
+  "pairMeta",
+  "apiKeyStore",
+  "webhookStore",
+  "eventLog",
+] as const;
+
+/**
+ * Type of a value that has passed the {@link validateSnapshotShape} check.
+ *
+ * The helper is the single source of truth for "is this thing a structurally
+ * valid snapshot" — both {@link migrateSnapshot} and {@link isValidSnapshot}
+ * delegate to it so the per-handler validation preambles stay identical and
+ * cannot drift out of sync.
+ */
+export type RawSnapshotShape = Record<(typeof SNAPSHOT_ARRAY_FIELDS)[number], unknown> & {
+  schemaVersion: unknown;
+};
+
+/**
+ * Runtime shape-guard used by every persistence entry point.
+ *
+ * Returns `true` when `data` is a non-null object whose top-level fields
+ * include the five snapshot array collections, with no claim about the
+ * element types — that deeper check is left to {@link migrateSnapshot} (which
+ * also runs the version migration chain) and to {@link isValidSnapshot} (which
+ * additionally asserts `schemaVersion` is a number).
+ *
+ * Exported so handlers (and tests) can share the same preamble without
+ * re-implementing the field list.
+ */
+export const validateSnapshotShape = (data: unknown): boolean => {
   if (data === null || typeof data !== "object") return false;
   const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.schemaVersion === "number" &&
-    Array.isArray(obj.pairRegistry) &&
-    Array.isArray(obj.pairMeta) &&
-    Array.isArray(obj.apiKeyStore) &&
-    Array.isArray(obj.webhookStore) &&
-    Array.isArray(obj.eventLog)
-  );
+  for (const field of SNAPSHOT_ARRAY_FIELDS) {
+    if (!Array.isArray(obj[field])) return false;
+  }
+  return true;
+};
+
+/**
+ * Type-guard for the fully-validated (post-migration) snapshot shape used by
+ * the JSON file adapter. Unlike {@link validateSnapshotShape} this also
+ * asserts that `schemaVersion` is a number — matching the contract persisted
+ * by {@link CURRENT_SCHEMA_VERSION} snapshots.
+ */
+export function isValidSnapshot(data: unknown): data is StoreSnapshot {
+  if (!validateSnapshotShape(data)) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.schemaVersion === "number";
 }
 
 /**
@@ -60,8 +103,8 @@ function isValidSnapshot(data: unknown): data is StoreSnapshot {
  * Returns `null` when the snapshot uses a *newer* schema version than this
  * build can handle, or when the final shape is invalid.
  */
-function migrateSnapshot(data: unknown): StoreSnapshot | null {
-  if (data === null || typeof data !== "object") return null;
+export function migrateSnapshot(data: unknown): StoreSnapshot | null {
+  if (!validateSnapshotShape(data)) return null;
   const obj = data as Record<string, unknown>;
 
   const version =

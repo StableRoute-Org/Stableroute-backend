@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "id": "GHSA-mh99-v99m-4gvg",
+    "reason": "brace-expansion DoS advisory is reachable only via dev tooling (eslint/minimatch); production dependencies audit clean (npm audit --omit=dev => 0 vulnerabilities). No runtime exposure.",
+    "expires": "2026-12-31"
+  }
+]

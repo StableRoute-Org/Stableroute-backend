@@ -40,7 +40,7 @@ describe("Webhooks lifecycle", () => {
   });
 
   it("GET /api/v1/webhooks/:id returns 404 for unknown id", async () => {
-    const res = await request(app).get("/api/v1/webhooks/wh_nonexistent");
+    const res = await request(app).get("/api/v1/webhooks/wh_0000000000000000");
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("not_found");
     expect(res.body.requestId).toBeDefined();
@@ -67,7 +67,7 @@ describe("Webhooks lifecycle", () => {
 
   it("PATCH /api/v1/webhooks/:id returns 404 for unknown id", async () => {
     const res = await request(app)
-      .patch("/api/v1/webhooks/wh_nonexistent")
+      .patch("/api/v1/webhooks/wh_0000000000000000")
       .send({ events: ["pair.registered"] });
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("not_found");
@@ -203,8 +203,53 @@ describe("Webhooks lifecycle", () => {
   });
 
   it("DELETE unknown webhook id returns 404", async () => {
-    const res = await request(app).delete("/api/v1/webhooks/wh_notreal");
+    const res = await request(app).delete("/api/v1/webhooks/wh_0000000000000000");
     expect(res.status).toBe(404);
+  });
+
+  // ── Webhook ID validation (malformed ids) ──────────────────────────────
+
+  it.each([
+    "wh_",
+    "wh_abc",
+    "wh_nonexistent",
+    "wh_notreal",
+    "no_prefix_1234567890",
+    "wh_GGGGGGGGGGGGGGGG",
+    "wh_1234567890abcdefg",
+  ])("returns 400 for malformed webhook id %s on GET", async (badId) => {
+    const res = await request(app).get(`/api/v1/webhooks/${badId}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/wh_ \+ 16 hex/);
+  });
+
+  it.each([
+    "wh_",
+    "wh_abc",
+    "no_prefix_1234567890",
+    "wh_GGGGGGGGGGGGGGGG",
+    "wh_1234567890abcdefg",
+  ])("returns 400 for malformed webhook id %s on DELETE", async (badId) => {
+    const res = await request(app).delete(`/api/v1/webhooks/${badId}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/wh_ \+ 16 hex/);
+  });
+
+  it.each([
+    "wh_",
+    "wh_abc",
+    "no_prefix_1234567890",
+    "wh_GGGGGGGGGGGGGGGG",
+    "wh_1234567890abcdefg",
+  ])("returns 400 for malformed webhook id %s on PATCH", async (badId) => {
+    const res = await request(app)
+      .patch(`/api/v1/webhooks/${badId}`)
+      .send({ events: ["pair.registered"] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(res.body.message).toMatch(/wh_ \+ 16 hex/);
   });
 
   it("POST rejects missing url with 400", async () => {

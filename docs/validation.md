@@ -16,6 +16,7 @@ Webhook registration validates:
 
 - `url` must be `http(s)` with length ≤ 2048 and pass SSRF checks (`isSafeWebhookUrl`)
 - `events` must be a non-empty string array with deduplicated entries
+- webhook `id` route params must match `wh_` + 16 lowercase hex chars (`/^wh_[a-f0-9]{16}$/`)
 
 Unknown JSON keys on mutating routes are rejected via `rejectUnknownKeys`.
 

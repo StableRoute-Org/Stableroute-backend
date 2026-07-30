@@ -103,6 +103,12 @@ const WEBHOOK_MAX_EVENTS = 20;
 /** Maximum length of a single event-type name string. */
 const WEBHOOK_MAX_EVENT_LENGTH = 128;
 
+/** Maximum length of a webhook URL accepted on create. */
+const WEBHOOK_MAX_URL_LENGTH = 2048;
+
+/** Regex matching a valid webhook id: wh_ followed by exactly 16 lowercase hex chars. */
+const WEBHOOK_ID_RE = /^wh_[a-f0-9]{16}$/;
+
 /** Event name prefixes reserved for internal use. */
 const WEBHOOK_RESERVED_PREFIXES = ["internal.", "system.", "admin."];
 
@@ -1638,8 +1644,34 @@ app.post("/api/v1/api-keys/:prefix/rotate", (req: Request, res: Response) => {
     });
 });
 
+/**
+ * Validate that a webhook id route param matches the expected format.
+ *
+ * Returns `true` and sends a 400 when the id is malformed, so the caller can
+ * `return` immediately.  Passing a syntactically invalid id (wrong prefix,
+ * wrong length, or non-hex chars) is rejected before hitting the store.
+ */
+const rejectInvalidWebhookId = (
+  res: Response,
+  req: Request,
+  id: string,
+): boolean => {
+  if (!WEBHOOK_ID_RE.test(id)) {
+    sendError(
+      res,
+      req,
+      400,
+      "invalid_request",
+      "webhook id must match wh_ + 16 hex chars",
+    );
+    return true;
+  }
+  return false;
+};
+
 app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const id = req.params.id ?? "";
+  if (rejectInvalidWebhookId(res, req, id)) return;
   if (!webhookStore.has(id)) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
@@ -1768,14 +1800,14 @@ app.post(
     if (
       typeof url !== "string" ||
       !/^https?:\/\//.test(url) ||
-      url.length > 2048
+      url.length > WEBHOOK_MAX_URL_LENGTH
     ) {
       sendError(
         res,
         req,
         400,
         "invalid_request",
-        "url must be http(s), <=2048 chars",
+        `url must be http(s), <=${WEBHOOK_MAX_URL_LENGTH} chars`,
       );
       return;
     }
@@ -1803,6 +1835,7 @@ app.post(
  */
 app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const id = req.params.id ?? "";
+  if (rejectInvalidWebhookId(res, req, id)) return;
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
@@ -1826,80 +1859,15 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
 app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   if (rejectUnknownKeys(req, res, ["events"])) return;
   const id = req.params.id ?? "";
+  if (rejectInvalidWebhookId(res, req, id)) return;
   const record = webhookStore.get(id);
   if (!record) {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
-  if (rejectUnknownKeys(req, res, ["events"])) return;
   const { events } = req.body ?? {};
-  if (
-    !Array.isArray(events) ||
-    events.length === 0 ||
-    events.some((e) => typeof e !== "string")
-  ) {
-    sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      "events must be a non-empty string array",
-    );
-    return;
-  }
-  if (events.length > WEBHOOK_MAX_EVENTS) {
-    sendError(
-      res,
-      req,
-      400,
-      "invalid_request",
-      `events may contain at most ${WEBHOOK_MAX_EVENTS} entries`,
-    );
-    return;
-  }
-  for (const name of events as string[]) {
-    if (name.trim().length === 0) {
-      sendError(
-        res,
-        req,
-        400,
-        "invalid_request",
-        "event names must not be blank or whitespace-only",
-      );
-      return;
-    }
-    if (name.length > WEBHOOK_MAX_EVENT_LENGTH) {
-      sendError(
-        res,
-        req,
-        400,
-        "invalid_request",
-        `event names must be <= ${WEBHOOK_MAX_EVENT_LENGTH} chars`,
-      );
-      return;
-    }
-    if (WEBHOOK_RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
-      sendError(
-        res,
-        req,
-        400,
-        "invalid_request",
-        `event name "${name}" uses a reserved prefix`,
-      );
-      return;
-    }
-    if (name !== "*" && !/^[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_]+$/.test(name)) {
-      sendError(
-        res,
-        req,
-        400,
-        "invalid_request",
-        `event name "${name}" must be "*" or follow "namespace.action" format`,
-      );
-      return;
-    }
-  }
-  const deduped = [...new Set(events as string[])];
+  const deduped = validateWebhookEvents(res, req, events);
+  if (deduped === null) return;
   // url is preserved; only events are mutated.
   const updated = { ...record, events: deduped };
   webhookStore.set(id, updated);

@@ -1760,7 +1760,7 @@ describe("StableRoute Backend", () => {
     });
 
     it("returns 404 when deleting non-existent webhook", async () => {
-      const res = await request(app).delete("/api/v1/webhooks/nonexistent-id");
+      const res = await request(app).delete("/api/v1/webhooks/wh_0000000000000000");
       expect(res.status).toBe(404);
     });
 

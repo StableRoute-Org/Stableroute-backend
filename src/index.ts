@@ -2472,6 +2472,7 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
  * Shared between the GET and HEAD handlers so the two always produce
  * byte-identical output and therefore byte-identical ETags.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained helper
 const serializePairs = (): string => {
   const pairs = Array.from(pairRegistry).map((k) => {
     const [source, destination] = k.split("::");

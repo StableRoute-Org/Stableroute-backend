@@ -3,5 +3,15 @@
     "id": "GHSA-mh99-v99m-4gvg",
     "reason": "brace-expansion DoS advisory is reachable only via dev tooling (eslint/minimatch); production dependencies audit clean (npm audit --omit=dev => 0 vulnerabilities). No runtime exposure.",
     "expires": "2026-12-31"
+  },
+  {
+    "id": "GHSA-5p4m-2wfm-xmqj",
+    "reason": "js-yaml quadratic-CPU advisory reachable only via dev/test tooling; prod audit clean.",
+    "expires": "2026-12-31"
+  },
+  {
+    "id": "GHSA-rgw5-rvv9-x895",
+    "reason": "brace-expansion DoS (CVE-2026-14257 bypass) reachable only via dev tooling; prod audit clean.",
+    "expires": "2026-12-31"
   }
 ]

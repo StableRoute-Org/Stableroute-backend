@@ -222,6 +222,131 @@ export type ApiErrorCode =
   | "insufficient_liquidity"
   | "request_timeout";
 
+export type ApiErrorDefinition = {
+  readonly status: number;
+  readonly safeMessage: string;
+  readonly expose: boolean;
+};
+
+/**
+ * Single status/message taxonomy for API errors. Explicit route handlers and
+ * the final Express error middleware both resolve through this map so clients
+ * can rely on stable codes and statuses.
+ */
+export const API_ERROR_DEFINITIONS: Record<ApiErrorCode, ApiErrorDefinition> = {
+  not_found: {
+    status: 404,
+    safeMessage: "resource not found",
+    expose: true,
+  },
+  invalid_request: {
+    status: 400,
+    safeMessage: "request is invalid",
+    expose: true,
+  },
+  invalid_json: {
+    status: 400,
+    safeMessage: "request body is not valid JSON",
+    expose: true,
+  },
+  unauthorized: {
+    status: 401,
+    safeMessage: "authentication is required",
+    expose: true,
+  },
+  forbidden: {
+    status: 403,
+    safeMessage: "permission denied",
+    expose: true,
+  },
+  rate_limited: {
+    status: 429,
+    safeMessage: "too many requests",
+    expose: true,
+  },
+  service_paused: {
+    status: 503,
+    safeMessage: "service is paused",
+    expose: true,
+  },
+  internal_error: {
+    status: 500,
+    safeMessage: "An unexpected error occurred",
+    expose: false,
+  },
+  not_acceptable: {
+    status: 406,
+    safeMessage: "requested response format is not acceptable",
+    expose: true,
+  },
+  payload_too_large: {
+    status: 413,
+    safeMessage: "request body exceeds the 100 KiB limit",
+    expose: true,
+  },
+  conflict: {
+    status: 409,
+    safeMessage: "resource conflict",
+    expose: true,
+  },
+  method_not_allowed: {
+    status: 405,
+    safeMessage: "method not allowed",
+    expose: true,
+  },
+  read_only_mode: {
+    status: 503,
+    safeMessage: "service is in read-only mode",
+    expose: true,
+  },
+  pair_not_registered: {
+    status: 404,
+    safeMessage: "pair not registered",
+    expose: true,
+  },
+  idempotency_conflict: {
+    status: 409,
+    safeMessage: "idempotency key conflicts with a different request body",
+    expose: true,
+  },
+  unsupported_media_type: {
+    status: 415,
+    safeMessage: "unsupported media type",
+    expose: true,
+  },
+  insufficient_liquidity: {
+    status: 422,
+    safeMessage: "insufficient liquidity",
+    expose: true,
+  },
+  request_timeout: {
+    status: 503,
+    safeMessage: "Request timed out",
+    expose: true,
+  },
+};
+
+export class ApiError extends Error {
+  readonly code: ApiErrorCode;
+  readonly status: number;
+  readonly expose: boolean;
+  readonly extra: ErrorResponseExtra;
+
+  constructor(
+    code: ApiErrorCode,
+    message?: string,
+    extra: ErrorResponseExtra = {},
+  ) {
+    const definition = API_ERROR_DEFINITIONS[code];
+    super(message ?? definition.safeMessage);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = definition.status;
+    this.expose = definition.expose;
+    this.extra = extra;
+  }
+}
+
 /**
  * Validates an inbound X-Request-Id value.
  *
@@ -242,8 +367,29 @@ export const isValidRequestId = (value: string): boolean =>
 const getRequestId = (req: Request): string | undefined =>
   (req as RequestWithId).id;
 
+const writeApiErrorResponse = (
+  res: Response,
+  req: Request,
+  apiError: ApiError,
+) => {
+  const definition = API_ERROR_DEFINITIONS[apiError.code];
+  const body: Record<string, unknown> = {
+    code: apiError.code,
+    error: apiError.code,
+    message: apiError.expose ? apiError.message : definition.safeMessage,
+    ...apiError.extra,
+  };
+  const requestId = getRequestId(req);
+  if (requestId !== undefined) {
+    body.requestId = requestId;
+  }
+  return res.status(apiError.status).json(body);
+};
+
 /**
- * Send the canonical API error body used by explicit handlers and middleware.
+ * Send the canonical API error body used by explicit handlers. The status
+ * argument is retained for call-site readability, while the emitted status
+ * comes from API_ERROR_DEFINITIONS so code-to-status mapping lives in one place.
  */
 const sendError = (
   res: Response,
@@ -252,10 +398,75 @@ const sendError = (
   error: ApiErrorCode,
   message: string,
   extra: ErrorResponseExtra = {},
-) =>
-  res
-    .status(status)
-    .json({ error, message, ...extra, requestId: getRequestId(req) });
+) => {
+  const apiError = new ApiError(error, message, extra);
+  if (status !== apiError.status) {
+    logger.warn(
+      {
+        code: error,
+        requestedStatus: status,
+        mappedStatus: apiError.status,
+        requestId: getRequestId(req),
+      },
+      "api error status resolved from taxonomy",
+    );
+  }
+  return writeApiErrorResponse(res, req, apiError);
+};
+
+const hasParserType = (err: unknown, type: string): boolean =>
+  Boolean(
+    err &&
+      typeof err === "object" &&
+      "type" in err &&
+      (err as { type: unknown }).type === type,
+  );
+
+const toApiError = (err: unknown): ApiError | undefined => {
+  if (err instanceof ApiError) {
+    return err;
+  }
+  if (hasParserType(err, "entity.too.large")) {
+    return new ApiError("payload_too_large");
+  }
+  if (hasParserType(err, "entity.parse.failed") || err instanceof SyntaxError) {
+    return new ApiError("invalid_json");
+  }
+  return undefined;
+};
+
+export const apiErrorHandler = (
+  err: unknown,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  const apiError =
+    toApiError(err) ??
+    new ApiError("internal_error", undefined, {
+      method: req.method,
+      path: req.path,
+    });
+
+  if (apiError.code === "internal_error") {
+    logger.error(
+      {
+        err,
+        requestId: getRequestId(req),
+        method: req.method,
+        path: req.path,
+      },
+      "unhandled request error",
+    );
+  }
+
+  writeApiErrorResponse(res, req, apiError);
+};
 
 /**
  * Helper to retrieve the active request timeout in milliseconds.
@@ -3056,73 +3267,37 @@ if (process.env.NODE_ENV === "test") {
       res.end();
     }, delay);
   });
+
+  app.get(
+    "/test/domain-validation",
+    (_req: Request, _res: Response, next: NextFunction) => {
+      next(
+        new ApiError("invalid_request", "amount must be a positive number", {
+          field: "amount",
+        }),
+      );
+    },
+  );
+
+  app.get(
+    "/test/domain-conflict",
+    (_req: Request, _res: Response, next: NextFunction) => {
+      next(new ApiError("conflict", "resource version conflict"));
+    },
+  );
+
+  app.get("/test/unexpected-error", () => {
+    throw new Error("secret connection string");
+  });
 }
 
 // Unknown route: structured 404 echoing the request id.
-app.use((req: Request, res: Response) => {
-  sendError(
-    res,
-    req,
-    404,
-    "not_found",
-    `No route for ${req.method} ${req.path}`,
-  );
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  next(new ApiError("not_found", `No route for ${req.method} ${req.path}`));
 });
 
-// Final 4-arg error handler. Any handler that throws or calls next(err)
-// lands here; the response shape is the same canonical
-// { error, message, requestId } as the explicit 400 / 404 bodies so
-// clients can branch on `error` uniformly.
-app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-  if (
-    err &&
-    typeof err === "object" &&
-    "type" in err &&
-    (err as { type: string }).type === "entity.too.large"
-  ) {
-    sendError(
-      res,
-      req,
-      413,
-      "payload_too_large",
-      "request body exceeds the 100 KiB limit",
-    );
-    return;
-  }
-  // Malformed JSON body. express.json() raises a SyntaxError tagged with
-  // `type: "entity.parse.failed"`; map it to a canonical 400 client error
-  // instead of letting it fall through to the generic 500. The message is
-  // fixed so the raw parser text (which can echo fragments of the input) is
-  // never leaked back to the caller.
-  if (
-    err &&
-    typeof err === "object" &&
-    (("type" in err &&
-      (err as { type: string }).type === "entity.parse.failed") ||
-      err instanceof SyntaxError)
-  ) {
-    sendError(res, req, 400, "invalid_json", "request body is not valid JSON");
-    return;
-  }
-  const isProduction = process.env.NODE_ENV === "production";
-  logger.error(
-    {
-      err,
-      requestId: getRequestId(req),
-      method: req.method,
-      path: req.path,
-    },
-    "unhandled request error",
-  );
-  const message = isProduction
-    ? "An unexpected error occurred"
-    : err instanceof Error
-      ? err.message
-      : "Unexpected server error";
-  sendError(res, req, 500, "internal_error", message, {
-    method: req.method,
-    path: req.path,
-  });
-});
+// Final 4-arg error handler. Any thrown/next(err) domain, parser, or
+// unexpected error lands in the same safe formatter.
+app.use(apiErrorHandler);
 
 export default app;

@@ -179,7 +179,7 @@ cross-test bleed. This function is not exposed via any HTTP route.
 
 ## Error responses
 
-Handlers use a shared `sendError` helper so 400/404/413/500-style responses keep the canonical `{ error, message, requestId }` shape. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
+Handlers use a typed `ApiError` taxonomy and one final `apiErrorHandler` mapping so each stable error code has one HTTP status and safe client message. Responses include `{ code, error, message, requestId }`; `error` is retained as a compatibility alias for clients that already branch on it. The request id is attached before JSON parsing, which keeps body-parser errors correlated with the `X-Request-Id` response header.
 
 ## Contributing
 

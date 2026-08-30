@@ -83,10 +83,10 @@ Sets four hardening headers on every response:
 Registered `app.get/post/patch/delete` handlers. Each handler validates its inputs and calls `sendError` for client errors or `res.json` for success. Unhandled exceptions propagate to the error handler via `next(err)`.
 
 **10. 404 catch-all**  
-An `app.use` registered after all routes returns a structured 404 using `sendError` for any path/method combination that did not match a route.
+An `app.use` registered after all routes forwards an `ApiError("not_found")` for any path/method combination that did not match a route.
 
 **11. Error handler** (4-argument `app.use`)  
-Catches any error passed to `next(err)` or thrown synchronously in a handler. Translates `entity.too.large` (body-parser overflow) into 413; all other errors become 500. The response always uses the canonical `{ error, message, requestId }` shape.
+Catches any error passed to `next(err)` or thrown synchronously in a handler. The `API_ERROR_DEFINITIONS` taxonomy maps each stable `code` to one HTTP status and safe message, including parser errors such as `entity.too.large` and `entity.parse.failed`. Unexpected errors become `500 internal_error` without leaking internal details. The response always uses the canonical `{ code, error, message, requestId }` shape, where `error` is retained as a compatibility alias for `code`.
 
 ---
 
@@ -139,10 +139,11 @@ In all cases the `X-Request-Id` header is already set (layer 2 runs first), so t
 
 ## Canonical Error Envelope
 
-Every error response — whether from a route handler, the 404 catch-all, or the global error handler — uses the same shape produced by `sendError` in `src/index.ts`:
+Every error response — whether from a route handler, the 404 catch-all, or the global error handler — uses the same taxonomy-backed shape produced by `sendError` / `apiErrorHandler` in `src/index.ts`:
 
 ```jsonc
 {
+  "code": "snake_case_error_code",   // machine-readable
   "error": "snake_case_error_code",  // machine-readable
   "message": "Human-readable detail.",
   "requestId": "uuid-or-caller-supplied-id",
@@ -150,7 +151,7 @@ Every error response — whether from a route handler, the 404 catch-all, or the
 }
 ```
 
-Clients can branch on `error` for programmatic handling and log `requestId` for cross-service tracing.
+Clients can branch on `code` for programmatic handling and log `requestId` for cross-service tracing. Existing clients may continue using the `error` alias.
 
 ---
 

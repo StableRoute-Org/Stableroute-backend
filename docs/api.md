@@ -34,6 +34,7 @@ All error responses share a single canonical JSON shape:
 
 ```json
 {
+  "code": "invalid_request",
   "error": "invalid_request",
   "message": "human-readable explanation",
   "requestId": "0f8c…-uuid"
@@ -41,7 +42,9 @@ All error responses share a single canonical JSON shape:
 ```
 
 Some errors include extra fields (e.g. the `500` handler adds `method`
-and `path`), but `error`, `message`, and `requestId` are always present.
+and `path`), but `code`, `error`, `message`, and `requestId` are always
+present. `error` is a compatibility alias for `code`; new clients should prefer
+`code`.
 
 ### Error codes
 

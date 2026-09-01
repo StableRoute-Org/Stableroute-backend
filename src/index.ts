@@ -41,6 +41,7 @@ import {
   type EventType,
 } from "./stores";
 import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import { listDeadLetter, replayDeadLetter, clearDeadLetter } from "./services/webhookDelivery";
 
 interface CacheEntry {
   value: {
@@ -2012,6 +2013,34 @@ app.post(
  *
  * @route GET /api/v1/webhooks/:id
  */
+// ─── Dead-letter queue routes (#552) ────────────────────────────────────────
+
+app.get("/api/v1/webhooks/dead-letter", (req: Request, res: Response) => {
+  const items = listDeadLetter();
+  const rawLimit = parseIntegerQueryParam(req.query.limit, 100);
+  if (rawLimit === null) {
+    sendError(res, req, 400, "invalid_request", "limit must be a single integer");
+    return;
+  }
+  const limit = Math.min(500, Math.max(1, rawLimit));
+  res.json({ items: items.slice(0, limit), total: items.length });
+});
+
+app.post("/api/v1/webhooks/dead-letter/:id/replay", async (req: Request, res: Response) => {
+  const id = req.params.id ?? "";
+  const attempts = await replayDeadLetter(id);
+  if (attempts === null) {
+    sendError(res, req, 404, "not_found", `dead-letter entry ${id} not found`);
+    return;
+  }
+  res.json({ id, attempts });
+});
+
+app.delete("/api/v1/webhooks/dead-letter", (_req: Request, res: Response) => {
+  clearDeadLetter();
+  res.status(204).send();
+});
+
 app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const id = req.params.id ?? "";
   const record = webhookStore.get(id);

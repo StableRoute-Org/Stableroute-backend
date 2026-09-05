@@ -6,6 +6,7 @@ import helmet from "helmet";
 import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
+import { generateWebhookSecret, deliverEventToWebhooks, webhookDlq } from "./webhook/delivery";
 import { resolveClientIp } from "./utils/clientIp";
 import { getStoreAdapter } from "./persistence";
 import {
@@ -23,6 +24,7 @@ import {
   pairKey,
   defaultMeta,
   recordEvent,
+  setWebhookDeliveryHook,
   trimEventLog,
   EVENT_LOG_CAP,
   EVENT_LOG_CAP_MAX,
@@ -131,6 +133,10 @@ const EVENT_PAYLOAD_MAX_ARRAY_ITEMS = 32;
 const EVENT_PAYLOAD_MAX_DEPTH = 3;
 
 const app = express();
+// Register webhook delivery hook so every recorded event is delivered to subscribers.
+setWebhookDeliveryHook((event) => {
+  deliverEventToWebhooks(event, webhookStore).catch(() => {});
+});
 
 // --- Persistence Hydration on startup ---
 export const hydrationPromise = (async () => {
@@ -1997,10 +2003,11 @@ app.post(
     const deduped = validateWebhookEvents(res, req, events);
     if (deduped === null) return;
     const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
+    const secret = generateWebhookSecret();
+    webhookStore.set(id, { url, events: deduped, createdAt: Date.now(), secret });
     // Record id and url only — never any webhook secret material.
     recordEvent("webhook.created", { id, url });
-    res.status(201).json({ id, url, events: deduped });
+    res.status(201).json({ id, url, events: deduped, secret });
   },
 );
 
@@ -2115,6 +2122,47 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   const updated = { ...record, events: deduped };
   webhookStore.set(id, updated);
   res.json({ id, ...updated });
+});
+
+/**
+ * List dead-lettered webhook deliveries.
+ *
+ * @route GET /api/v1/webhooks/dlq
+ */
+app.get("/api/v1/webhooks/dlq", (req: Request, res: Response) => {
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  const limit = Math.min(
+    Math.max(1, Number(query["limit"] ?? 20)),
+    100,
+  );
+  const entries = Array.from(webhookDlq.values())
+    .sort((a, b) => b.deadAt - a.deadAt)
+    .slice(0, limit);
+  res.json({ entries, total: webhookDlq.size });
+});
+
+/**
+ * Replay a dead-lettered webhook delivery.
+ *
+ * @route POST /api/v1/webhooks/dlq/:id/replay
+ */
+app.post("/api/v1/webhooks/dlq/:id/replay", (req: Request, res: Response) => {
+  const id = req.params.id ?? "";
+  const entry = webhookDlq.get(id);
+  if (!entry) {
+    sendError(res, req, 404, "not_found", `dlq entry ${id} not found`);
+    return;
+  }
+  const record = webhookStore.get(entry.webhookId);
+  if (!record) {
+    sendError(res, req, 404, "not_found", `webhook ${entry.webhookId} not found`);
+    return;
+  }
+  webhookDlq.delete(id);
+  deliverEventToWebhooks(entry.event, new Map([[entry.webhookId, record]])).catch(
+    () => {},
+  );
+  res.json({ replayed: true, id });
 });
 
 /**

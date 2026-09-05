@@ -156,6 +156,7 @@ export const verifyApiKeySecret = (
 
 /** Record stored for each registered webhook. */
 export type WebhookRecord = {
+  secret: string;
   url: string;
   events: string[];
   createdAt: number;
@@ -300,6 +301,14 @@ export const trimEventLog = (cap: number): void => {
  *   enforces this at the call site so stray string literals are caught at compile time.
  * @param payload - Arbitrary structured data attached to the event.
  */
+/** Optional hook for delivering recorded events to webhook subscribers. */
+let webhookDeliveryHook: ((event: AppEvent) => void) | undefined;
+
+/** Register a callback that fires after every event is recorded. */
+export function setWebhookDeliveryHook(hook: (event: AppEvent) => void): void {
+  webhookDeliveryHook = hook;
+}
+
 export const recordEvent = (
   type: EventType,
   payload: Record<string, unknown>,
@@ -313,6 +322,13 @@ export const recordEvent = (
   eventLog.push(event);
   const cap = effectiveEventLogCap();
   if (eventLog.length > cap) eventLog.shift();
+  if (webhookDeliveryHook) {
+    try {
+      webhookDeliveryHook(event);
+    } catch {
+      // Delivery errors must not break event recording.
+    }
+  }
   return event;
 };
 
@@ -480,7 +496,12 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
             item.length === 2 &&
             typeof item[0] === "string"
           ) {
-            webhookStore.set(item[0], item[1] as WebhookRecord);
+            const record = item[1] as WebhookRecord;
+            // Backfill secret for webhooks created before the signing feature.
+            if (!record.secret) {
+              record.secret = randomBytes(32).toString("base64url");
+            }
+            webhookStore.set(item[0], record);
           }
         }
       }

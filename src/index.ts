@@ -2194,13 +2194,26 @@ const makePairMetaPatch =
       sendError(res, req, 404, "not_found", "pair not registered");
       return;
     }
-    if (rejectUnknownKeys(req, res, [bodyKey])) return;
-    const value = (req.body ?? {})[bodyKey] as unknown;
+    const body = req.body ?? {};
+    if (rejectUnknownKeys(req, res, [bodyKey, "expected_version"])) return;
+    const value = body[bodyKey] as unknown;
     if (!validate(value)) {
       sendError(res, req, 400, "invalid_request", errorMessage);
       return;
     }
     const meta = pairMeta.get(k) ?? defaultMeta();
+    // Optimistic-concurrency guard: reject stale writes
+    const expectedVersion = (body as Record<string, unknown>)["expected_version"];
+    if (expectedVersion !== undefined) {
+      if (typeof expectedVersion !== "number") {
+        sendError(res, req, 400, "invalid_request", "expected_version must be a number");
+        return;
+      }
+      if (expectedVersion !== meta.version) {
+        sendError(res, req, 409, "conflict", `stale version: expected ${expectedVersion}, found ${meta.version}`);
+        return;
+      }
+    }
     // Optional cross-field invariant (e.g. min <= max). Runs after the
     // per-field format check so `value` is already known to be a valid
     // integer string; comparisons stay in BigInt space (see crossCheck impls).
@@ -2212,6 +2225,7 @@ const makePairMetaPatch =
       }
     }
     (meta as Record<string, unknown>)[field] = value;
+    meta.version += 1;
     pairMeta.set(k, meta);
     invalidateQuoteCache(k);
     res.json({ source, destination, ...meta });

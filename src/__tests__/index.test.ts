@@ -1010,6 +1010,7 @@ describe("StableRoute Backend", () => {
         maxAmount: "0",
         liquidity: "0",
         enabled: true,
+        version: 0,
       });
     });
 
@@ -1052,6 +1053,115 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("optimistic concurrency control (OCC) for pair-meta patches", () => {
+    it("returns version 0 in GET /info for a freshly registered pair", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC1", destination: "META" });
+
+      const info = await request(app).get("/api/v1/pairs/OCC1/META/info");
+      expect(info.status).toBe(200);
+      expect(info.body.version).toBe(0);
+    });
+
+    it("increments version on every successful PATCH", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC2", destination: "META" });
+
+      const patch1 = await request(app)
+        .patch("/api/v1/pairs/OCC2/META/fee_bps")
+        .send({ feeBps: 10 });
+      expect(patch1.status).toBe(200);
+      expect(patch1.body.version).toBe(1);
+
+      const patch2 = await request(app)
+        .patch("/api/v1/pairs/OCC2/META/fee_bps")
+        .send({ feeBps: 20 });
+      expect(patch2.status).toBe(200);
+      expect(patch2.body.version).toBe(2);
+
+      const info = await request(app).get("/api/v1/pairs/OCC2/META/info");
+      expect(info.body.version).toBe(2);
+    });
+
+    it("rejects a stale write with 409 when expected_version does not match", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC3", destination: "META" });
+
+      // Bump version to 1
+      await request(app)
+        .patch("/api/v1/pairs/OCC3/META/fee_bps")
+        .send({ feeBps: 10 });
+
+      // Attempt stale write with expected_version 0
+      const stale = await request(app)
+        .patch("/api/v1/pairs/OCC3/META/fee_bps")
+        .send({ feeBps: 20, expected_version: 0 });
+      expect(stale.status).toBe(409);
+      expect(stale.body.error).toBe("conflict");
+      expect(stale.body.message).toMatch(/stale version/);
+    });
+
+    it("allows a concurrent-safe write when expected_version matches", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC4", destination: "META" });
+
+      const info = await request(app).get("/api/v1/pairs/OCC4/META/info");
+      const v0 = info.body.version;
+
+      const patch = await request(app)
+        .patch("/api/v1/pairs/OCC4/META/fee_bps")
+        .send({ feeBps: 30, expected_version: v0 });
+      expect(patch.status).toBe(200);
+      expect(patch.body.version).toBe(v0 + 1);
+    });
+
+    it("rejects non-numeric expected_version with 400", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC5", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/OCC5/META/fee_bps")
+        .send({ feeBps: 10, expected_version: "zero" as unknown });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects unknown keys alongside expected_version", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC6", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/OCC6/META/fee_bps")
+        .send({ feeBps: 10, expected_version: 0, extra: true });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("extra");
+    });
+
+    it("resets version to 0 on POST /reset", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC7", destination: "META" });
+
+      await request(app)
+        .patch("/api/v1/pairs/OCC7/META/fee_bps")
+        .send({ feeBps: 10 });
+
+      const reset = await request(app)
+        .post("/api/v1/pairs/OCC7/META/reset");
+      expect(reset.status).toBe(200);
+      expect(reset.body.version).toBe(0);
+
+      const info = await request(app).get("/api/v1/pairs/OCC7/META/info");
+      expect(info.body.version).toBe(0);
     });
   });
 
@@ -2125,6 +2235,115 @@ describe("StableRoute Backend", () => {
         .query({ source_asset: "USDC", dest_asset: "EURC", amount: huge });
       expect(res.status).toBe(200);
       expect(res.body.amount).toBe(huge);
+    });
+  });
+
+  describe("optimistic concurrency control (OCC) for pair-meta patches", () => {
+    it("returns version 0 in GET /info for a freshly registered pair", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC1", destination: "META" });
+
+      const info = await request(app).get("/api/v1/pairs/OCC1/META/info");
+      expect(info.status).toBe(200);
+      expect(info.body.version).toBe(0);
+    });
+
+    it("increments version on every successful PATCH", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC2", destination: "META" });
+
+      const patch1 = await request(app)
+        .patch("/api/v1/pairs/OCC2/META/fee_bps")
+        .send({ feeBps: 10 });
+      expect(patch1.status).toBe(200);
+      expect(patch1.body.version).toBe(1);
+
+      const patch2 = await request(app)
+        .patch("/api/v1/pairs/OCC2/META/fee_bps")
+        .send({ feeBps: 20 });
+      expect(patch2.status).toBe(200);
+      expect(patch2.body.version).toBe(2);
+
+      const info = await request(app).get("/api/v1/pairs/OCC2/META/info");
+      expect(info.body.version).toBe(2);
+    });
+
+    it("rejects a stale write with 409 when expected_version does not match", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC3", destination: "META" });
+
+      // Bump version to 1
+      await request(app)
+        .patch("/api/v1/pairs/OCC3/META/fee_bps")
+        .send({ feeBps: 10 });
+
+      // Attempt stale write with expected_version 0
+      const stale = await request(app)
+        .patch("/api/v1/pairs/OCC3/META/fee_bps")
+        .send({ feeBps: 20, expected_version: 0 });
+      expect(stale.status).toBe(409);
+      expect(stale.body.error).toBe("conflict");
+      expect(stale.body.message).toMatch(/stale version/);
+    });
+
+    it("allows a concurrent-safe write when expected_version matches", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC4", destination: "META" });
+
+      const info = await request(app).get("/api/v1/pairs/OCC4/META/info");
+      const v0 = info.body.version;
+
+      const patch = await request(app)
+        .patch("/api/v1/pairs/OCC4/META/fee_bps")
+        .send({ feeBps: 30, expected_version: v0 });
+      expect(patch.status).toBe(200);
+      expect(patch.body.version).toBe(v0 + 1);
+    });
+
+    it("rejects non-numeric expected_version with 400", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC5", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/OCC5/META/fee_bps")
+        .send({ feeBps: 10, expected_version: "zero" as unknown });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    });
+
+    it("rejects unknown keys alongside expected_version", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC6", destination: "META" });
+
+      const res = await request(app)
+        .patch("/api/v1/pairs/OCC6/META/fee_bps")
+        .send({ feeBps: 10, expected_version: 0, extra: true });
+      expect(res.status).toBe(400);
+      expect(res.body.unknownKeys).toContain("extra");
+    });
+
+    it("resets version to 0 on POST /reset", async () => {
+      await request(app)
+        .post("/api/v1/pairs")
+        .send({ source: "OCC7", destination: "META" });
+
+      await request(app)
+        .patch("/api/v1/pairs/OCC7/META/fee_bps")
+        .send({ feeBps: 10 });
+
+      const reset = await request(app)
+        .post("/api/v1/pairs/OCC7/META/reset");
+      expect(reset.status).toBe(200);
+      expect(reset.body.version).toBe(0);
+
+      const info = await request(app).get("/api/v1/pairs/OCC7/META/info");
+      expect(info.body.version).toBe(0);
     });
   });
 

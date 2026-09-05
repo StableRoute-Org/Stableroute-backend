@@ -64,6 +64,8 @@ export type PairMeta = {
   enabled: boolean;
   /** Base exchange rate for the pair. Defaults to "1.0". */
   rate: string;
+  /** Optimistic-concurrency version. Monotonically incremented on every successful PATCH. */
+  version: number;
 };
 
 /** Structured event appended to the in-memory event log. */
@@ -195,6 +197,7 @@ export const defaultMeta = (): PairMeta => ({
   liquidity: "0",
   enabled: true,
   rate: "1.0",
+  version: 0,
 });
 
 /** Canonical config shape used by GET/PATCH /api/v1/config. */

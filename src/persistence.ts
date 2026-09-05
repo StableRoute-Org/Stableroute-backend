@@ -20,7 +20,7 @@ import {
  * Increment when fields are added to {@link StoreSnapshot} so that older
  * snapshots can be upgraded via the migration chain in {@link migrateSnapshot}.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * Data structure representing a full snapshot of the in-memory stores.
@@ -127,6 +127,10 @@ export function migrateSnapshot(data: unknown): StoreSnapshot | null {
     snap = migrateV0ToV1(snap);
   }
 
+  if (version < 2) {
+    snap = migrateV1ToV2(snap);
+  }
+
   if (isValidSnapshot(snap)) {
     return snap as StoreSnapshot;
   }
@@ -159,6 +163,36 @@ function migrateV0ToV1(data: Record<string, unknown>): Record<string, unknown> {
         }
         if (typeof meta.rate !== "string") {
           meta.rate = "1.0";
+        }
+      }
+    }
+  }
+
+  return data;
+}
+
+/**
+ * Migrate a version-1 snapshot to version 2.
+ *
+ * In version 1 the {@link PairMeta} type did not include the `version`
+ * field; this migration backfills `version: 0` so that older snapshots
+ * hydrate correctly.
+ */
+function migrateV1ToV2(data: Record<string, unknown>): Record<string, unknown> {
+  data.schemaVersion = 2;
+
+  if (Array.isArray(data.pairMeta)) {
+    for (let i = 0; i < data.pairMeta.length; i++) {
+      const entry = data.pairMeta[i];
+      if (
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        entry[1] !== null &&
+        typeof entry[1] === "object"
+      ) {
+        const meta = entry[1] as Record<string, unknown>;
+        if (typeof meta.version !== "number") {
+          meta.version = 0;
         }
       }
     }

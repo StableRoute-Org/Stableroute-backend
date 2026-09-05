@@ -81,6 +81,19 @@ components:
           maximum: 1000
           description: Fee in basis points (0–1000).
           example: 30
+        enabled:
+          type: boolean
+          description: Whether this pair is enabled for quoting.
+          example: true
+        rate:
+          type: string
+          description: Base exchange rate for the pair.
+          example: "1.0"
+        version:
+          type: integer
+          minimum: 0
+          description: Optimistic-concurrency version. Returned on every read; must be supplied as expected_version on PATCH to prevent stale writes.
+          example: 0
 
     ApiKeyRecord:
       type: object
@@ -664,6 +677,10 @@ paths:
                   type: integer
                   minimum: 0
                   maximum: 1000
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Current version from GET /info. Omit to skip OCC check (not recommended).
       responses:
         "200":
           description: Updated pair metadata.
@@ -705,6 +722,10 @@ paths:
               properties:
                 minAmount:
                   type: string
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Current version from GET /info. Omit to skip OCC check (not recommended).
                   pattern: "^[0-9]{1,39}$"
       responses:
         "200":
@@ -747,6 +768,10 @@ paths:
               properties:
                 maxAmount:
                   type: string
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Current version from GET /info. Omit to skip OCC check (not recommended).
                   pattern: "^[1-9][0-9]{0,38}$"
       responses:
         "200":
@@ -789,6 +814,10 @@ paths:
               properties:
                 liquidity:
                   type: string
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Current version from GET /info. Omit to skip OCC check (not recommended).
                   pattern: "^[0-9]{1,39}$"
       responses:
         "200":

@@ -203,12 +203,24 @@ A pair is a `(source, destination)` tuple of asset codes. Asset codes are
 
 ### `GET /api/v1/pairs`
 
-List every registered pair. Supports conditional GET via a **weak ETag**.
+List registered pairs in a stable forward order. Supports conditional GET via
+a **weak ETag** and cursor pagination.
 
-- **Response 200:** `{ "pairs": [ { "source": "USDC", "destination": "EURC" }, … ] }`
+- **Query params:**
+  - `limit` — maximum items per page. Defaults to `100` and is clamped to
+    `500`.
+  - `cursor` — opaque cursor returned by a previous page. Clients must not
+    construct or interpret cursor values.
+- **Response 200:** `{ "pairs": [ { "source": "USDC", "destination": "EURC" }, … ], "nextCursor": "opaque-or-null" }`
   with an `ETag: W/"<base64 sha1 slice>"` header derived from the body.
+- **Pagination:** use `nextCursor` from one response as the `cursor` on the
+  next request. `nextCursor` is `null` at the end of the list. Pagination
+  advances after the last item returned by the previous page, so new pairs
+  inserted before that point do not shift the next page.
 - **Response 304:** empty body, when the request's `If-None-Match` header
   matches the current ETag.
+- **Response 400:** `invalid_request` when `limit` is invalid or `cursor` is
+  malformed or unsupported by this API version.
 
 ### `HEAD /api/v1/pairs`
 
@@ -218,7 +230,8 @@ cache can issue this request to learn the current ETag and body size
 without transferring the full pairs list.
 
 The ETag is computed from the same serialized body as the `GET` handler
-via a shared helper, so the two values are always byte-identical.
+via a shared helper, so the two values are always byte-identical for the same
+`limit` and `cursor` query params.
 
 - **Response 200:** empty body. Headers set: `ETag`, `Content-Type: application/json`,
   `Content-Length` (byte length of the equivalent GET body).

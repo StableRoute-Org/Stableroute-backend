@@ -1224,7 +1224,8 @@ const parseIntegerQueryParam = (
   return Number.isFinite(n) && Number.isInteger(n) ? n : null;
 };
 /**
- * Decode a base64-encoded cursor string into an integer offset.
+ * Decode a base64-encoded cursor string into an integer offset for legacy list
+ * endpoints that still use offset-based pagination.
  *
  * Returns the decoded offset on success, or `"bad"` when the cursor is
  * present but malformed (non-base64, non-integer, or negative).  Returns
@@ -1235,7 +1236,7 @@ const parseIntegerQueryParam = (
  * @returns The decoded integer offset, `"bad"` for a malformed cursor, or
  *          `undefined` when the param is absent.
  */
-const parseCursor = (raw: unknown): number | "bad" | undefined => {
+const parseOffsetCursor = (raw: unknown): number | "bad" | undefined => {
   if (raw === undefined) return undefined;
   if (typeof raw !== "string" || raw.trim() === "") return "bad";
   try {
@@ -1250,7 +1251,7 @@ const parseCursor = (raw: unknown): number | "bad" | undefined => {
 };
 
 /**
- * Apply limit+cursor pagination to an array of items.
+ * Apply limit+offset-cursor pagination to an array of items.
  *
  * @param items  - The full (pre-filtered) array.
  * @param limit  - Number of items per page (already clamped by caller).
@@ -1258,7 +1259,7 @@ const parseCursor = (raw: unknown): number | "bad" | undefined => {
  * @returns The page slice and a `nextCursor` (base64-encoded next offset,
  *          or `null` when the collection is exhausted).
  */
-const paginate = <T>(
+const paginateByOffset = <T>(
   items: T[],
   limit: number,
   offset: number,
@@ -1321,7 +1322,7 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   }
 
   // Parse cursor (base64-encoded offset).
-  const cursorResult = parseCursor(req.query.cursor);
+  const cursorResult = parseOffsetCursor(req.query.cursor);
   if (cursorResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
@@ -1332,7 +1333,7 @@ app.get("/api/v1/events", (req: Request, res: Response) => {
   if (typeParam !== undefined) {
     items = items.filter((e) => e.type === (typeParam as EventType));
   }
-  const { page, nextCursor } = paginate(items, limit, offset);
+  const { page, nextCursor } = paginateByOffset(items, limit, offset);
   res.json({ items: page, nextCursor });
 });
 
@@ -1698,7 +1699,7 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
 
-  const cursorResult = parseCursor(req.query.cursor);
+  const cursorResult = parseOffsetCursor(req.query.cursor);
   if (cursorResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
@@ -1715,7 +1716,7 @@ app.get("/api/v1/api-keys", (req: Request, res: Response) => {
     ...(m.expiresAt !== undefined ? { expiresAt: m.expiresAt } : {}),
     ...(m.lastUsedAt !== undefined ? { lastUsedAt: m.lastUsedAt } : {}),
   }));
-  const { page, nextCursor } = paginate(allItems, limit, offset);
+  const { page, nextCursor } = paginateByOffset(allItems, limit, offset);
   res.json({ items: page, nextCursor });
 });
 
@@ -1874,7 +1875,7 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
 
-  const cursorResult = parseCursor(req.query.cursor);
+  const cursorResult = parseOffsetCursor(req.query.cursor);
   if (cursorResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
@@ -1885,7 +1886,7 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
     id,
     ...m,
   }));
-  const { page, nextCursor } = paginate(allItems, limit, offset);
+  const { page, nextCursor } = paginateByOffset(allItems, limit, offset);
   res.json({ items: page, nextCursor });
 });
 
@@ -2679,27 +2680,110 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 // Process restart resets the map; persistence lands with the database
 // adapter.
 /**
- * Serialize the current pair registry to a JSON string.
- * Shared between the GET and HEAD handlers so the two always produce
- * byte-identical output and therefore byte-identical ETags.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained helper
-const serializePairs = (): string => {
-  const pairs = Array.from(pairRegistry).map((k) => {
-    const [source, destination] = k.split("::");
-    return { source, destination };
-  });
-  return JSON.stringify({ pairs });
-};
-
-/**
  * Compute the weak ETag for the pairs list body.
  * Uses a base64-truncated SHA-1 digest, identical to the original GET handler.
  *
- * @param body - the already-serialized JSON string returned by serializePairs()
+ * @param body - the already-serialized JSON string returned for the pair page.
  */
 const pairsEtag = (body: string): string =>
   `W/"${createHash("sha1").update(body).digest("base64").slice(0, 16)}"`;
+
+const PAIR_LIST_CURSOR_VERSION = 1;
+export const PAIR_LIST_CURSOR_MAX_LENGTH = 256;
+const PAIR_LIST_CURSOR_RE = /^[A-Za-z0-9_-]+$/;
+
+type PairListItem = {
+  source: string;
+  destination: string;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.getPrototypeOf(value) === Object.prototype;
+
+const isValidPairCursorKey = (key: string): boolean => {
+  const parts = key.split("::");
+  if (parts.length !== 2) return false;
+  const [source, destination] = parts;
+  if (source === undefined || destination === undefined) return false;
+  return (
+    normalizeAsset(source) === source &&
+    normalizeAsset(destination) === destination &&
+    source !== destination
+  );
+};
+
+export const encodePairListCursor = (key: string): string =>
+  Buffer.from(JSON.stringify({ v: PAIR_LIST_CURSOR_VERSION, key }), "utf8").toString(
+    "base64url",
+  );
+
+/**
+ * Decode the opaque keyset cursor for GET/HEAD /api/v1/pairs.
+ *
+ * The cursor stores the last returned stable pair key, not an offset. The key
+ * does not need to still exist in pairRegistry; it remains a lexical continuation
+ * point after deletion.
+ */
+export const parsePairListCursor = (
+  raw: unknown,
+): string | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  if (raw.length > PAIR_LIST_CURSOR_MAX_LENGTH) return "bad";
+  if (!PAIR_LIST_CURSOR_RE.test(raw) || raw.length % 4 === 1) return "bad";
+
+  let parsed: unknown;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    parsed = JSON.parse(decoded) as unknown;
+  } catch {
+    return "bad";
+  }
+
+  if (!isPlainObject(parsed)) return "bad";
+  const keys = Object.keys(parsed).sort();
+  if (keys.length !== 2 || keys[0] !== "key" || keys[1] !== "v") return "bad";
+  if (parsed.v !== PAIR_LIST_CURSOR_VERSION) return "bad";
+  if (typeof parsed.key !== "string" || !isValidPairCursorKey(parsed.key)) {
+    return "bad";
+  }
+  return parsed.key;
+};
+
+const comparePairKeys = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0;
+
+const pairListItemFromKey = (key: string): PairListItem => {
+  const [source, destination] = key.split("::");
+  return { source: source ?? "", destination: destination ?? "" };
+};
+
+const paginatePairsByKeyset = (
+  limit: number,
+  cursorKey: string | undefined,
+): { pairs: PairListItem[]; nextCursor: string | null } => {
+  const orderedKeys = Array.from(pairRegistry).sort(comparePairKeys);
+  const startIndex =
+    cursorKey === undefined
+      ? 0
+      : orderedKeys.findIndex((key) => comparePairKeys(key, cursorKey) > 0);
+  const pageStart = startIndex === -1 ? orderedKeys.length : startIndex;
+  const pageKeysWithLookahead = orderedKeys.slice(pageStart, pageStart + limit + 1);
+  const pageKeys = pageKeysWithLookahead.slice(0, limit);
+  const lastKey = pageKeys.at(-1);
+  const nextCursor =
+    pageKeysWithLookahead.length > limit && lastKey !== undefined
+      ? encodePairListCursor(lastKey)
+      : null;
+
+  return {
+    pairs: pageKeys.map(pairListItemFromKey),
+    nextCursor,
+  };
+};
 
 /**
  * HEAD /api/v1/pairs
@@ -2725,19 +2809,14 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
 
-  const cursorResult = parseCursor(req.query.cursor);
+  const cursorResult = parsePairListCursor(req.query.cursor);
   if (cursorResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
   }
-  const offset = cursorResult ?? 0;
 
-  const allPairs = Array.from(pairRegistry).map((k) => {
-    const [source, destination] = k.split("::");
-    return { source, destination };
-  });
-  const { page, nextCursor } = paginate(allPairs, limit, offset);
-  const body = JSON.stringify({ pairs: page, nextCursor });
+  const { pairs, nextCursor } = paginatePairsByKeyset(limit, cursorResult);
+  const body = JSON.stringify({ pairs, nextCursor });
   const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {
     res.status(304).end();
@@ -2767,19 +2846,14 @@ app.get("/api/v1/pairs", (req: Request, res: Response) => {
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
 
-  const cursorResult = parseCursor(req.query.cursor);
+  const cursorResult = parsePairListCursor(req.query.cursor);
   if (cursorResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
   }
-  const offset = cursorResult ?? 0;
 
-  const allPairs = Array.from(pairRegistry).map((k) => {
-    const [source, destination] = k.split("::");
-    return { source, destination };
-  });
-  const { page, nextCursor } = paginate(allPairs, limit, offset);
-  const body = JSON.stringify({ pairs: page, nextCursor });
+  const { pairs, nextCursor } = paginatePairsByKeyset(limit, cursorResult);
+  const body = JSON.stringify({ pairs, nextCursor });
   const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {
     res.status(304).end();

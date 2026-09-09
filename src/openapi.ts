@@ -182,7 +182,7 @@ export const openApiSpec = {
       get: {
         summary: "List registered pairs",
         description:
-          "Paginated list of registered asset pairs. Supports `limit`, cursor-based pagination, and ETags.",
+          "Paginated list of registered asset pairs in stable forward order. Supports `limit`, opaque cursor-based pagination, and ETags.",
         parameters: [
           {
             name: "limit",
@@ -194,11 +194,15 @@ export const openApiSpec = {
             name: "cursor",
             in: "query",
             schema: { type: "string" },
-            description: "Opaque base64-encoded pagination cursor",
+            description:
+              "Opaque pagination cursor returned by the previous page; clients must not construct or interpret it.",
           },
         ],
         responses: {
-          "200": { description: "Paginated pairs list with nextCursor" },
+          "200": {
+            description:
+              "Paginated pairs list with `nextCursor` set to null at the end",
+          },
           "304": { description: "Not modified (ETag match)" },
           "400": { description: "Invalid `limit` or malformed `cursor`" },
         },
@@ -206,9 +210,26 @@ export const openApiSpec = {
       head: {
         summary: "Pairs list ETag (no body)",
         description:
-          "Returns only headers including an ETag for conditional requests. No response body.",
+          "Returns only headers including an ETag for the same stable paginated pair slice as GET. No response body.",
+        parameters: [
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer" },
+            description: "Maximum items per page (default 100, max 500)",
+          },
+          {
+            name: "cursor",
+            in: "query",
+            schema: { type: "string" },
+            description:
+              "Opaque pagination cursor returned by the previous page; clients must not construct or interpret it.",
+          },
+        ],
         responses: {
           "200": { description: "ETag header present" },
+          "304": { description: "Not modified (ETag match)" },
+          "400": { description: "Invalid `limit` or malformed `cursor`" },
         },
       },
       post: {

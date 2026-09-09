@@ -445,9 +445,28 @@ paths:
     get:
       summary: List pairs
       operationId: listPairs
+      description: |
+        Returns registered pairs in stable forward order. Supports a bounded
+        `limit`, an opaque cursor returned from a previous page, and conditional
+        GET through the ETag header. Clients must not construct or interpret the
+        cursor value.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of pairs per page. Defaults to 100 and is clamped to 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor returned by the previous page.
+          schema:
+            type: string
       responses:
         "200":
-          description: All registered pairs.
+          description: Paginated registered pairs with nextCursor set to null at the end.
           headers:
             ETag:
               schema:
@@ -456,7 +475,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [pairs]
+                required: [pairs, nextCursor]
                 properties:
                   pairs:
                     type: array
@@ -468,16 +487,45 @@ paths:
                           $ref: "#/components/schemas/AssetCode"
                         destination:
                           $ref: "#/components/schemas/AssetCode"
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Opaque cursor for the next page, or null at the end.
         "304":
           description: Not modified (ETag matched).
+        "400":
+          description: Invalid limit or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
     head:
       summary: Pairs list ETag (no body)
       operationId: headPairs
+      description: |
+        Returns headers for the same stable paginated pair slice as GET, without
+        a response body.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of pairs per page. Defaults to 100 and is clamped to 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor returned by the previous page.
+          schema:
+            type: string
       responses:
         "200":
           description: Headers only (ETag + Content-Length).
         "304":
           description: Not modified.
+        "400":
+          description: Invalid limit or cursor.
     post:
       summary: Register pair
       operationId: registerPair

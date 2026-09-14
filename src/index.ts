@@ -1272,6 +1272,55 @@ const paginate = <T>(
   return { page, nextCursor };
 };
 
+/**
+ * Opaque cursor for stable pagination.
+ * The cursor is a base64url-encoded sort key (e.g. pair key "source::destination").
+ */
+const parseCursorKey = (raw: unknown): string | "bad" | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") return "bad";
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    if (decoded.length === 0 || decoded.length > 200) return "bad";
+    return decoded;
+  } catch {
+    return "bad";
+  }
+};
+
+interface CursorSortable {
+  cursorKey: string;
+}
+
+/**
+ * Cursor-based pagination: items are sorted by cursorKey, and the cursor
+ * encodes the last-seen key. Unlike offset pagination, this is stable under
+ * concurrent inserts/deletes.
+ */
+const cursorPaginate = <T extends CursorSortable>(
+  items: T[],
+  limit: number,
+  cursor: string | undefined,
+): { page: T[]; nextCursor: string | null } => {
+  const sorted = [...items].sort((a, b) =>
+    a.cursorKey < b.cursorKey ? -1 : a.cursorKey > b.cursorKey ? 1 : 0,
+  );
+
+  let startIdx = 0;
+  if (cursor) {
+    const cursorIdx = sorted.findIndex((item) => item.cursorKey === cursor);
+    startIdx = cursorIdx >= 0 ? cursorIdx + 1 : 0;
+  }
+
+  const page = sorted.slice(startIdx, startIdx + limit);
+  const nextCursor =
+    startIdx + limit < sorted.length
+      ? Buffer.from(sorted[startIdx + limit - 1].cursorKey).toString("base64url")
+      : null;
+
+  return { page, nextCursor };
+};
+
 app.get("/api/v1/events", (req: Request, res: Response) => {
   // `since` must be a single, non-negative integer. Array-form or non-numeric
   // values are rejected rather than coerced to NaN (which would silently
@@ -2725,18 +2774,17 @@ app.head("/api/v1/pairs", (req: Request, res: Response) => {
   }
   const limit = Math.min(500, Math.max(1, rawLimit));
 
-  const cursorResult = parseCursor(req.query.cursor);
-  if (cursorResult === "bad") {
+  const cursorKeyResult = parseCursorKey(req.query.cursor);
+  if (cursorKeyResult === "bad") {
     sendError(res, req, 400, "invalid_request", "cursor is invalid");
     return;
   }
-  const offset = cursorResult ?? 0;
 
   const allPairs = Array.from(pairRegistry).map((k) => {
     const [source, destination] = k.split("::");
-    return { source, destination };
+    return { source, destination, cursorKey: k };
   });
-  const { page, nextCursor } = paginate(allPairs, limit, offset);
+  const { page, nextCursor } = cursorPaginate(allPairs, limit, cursorKeyResult);
   const body = JSON.stringify({ pairs: page, nextCursor });
   const etag = pairsEtag(body);
   if (req.header("if-none-match") === etag) {

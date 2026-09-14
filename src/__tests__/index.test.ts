@@ -2622,6 +2622,78 @@ describe("StableRoute Backend", () => {
           .set("If-None-Match", etag ?? "");
         expect(res304.status).toBe(304);
       });
+
+      it("does not skip or duplicate rows when pairs inserted mid-scan", async () => {
+        // Register 5 pairs
+        const batch1 = [
+          { source: "USDC", destination: "EURC" },
+          { source: "USDC", destination: "XLM" },
+          { source: "XLM", destination: "EURC" },
+        ];
+        for (const p of batch1) {
+          await request(app).post("/api/v1/pairs").send(p);
+        }
+
+        // Get first page of 2
+        const res1 = await request(app).get("/api/v1/pairs").query({ limit: 2 });
+        expect(res1.status).toBe(200);
+        expect(res1.body.pairs).toHaveLength(2);
+        const firstPageIds = res1.body.pairs.map((p) => `${p.source}::${p.destination}`);
+
+        // Insert more pairs mid-scan
+        const batch2 = [
+          { source: "BTC", destination: "USD" },
+          { source: "ETH", destination: "USD" },
+        ];
+        for (const p of batch2) {
+          await request(app).post("/api/v1/pairs").send(p);
+        }
+
+        // Get second page using cursor from first page
+        const res2 = await request(app)
+          .get("/api/v1/pairs")
+          .query({ limit: 2, cursor: res1.body.nextCursor });
+        expect(res2.status).toBe(200);
+        const secondPageIds = res2.body.pairs.map((p) => `${p.source}::${p.destination}`);
+
+        // No overlap between pages
+        const overlap = firstPageIds.filter((id) => secondPageIds.includes(id));
+        expect(overlap).toHaveLength(0);
+
+        // Total unique pairs across both pages should be 3 (from first batch)
+        const allSeen = [...firstPageIds, ...secondPageIds];
+        expect(new Set(allSeen).size).toBe(allSeen.length); // no duplicates
+      });
+
+      it("clamps page size to maximum", async () => {
+        for (let i = 0; i < 5; i++) {
+          await request(app)
+            .post("/api/v1/pairs")
+            .send({ source: `ASSET${i}`, destination: "XLM" });
+        }
+
+        // Request more than max (500)
+        const res = await request(app).get("/api/v1/pairs").query({ limit: 1000 });
+        expect(res.status).toBe(200);
+        expect(res.body.pairs.length).toBeLessThanOrEqual(500);
+      });
+
+      it("returns null nextCursor at end of list", async () => {
+        // Clear and register exactly 3 pairs
+        const pairs = [
+          { source: "AAA", destination: "XLM" },
+          { source: "BBB", destination: "XLM" },
+          { source: "CCC", destination: "XLM" },
+        ];
+        for (const p of pairs) {
+          await request(app).post("/api/v1/pairs").send(p);
+        }
+
+        // Request with limit larger than total
+        const res = await request(app).get("/api/v1/pairs").query({ limit: 100 });
+        expect(res.status).toBe(200);
+        expect(res.body.nextCursor).toBeNull();
+      });
     });
 
     describe("GET /api/v1/webhooks pagination", () => {

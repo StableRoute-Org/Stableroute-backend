@@ -1095,6 +1095,19 @@ export const openApiSpec = {
       },
     },
 
+    "/api/v1/admin/reconciliation/swaps": {
+      post: {
+        summary: "Swap drift reconciliation scan",
+        description:
+          "Executes a bounded, chunked, idempotent, and side-effect-free reconciliation pass over swap records to detect financial and lifecycle invariant violations.",
+        responses: {
+          "200": { description: "Structured reconciliation report" },
+          "400": { description: "Invalid request body" },
+          "401": { description: "Unauthorized (missing or invalid admin token)" },
+        },
+      },
+    },
+
     // -------------------------------------------------------------------
     // Version
     // -------------------------------------------------------------------

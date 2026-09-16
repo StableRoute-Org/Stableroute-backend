@@ -41,6 +41,9 @@ import {
   type EventType,
 } from "./stores";
 import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import { reconcileSwapsSync, type SwapRecord } from "./reconciliation";
+
+export * from "./reconciliation";
 
 interface CacheEntry {
   value: {
@@ -1201,6 +1204,37 @@ app.post("/api/v1/admin/read-write", requireAdmin, (_req: Request, res: Response
   setReadOnly(false);
   res.json({ readOnly: isReadOnly() });
 });
+
+/**
+ * POST /api/v1/admin/reconciliation/swaps
+ *
+ * Runs a bounded, side-effect-free reconciliation scan over provided swap records
+ * to detect and report drift against expected invariants.
+ */
+app.post(
+  "/api/v1/admin/reconciliation/swaps",
+  requireAdmin,
+  (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      records?: SwapRecord[];
+      chunkSize?: number;
+      maxRecords?: number;
+    };
+
+    if (body.records !== undefined && !Array.isArray(body.records)) {
+      sendError(res, req, 400, "invalid_request", "records must be an array");
+      return;
+    }
+
+    const records = body.records ?? [];
+    const report = reconcileSwapsSync(records, {
+      chunkSize: typeof body.chunkSize === "number" ? body.chunkSize : undefined,
+      maxRecords: typeof body.maxRecords === "number" ? body.maxRecords : undefined,
+    });
+
+    res.json(report);
+  },
+);
 
 /**
  * Parse a single numeric query param into a finite integer.

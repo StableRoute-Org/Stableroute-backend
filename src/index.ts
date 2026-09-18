@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
@@ -8,6 +8,16 @@ import { openApiSpec } from "./openapi";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
 import { resolveClientIp } from "./utils/clientIp";
 import { getStoreAdapter } from "./persistence";
+import {
+  deliverWebhook,
+  dispatchWebhookEvent,
+  replayDeadLetter,
+  deadLetterQueue,
+  signWebhookPayload,
+  verifyWebhookSignature,
+  type DeadLetterRecord,
+  type DeliveryResult,
+} from "./webhooks";
 import {
   isPaused,
   isReadOnly,
@@ -1883,7 +1893,9 @@ app.get("/api/v1/webhooks", (req: Request, res: Response) => {
 
   const allItems = Array.from(webhookStore.entries()).map(([id, m]) => ({
     id,
-    ...m,
+    url: m.url,
+    events: m.events,
+    createdAt: m.createdAt,
   }));
   const { page, nextCursor } = paginate(allItems, limit, offset);
   res.json({ items: page, nextCursor });
@@ -1974,8 +1986,8 @@ app.post(
   "/api/v1/webhooks",
   idempotencyGuard,
   (req: Request, res: Response) => {
-    if (rejectUnknownKeys(req, res, ["url", "events"])) return;
-    const { url, events } = req.body ?? {};
+    if (rejectUnknownKeys(req, res, ["url", "events", "secret"])) return;
+    const { url, events, secret: rawSecret } = req.body ?? {};
     if (
       typeof url !== "string" ||
       !/^https?:\/\//.test(url) ||
@@ -1994,21 +2006,124 @@ app.post(
       sendError(res, req, 400, "invalid_request", "url host must be public");
       return;
     }
+    if (rawSecret !== undefined) {
+      if (
+        typeof rawSecret !== "string" ||
+        rawSecret.length < 8 ||
+        rawSecret.length > 256
+      ) {
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          "secret must be a string between 8 and 256 characters",
+        );
+        return;
+      }
+    }
     const deduped = validateWebhookEvents(res, req, events);
     if (deduped === null) return;
     const id = `wh_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-    webhookStore.set(id, { url, events: deduped, createdAt: Date.now() });
+    const secret =
+      typeof rawSecret === "string"
+        ? rawSecret
+        : `whsec_${randomBytes(24).toString("hex")}`;
+    webhookStore.set(id, { url, events: deduped, createdAt: Date.now(), secret });
     // Record id and url only — never any webhook secret material.
     recordEvent("webhook.created", { id, url });
-    res.status(201).json({ id, url, events: deduped });
+    res.status(201).json({ id, url, events: deduped, secret });
   },
 );
+
+/**
+ * List historical events in the dead-letter queue.
+ *
+ * @route GET /api/v1/webhooks/dead-letter
+ */
+app.get("/api/v1/webhooks/dead-letter", (req: Request, res: Response) => {
+  const webhookId =
+    typeof req.query.webhookId === "string" ? req.query.webhookId : undefined;
+  const rawLimit =
+    typeof req.query.limit === "string"
+      ? parseInt(req.query.limit, 10)
+      : undefined;
+  const limit =
+    rawLimit && Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100;
+
+  const items = deadLetterQueue.list({ webhookId, limit });
+  res.json({ items, total: deadLetterQueue.size });
+});
+
+/**
+ * Get a specific dead-letter event by ID.
+ *
+ * @route GET /api/v1/webhooks/dead-letter/:id
+ */
+app.get("/api/v1/webhooks/dead-letter/:id", (req: Request, res: Response) => {
+  const id = req.params.id ?? "";
+  const record = deadLetterQueue.get(id);
+  if (!record) {
+    sendError(res, req, 404, "not_found", `dead-letter record ${id} not found`);
+    return;
+  }
+  res.json(record);
+});
+
+/**
+ * Replay delivery of a dead-lettered webhook event.
+ *
+ * @route POST /api/v1/webhooks/dead-letter/:id/replay
+ */
+app.post(
+  "/api/v1/webhooks/dead-letter/:id/replay",
+  async (req: Request, res: Response) => {
+    const id = req.params.id ?? "";
+    const record = deadLetterQueue.get(id);
+    if (!record) {
+      sendError(res, req, 404, "not_found", `dead-letter record ${id} not found`);
+      return;
+    }
+
+    const replayResult = await replayDeadLetter(id);
+    if (replayResult.replayed) {
+      res.json({
+        id,
+        replayed: true,
+        result: replayResult.result,
+      });
+    } else {
+      res.status(502).json({
+        id,
+        replayed: false,
+        error: replayResult.error ?? "replay_failed",
+        result: replayResult.result,
+      });
+    }
+  },
+);
+
+/**
+ * Purge an item from the dead-letter queue.
+ *
+ * @route DELETE /api/v1/webhooks/dead-letter/:id
+ */
+app.delete("/api/v1/webhooks/dead-letter/:id", (req: Request, res: Response) => {
+  const id = req.params.id ?? "";
+  const deleted = deadLetterQueue.remove(id);
+  if (!deleted) {
+    sendError(res, req, 404, "not_found", `dead-letter record ${id} not found`);
+    return;
+  }
+  res.json({ id, deleted: true });
+});
 
 /**
  * Read a single registered webhook by id.
  *
  * Returns `{ id, url, events, createdAt }` for a known id, or
  * `404 not_found` (with the canonical `requestId` envelope) otherwise.
+ * Secrets are never exposed.
  *
  * @route GET /api/v1/webhooks/:id
  */
@@ -2019,7 +2134,8 @@ app.get("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     sendError(res, req, 404, "not_found", `webhook ${id} not found`);
     return;
   }
-  res.json({ id, ...record });
+  const { url, events, createdAt } = record;
+  res.json({ id, url, events, createdAt });
 });
 
 /**
@@ -2068,8 +2184,10 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
     );
     return;
   }
-  for (const name of events as string[]) {
-    if (name.trim().length === 0) {
+  const stringEvents = events as string[];
+  for (const raw of stringEvents) {
+    const name = raw.trim();
+    if (name.length === 0) {
       sendError(
         res,
         req,
@@ -2114,7 +2232,8 @@ app.patch("/api/v1/webhooks/:id", (req: Request, res: Response) => {
   // url is preserved; only events are mutated.
   const updated = { ...record, events: deduped };
   webhookStore.set(id, updated);
-  res.json({ id, ...updated });
+  const { url, events: updatedEvents, createdAt } = updated;
+  res.json({ id, url, events: updatedEvents, createdAt });
 });
 
 /**
@@ -3299,5 +3418,16 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 // Final 4-arg error handler. Any thrown/next(err) domain, parser, or
 // unexpected error lands in the same safe formatter.
 app.use(apiErrorHandler);
+
+export {
+  deliverWebhook,
+  dispatchWebhookEvent,
+  replayDeadLetter,
+  deadLetterQueue,
+  signWebhookPayload,
+  verifyWebhookSignature,
+  type DeadLetterRecord,
+  type DeliveryResult,
+};
 
 export default app;

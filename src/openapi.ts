@@ -940,6 +940,11 @@ export const openApiSpec = {
                     items: { type: "string" },
                     description: "Event type names to subscribe to",
                   },
+                  secret: {
+                    type: "string",
+                    description:
+                      "Optional signing secret (8-256 chars). If omitted, an HMAC secret is generated.",
+                  },
                 },
               },
             },
@@ -1029,6 +1034,90 @@ export const openApiSpec = {
           "404": { description: "Webhook not found" },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
+        },
+      },
+    },
+
+    "/api/v1/webhooks/dead-letter": {
+      get: {
+        summary: "List dead-letter webhook events",
+        description:
+          "Returns failed webhook deliveries moved to the dead-letter queue after exhausting retry attempts.",
+        parameters: [
+          {
+            name: "webhookId",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Filter by webhook identifier.",
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", default: 100 },
+            description: "Maximum records to return.",
+          },
+        ],
+        responses: {
+          "200": { description: "List of dead-letter records with total count" },
+        },
+      },
+    },
+
+    "/api/v1/webhooks/dead-letter/{id}": {
+      get: {
+        summary: "Get dead-letter record by ID",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Dead-letter queue record identifier.",
+          },
+        ],
+        responses: {
+          "200": { description: "Dead-letter queue record" },
+          "404": { description: "Dead-letter record not found" },
+        },
+      },
+      delete: {
+        summary: "Delete dead-letter record",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Dead-letter queue record identifier.",
+          },
+        ],
+        responses: {
+          "200": { description: "Dead-letter record deleted" },
+          "404": { description: "Dead-letter record not found" },
+        },
+      },
+    },
+
+    "/api/v1/webhooks/dead-letter/{id}/replay": {
+      post: {
+        summary: "Replay dead-lettered webhook event",
+        description:
+          "Attempts re-delivery of an event in the dead-letter queue. If delivery succeeds, the record is removed from the DLQ.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Dead-letter queue record identifier.",
+          },
+        ],
+        responses: {
+          "200": { description: "Event successfully replayed and delivered" },
+          "404": { description: "Dead-letter record not found" },
+          "502": { description: "Replay failed delivery attempt" },
         },
       },
     },

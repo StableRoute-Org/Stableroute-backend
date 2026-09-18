@@ -18,6 +18,7 @@ import {
 import { loadPausedState, savePausedState } from "./pauseState";
 import { getStoreAdapter, CURRENT_SCHEMA_VERSION } from "./persistence";
 import { logger } from "./logger";
+import { circuitBreakerRegistry } from "./oracle/circuitBreaker";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -205,6 +206,10 @@ const defaultConfig = (): Record<string, number> => ({
   eventLogCap: EVENT_LOG_CAP,
   quote_ttl_ms: 30_000,
   requestTimeoutMs: 10_000,
+  oracleRetryAttempts: 3,
+  oracleBackoffBaseMs: 100,
+  oracleBreakerThreshold: 5,
+  oracleBreakerCooldownMs: 30_000,
 });
 
 // ─── Stores ──────────────────────────────────────────────────────────────────
@@ -377,6 +382,7 @@ export const resetStores = (): void => {
     Object.assign(config, defs);
     paused = false;
     readOnly = false;
+    circuitBreakerRegistry.resetAll();
     // Clean up any persisted pause-state file so test isolation is complete.
     savePausedState(false);
   } finally {

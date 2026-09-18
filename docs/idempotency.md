@@ -33,6 +33,10 @@ The following **POST** endpoints are protected by the idempotency guard:
 | POST   | `/api/v1/pairs`               |
 | POST   | `/api/v1/api-keys`            |
 | POST   | `/api/v1/webhooks`            |
+| POST   | `/api/v1/swaps`               |
+
+> [!NOTE]
+> `/api/v1/swaps` uses an enhanced concurrency-safe idempotency protocol featuring atomic in-progress locking (`request_in_progress` 409), multi-tenant scoping, and canonical SHA-256 fingerprinting. See `docs/swaps-idempotency.md` for details.
 
 All other mutating routes — including the routes listed below — do
 **not** participate and ignore the `Idempotency-Key` header entirely:
@@ -137,3 +141,4 @@ envelope (see `docs/api.md`):
 | Code                   | HTTP | When it is emitted                                        |
 |------------------------|------|-----------------------------------------------------------|
 | `idempotency_conflict` | 409  | A repeat request carries the same `Idempotency-Key` but a different request body. |
+| `request_in_progress`  | 409  | A concurrent request with the same `Idempotency-Key` is actively being executed. |

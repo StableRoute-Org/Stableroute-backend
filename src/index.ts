@@ -41,6 +41,21 @@ import {
   type EventType,
 } from "./stores";
 import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import {
+  swapIdempotencyMiddleware,
+  idempotencyStore,
+  resetIdempotencyStore,
+  InMemoryIdempotencyStore,
+  type IdempotencyStore,
+} from "./idempotency";
+import {
+  swapStore,
+  resetSwapStore,
+  saveSwap,
+  getSwapById,
+  listSwaps,
+  type SwapRecord,
+} from "./swaps";
 
 interface CacheEntry {
   value: {
@@ -218,6 +233,7 @@ export type ApiErrorCode =
   | "read_only_mode"
   | "pair_not_registered"
   | "idempotency_conflict"
+  | "request_in_progress"
   | "unsupported_media_type"
   | "insufficient_liquidity"
   | "request_timeout";
@@ -307,6 +323,11 @@ export const API_ERROR_DEFINITIONS: Record<ApiErrorCode, ApiErrorDefinition> = {
   idempotency_conflict: {
     status: 409,
     safeMessage: "idempotency key conflicts with a different request body",
+    expose: true,
+  },
+  request_in_progress: {
+    status: 409,
+    safeMessage: "a request with this idempotency key is currently in progress",
     expose: true,
   },
   unsupported_media_type: {
@@ -558,6 +579,8 @@ const idempotencyCache = new Map<string, IdempotencyCacheEntry>();
  */
 export const clearIdempotencyCache = (): void => {
   idempotencyCache.clear();
+  void resetIdempotencyStore();
+  resetSwapStore();
 };
 
 /**
@@ -3249,6 +3272,260 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Execute a token swap along a registered liquidity corridor.
+ *
+ * Protected by the concurrency-safe `swapIdempotencyMiddleware`. When an
+ * `Idempotency-Key` header is provided:
+ * - A repeat request with the exact same key and body replays the original
+ *   response verbatim without re-executing or creating a duplicate swap.
+ * - A repeat request with the same key but a differing body returns `409 idempotency_conflict`.
+ * - Concurrent requests with the same key permit exactly one winner while
+ *   returning `409 request_in_progress` to the concurrent caller.
+ * - Idempotency keys are strictly isolated per tenant / API key.
+ *
+ * @route POST /api/v1/swaps
+ */
+app.post(
+  "/api/v1/swaps",
+  swapIdempotencyMiddleware,
+  (req: Request, res: Response) => {
+    if (
+      rejectUnknownKeys(req, res, [
+        "source_asset",
+        "dest_asset",
+        "amount",
+        "slippage_bps",
+        "recipient",
+      ])
+    ) {
+      return;
+    }
+
+    if (isPaused()) {
+      return sendError(res, req, 503, "service_paused", "service is paused");
+    }
+
+    if (isReadOnly()) {
+      return sendError(
+        res,
+        req,
+        503,
+        "read_only_mode",
+        "service is in read-only mode",
+      );
+    }
+
+    const {
+      source_asset: rawSource,
+      dest_asset: rawDest,
+      amount: rawAmount,
+      slippage_bps: rawSlippage,
+      recipient,
+    } = req.body ?? {};
+
+    if (!rawSource || !rawDest || !rawAmount) {
+      return sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "Missing required fields: source_asset, dest_asset, amount",
+      );
+    }
+
+    const source_asset = normalizeAsset(rawSource);
+    const dest_asset = normalizeAsset(rawDest);
+    if (source_asset === null || dest_asset === null) {
+      return sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "source_asset and dest_asset must be 1-12 alphanumeric characters",
+      );
+    }
+
+    if (source_asset === dest_asset) {
+      return sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "source_asset and dest_asset must differ",
+      );
+    }
+
+    const parsedAmount = parseAmount(rawAmount);
+    if (parsedAmount === null) {
+      return sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "amount must be a positive integer string with no leading zero",
+      );
+    }
+
+    let slippage_bps = 50;
+    if (rawSlippage !== undefined) {
+      if (
+        typeof rawSlippage === "number" &&
+        Number.isInteger(rawSlippage) &&
+        rawSlippage >= 0 &&
+        rawSlippage <= 1000
+      ) {
+        slippage_bps = rawSlippage;
+      } else {
+        const parsed = parseSlippageBps(rawSlippage);
+        if (parsed === null) {
+          return sendError(
+            res,
+            req,
+            400,
+            "invalid_request",
+            "slippage_bps must be an integer in [0,1000]",
+          );
+        }
+        slippage_bps = parsed;
+      }
+    }
+
+    if (recipient !== undefined) {
+      if (
+        typeof recipient !== "string" ||
+        recipient.trim().length === 0 ||
+        recipient.length > 128
+      ) {
+        return sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          "recipient must be a non-empty string up to 128 characters",
+        );
+      }
+    }
+
+    const pKey = pairKey(source_asset, dest_asset);
+    const allowUnregistered = process.env.ALLOW_UNREGISTERED_QUOTES === "true";
+    if (!allowUnregistered && !pairRegistry.has(pKey)) {
+      return sendError(
+        res,
+        req,
+        404,
+        "pair_not_registered",
+        `pair ${source_asset}->${dest_asset} is not registered`,
+        { source_asset, dest_asset },
+      );
+    }
+
+    const meta = pairMeta.get(pKey) ?? defaultMeta();
+    if (!meta.enabled) {
+      return sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        `pair ${source_asset}->${dest_asset} is currently disabled`,
+      );
+    }
+
+    const boundsViolation = checkQuoteBounds(meta, parsedAmount);
+    if (boundsViolation) {
+      return sendError(
+        res,
+        req,
+        boundsViolation.status,
+        boundsViolation.error,
+        boundsViolation.message,
+      );
+    }
+
+    const quote = priceQuote(meta, parsedAmount, slippage_bps);
+    const minReceived = quote.minReceived;
+
+    if (meta.liquidity && meta.liquidity !== "0") {
+      const currentLiq = BigInt(meta.liquidity);
+      if (currentLiq >= parsedAmount) {
+        meta.liquidity = (currentLiq - parsedAmount).toString();
+      }
+    }
+
+    invalidateQuoteCache(pKey);
+
+    const swap: SwapRecord = {
+      id: randomUUID(),
+      source_asset,
+      dest_asset,
+      amount: parsedAmount.toString(),
+      estimated_rate: quote.rate,
+      route: [source_asset, dest_asset],
+      feeBps: quote.feeBps,
+      feeAmount: quote.feeAmount.toString(),
+      netAmount: quote.netAmount.toString(),
+      slippage_bps,
+      min_received: minReceived.toString(),
+      ...(typeof recipient === "string" ? { recipient: String(recipient) } : {}),
+      status: "completed",
+      createdAt: Date.now(),
+    };
+
+    saveSwap(swap);
+    recordEvent("pair.refreshed", {
+      source: source_asset,
+      destination: dest_asset,
+    });
+
+    res.status(201).json(swap);
+  },
+);
+
+/**
+ * List historical swaps.
+ *
+ * @route GET /api/v1/swaps
+ */
+app.get("/api/v1/swaps", (req: Request, res: Response) => {
+  const source_asset =
+    typeof req.query.source_asset === "string"
+      ? req.query.source_asset
+      : undefined;
+  const dest_asset =
+    typeof req.query.dest_asset === "string"
+      ? req.query.dest_asset
+      : undefined;
+  const rawLimit =
+    typeof req.query.limit === "string"
+      ? parseInt(req.query.limit, 10)
+      : undefined;
+  const limit =
+    rawLimit && Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100;
+
+  const swaps = listSwaps({ source_asset, dest_asset, limit });
+  res.json({ swaps });
+});
+
+/**
+ * Retrieve an executed swap by its unique identifier.
+ *
+ * @route GET /api/v1/swaps/:id
+ */
+app.get("/api/v1/swaps/:id", (req: Request, res: Response) => {
+  const id = req.params.id ?? "";
+  const swap = getSwapById(id);
+  if (!swap) {
+    return sendError(
+      res,
+      req,
+      404,
+      "not_found",
+      `swap ${id} not found`,
+    );
+  }
+  res.json(swap);
+});
+
 if (process.env.NODE_ENV === "test") {
   app.get("/test/slow", (req: Request, res: Response) => {
     const delay = Number(req.query.delay ?? 100);
@@ -3299,5 +3576,18 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 // Final 4-arg error handler. Any thrown/next(err) domain, parser, or
 // unexpected error lands in the same safe formatter.
 app.use(apiErrorHandler);
+
+export {
+  idempotencyStore,
+  resetIdempotencyStore,
+  InMemoryIdempotencyStore,
+  type IdempotencyStore,
+  swapStore,
+  resetSwapStore,
+  saveSwap,
+  getSwapById,
+  listSwaps,
+  type SwapRecord,
+};
 
 export default app;

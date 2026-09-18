@@ -13,6 +13,7 @@ describe("API error taxonomy unit coverage", () => {
     expect(API_ERROR_DEFINITIONS.invalid_request.status).toBe(400);
     expect(API_ERROR_DEFINITIONS.not_found.status).toBe(404);
     expect(API_ERROR_DEFINITIONS.conflict.status).toBe(409);
+    expect(API_ERROR_DEFINITIONS.version_conflict.status).toBe(409);
     expect(API_ERROR_DEFINITIONS.internal_error.status).toBe(500);
   });
 

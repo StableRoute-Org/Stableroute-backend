@@ -37,6 +37,7 @@ const sampleMeta = (): PairMeta => ({
   liquidity: "5000",
   enabled: true,
   rate: "1.0",
+  version: 1,
 });
 
 const sampleKey = (): ApiKeyRecord => ({

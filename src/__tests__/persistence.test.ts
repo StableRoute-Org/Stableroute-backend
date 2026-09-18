@@ -171,6 +171,7 @@ describe("Persistence Layer", () => {
         liquidity: "1000",
         enabled: true,
         rate: "1.08",
+        version: 1,
       });
       apiKeyStore.set("srk_test", {
         label: "test key",
@@ -221,6 +222,7 @@ describe("Persistence Layer", () => {
         liquidity: "1000",
         enabled: true,
         rate: "1.08",
+        version: 1,
       });
       expect(apiKeyStore.get("srk_test")).toEqual({
         label: "test key",
@@ -653,6 +655,7 @@ describe("Persistence Layer", () => {
         liquidity: "50",
         enabled: true,
         rate: "60000",
+        version: 1,
       });
 
       await new Promise((resolve) => setTimeout(resolve, 150));

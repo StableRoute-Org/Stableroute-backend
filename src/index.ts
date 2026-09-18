@@ -35,6 +35,7 @@ import {
   generateApiKeySalt,
   hashApiKeySecret,
   verifyApiKeySecret,
+  updatePairMetaCas,
   type PairMeta,
   type AppEvent,
   type ApiKeyRecord,
@@ -220,6 +221,7 @@ export type ApiErrorCode =
   | "idempotency_conflict"
   | "unsupported_media_type"
   | "insufficient_liquidity"
+  | "version_conflict"
   | "request_timeout";
 
 export type ApiErrorDefinition = {
@@ -287,6 +289,11 @@ export const API_ERROR_DEFINITIONS: Record<ApiErrorCode, ApiErrorDefinition> = {
   conflict: {
     status: 409,
     safeMessage: "resource conflict",
+    expose: true,
+  },
+  version_conflict: {
+    status: 409,
+    safeMessage: "resource version conflict",
     expose: true,
   },
   method_not_allowed: {
@@ -2141,6 +2148,52 @@ const normalizePairParams = (
   return { source, destination };
 };
 
+/**
+ * Extract and validate the expected version from request body (or If-Match header).
+ *
+ * Checks for `version` (or `expected_version`) in the request body.
+ * If omitted in body, falls back to the `If-Match` header.
+ *
+ * Returns `{ ok: true, version }` on a valid integer >= 0,
+ * or `{ ok: false, message }` on missing, blank, or invalid values.
+ */
+const extractExpectedVersion = (
+  req: Request,
+): { ok: true; version: number } | { ok: false; message: string } => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  let rawVersion: unknown =
+    body.version !== undefined ? body.version : body.expected_version;
+
+  if (rawVersion === undefined) {
+    const ifMatch = req.header("if-match");
+    if (ifMatch !== undefined) {
+      const cleaned = ifMatch.replace(/^W\//, "").replace(/"/g, "").trim();
+      if (/^[0-9]+$/.test(cleaned)) {
+        rawVersion = parseInt(cleaned, 10);
+      } else {
+        return {
+          ok: false,
+          message: "If-Match header must specify an integer version",
+        };
+      }
+    }
+  }
+
+  if (rawVersion === undefined || rawVersion === null || rawVersion === "") {
+    return { ok: false, message: "version is required" };
+  }
+
+  if (
+    typeof rawVersion !== "number" ||
+    !Number.isInteger(rawVersion) ||
+    rawVersion < 0
+  ) {
+    return { ok: false, message: "version must be a non-negative integer" };
+  }
+
+  return { ok: true, version: rawVersion };
+};
+
 /** Aggregate read of every per-pair slot in one round-trip. */
 app.get(
   "/api/v1/pairs/:source/:destination/info",
@@ -2149,11 +2202,13 @@ app.get(
     if (!normalized) return;
     const { source, destination } = normalized;
     const k = pairKey(source, destination);
+    const meta = pairMeta.get(k) ?? defaultMeta();
+    res.setHeader("ETag", `"${meta.version}"`);
     res.json({
       source,
       destination,
       registered: pairRegistry.has(k),
-      ...(pairMeta.get(k) ?? defaultMeta()),
+      ...meta,
     });
   },
 );
@@ -2164,9 +2219,10 @@ app.get(
  * All four per-pair PATCH routes share the same flow:
  *   1. Resolve the pair key from `:source` / `:destination` params.
  *   2. Guard with a 404 if the pair is not registered.
- *   3. Validate the inbound value with the field-specific `validate` function.
- *   4. Mutate exactly the bound `field` on the stored metadata.
- *   5. Respond with `{ source, destination, ...meta }`.
+ *   3. Enforce optimistic concurrency control: require client expected version.
+ *   4. Validate the inbound value with the field-specific `validate` function.
+ *   5. Atomically compare-and-set the bound `field` and bump `version` at the store layer.
+ *   6. Respond with `{ source, destination, ...meta }`.
  *
  * Binding the field name at registration time means the handler can never
  * accidentally mutate a different field, even if the descriptor table is
@@ -2194,27 +2250,71 @@ const makePairMetaPatch =
       sendError(res, req, 404, "not_found", "pair not registered");
       return;
     }
-    if (rejectUnknownKeys(req, res, [bodyKey])) return;
-    const value = (req.body ?? {})[bodyKey] as unknown;
+    if (
+      rejectUnknownKeys(req, res, [bodyKey, "version", "expected_version"])
+    ) {
+      return;
+    }
+
+    const versionCheck = extractExpectedVersion(req);
+    if (!versionCheck.ok) {
+      sendError(res, req, 400, "invalid_request", versionCheck.message);
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const value = body[bodyKey];
     if (!validate(value)) {
       sendError(res, req, 400, "invalid_request", errorMessage);
       return;
     }
-    const meta = pairMeta.get(k) ?? defaultMeta();
-    // Optional cross-field invariant (e.g. min <= max). Runs after the
-    // per-field format check so `value` is already known to be a valid
-    // integer string; comparisons stay in BigInt space (see crossCheck impls).
-    if (crossCheck) {
-      const crossError = crossCheck(value, meta);
-      if (crossError !== null) {
-        sendError(res, req, 400, "invalid_request", crossError);
+
+    const casResult = updatePairMetaCas(
+      k,
+      versionCheck.version,
+      (current) => {
+        if (crossCheck) {
+          const crossError = crossCheck(value, current);
+          if (crossError !== null) {
+            return { error: crossError };
+          }
+        }
+        return {
+          updates: { [field]: value } as Partial<Omit<PairMeta, "version">>,
+        };
+      },
+    );
+
+    if (!casResult.ok) {
+      if (casResult.error === "version_conflict") {
+        sendError(
+          res,
+          req,
+          409,
+          "version_conflict",
+          `version conflict: expected version ${versionCheck.version}, current version is ${casResult.currentVersion}`,
+          {
+            currentVersion: casResult.currentVersion,
+            current_version: casResult.currentVersion,
+            expectedVersion: versionCheck.version,
+            expected_version: versionCheck.version,
+          },
+        );
         return;
       }
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        casResult.message ?? errorMessage,
+      );
+      return;
     }
-    (meta as Record<string, unknown>)[field] = value;
-    pairMeta.set(k, meta);
+
     invalidateQuoteCache(k);
-    res.json({ source, destination, ...meta });
+    res.setHeader("ETag", `"${casResult.meta.version}"`);
+    res.json({ source, destination, ...casResult.meta });
   };
 
 /**
@@ -2392,21 +2492,59 @@ app.patch(
       sendError(res, req, 404, "not_found", "pair not registered");
       return;
     }
-    if (rejectUnknownKeys(req, res, ["enabled"])) return;
-    const { enabled } = req.body ?? {};
+    if (
+      rejectUnknownKeys(req, res, ["enabled", "version", "expected_version"])
+    ) {
+      return;
+    }
+
+    const versionCheck = extractExpectedVersion(req);
+    if (!versionCheck.ok) {
+      sendError(res, req, 400, "invalid_request", versionCheck.message);
+      return;
+    }
+
+    const { enabled } = (req.body ?? {}) as { enabled?: unknown };
     if (typeof enabled !== "boolean") {
       sendError(res, req, 400, "invalid_request", "enabled must be a boolean");
       return;
     }
-    const meta = pairMeta.get(k) ?? defaultMeta();
-    meta.enabled = enabled;
-    pairMeta.set(k, meta);
+
+    const casResult = updatePairMetaCas(k, versionCheck.version, { enabled });
+    if (!casResult.ok) {
+      if (casResult.error === "version_conflict") {
+        sendError(
+          res,
+          req,
+          409,
+          "version_conflict",
+          `version conflict: expected version ${versionCheck.version}, current version is ${casResult.currentVersion}`,
+          {
+            currentVersion: casResult.currentVersion,
+            current_version: casResult.currentVersion,
+            expectedVersion: versionCheck.version,
+            expected_version: versionCheck.version,
+          },
+        );
+        return;
+      }
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        casResult.message ?? "failed to update pair",
+      );
+      return;
+    }
+
     invalidateQuoteCache(k);
     recordEvent(enabled ? "pair.enabled" : "pair.disabled", {
       source,
       destination,
     });
-    res.json({ source, destination, ...meta });
+    res.setHeader("ETag", `"${casResult.meta.version}"`);
+    res.json({ source, destination, ...casResult.meta });
   },
 );
 
@@ -2417,6 +2555,9 @@ app.patch(
  * `pair.meta.reset` audit event, and returns the fresh metadata. Blocked
  * while the service is paused (non-idempotent POST). Returns 404 when the
  * pair is not registered.
+ *
+ * When an expected `version` is provided in the request body, optimistic
+ * concurrency control is enforced.
  *
  * @route POST /api/v1/pairs/:source/:destination/reset
  */
@@ -2430,10 +2571,54 @@ app.post(
       sendError(res, req, 404, "not_found", "pair not registered");
       return;
     }
-    const meta = defaultMeta();
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawVersion =
+      body.version !== undefined ? body.version : body.expected_version;
+    const current = pairMeta.get(k) ?? defaultMeta();
+
+    if (rawVersion !== undefined && rawVersion !== null && rawVersion !== "") {
+      if (
+        typeof rawVersion !== "number" ||
+        !Number.isInteger(rawVersion) ||
+        rawVersion < 0
+      ) {
+        sendError(
+          res,
+          req,
+          400,
+          "invalid_request",
+          "version must be a non-negative integer",
+        );
+        return;
+      }
+      if (rawVersion !== current.version) {
+        sendError(
+          res,
+          req,
+          409,
+          "version_conflict",
+          `version conflict: expected version ${rawVersion}, current version is ${current.version}`,
+          {
+            currentVersion: current.version,
+            current_version: current.version,
+            expectedVersion: rawVersion,
+            expected_version: rawVersion,
+          },
+        );
+        return;
+      }
+    }
+
+    const newVersion =
+      rawVersion !== undefined && rawVersion !== null && rawVersion !== ""
+        ? current.version + 1
+        : defaultMeta().version;
+    const meta: PairMeta = { ...defaultMeta(), version: newVersion };
     pairMeta.set(k, meta);
     invalidateQuoteCache(k);
     recordEvent("pair.meta.reset", { source, destination });
+    res.setHeader("ETag", `"${meta.version}"`);
     res.json({ source, destination, ...meta });
   },
 );
@@ -2456,6 +2641,7 @@ app.delete(
       return;
     }
     pairRegistry.delete(k);
+    pairMeta.delete(k);
     invalidateQuoteCache(k);
     recordEvent("pair.unregistered", { source, destination });
     res.status(204).send();
@@ -2466,7 +2652,8 @@ app.delete(
 app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
   const source = req.params.source ?? "";
   const destination = req.params.destination ?? "";
-  if (!pairRegistry.has(pairKey(source, destination))) {
+  const k = pairKey(source, destination);
+  if (!pairRegistry.has(k)) {
     sendError(
       res,
       req,
@@ -2476,7 +2663,9 @@ app.get("/api/v1/pairs/:source/:destination", (req: Request, res: Response) => {
     );
     return;
   }
-  res.json({ source, destination, registered: true });
+  const meta = pairMeta.get(k) ?? defaultMeta();
+  res.setHeader("ETag", `"${meta.version}"`);
+  res.json({ source, destination, registered: true, version: meta.version });
 });
 
 app.get("/api/v1/admin/status", requireAdmin, (_req: Request, res: Response) => {
@@ -2687,7 +2876,8 @@ app.get("/api/v1/stats", (_req: Request, res: Response) => {
 const serializePairs = (): string => {
   const pairs = Array.from(pairRegistry).map((k) => {
     const [source, destination] = k.split("::");
-    return { source, destination };
+    const meta = pairMeta.get(k) ?? defaultMeta();
+    return { source, destination, version: meta.version };
   });
   return JSON.stringify({ pairs });
 };

@@ -123,14 +123,14 @@ describe("Idempotency-Key — cache edge cases", () => {
       const res1 = await request(app)
         .patch("/api/v1/pairs/ENABL/TEST/enabled")
         .set("Idempotency-Key", key)
-        .send({ enabled: true });
+        .send({ enabled: true, version: 1 });
       expect(res1.status).toBe(200);
       expect(res1.body.enabled).toBe(true);
 
       const res2 = await request(app)
         .patch("/api/v1/pairs/ENABL/TEST/enabled")
         .set("Idempotency-Key", key)
-        .send({ enabled: false });
+        .send({ enabled: false, version: 2 });
       expect(res2.status).toBe(200);
       expect(res2.body.enabled).toBe(false);
     });

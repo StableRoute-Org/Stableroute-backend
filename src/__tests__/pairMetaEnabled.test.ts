@@ -13,7 +13,7 @@ describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
       .send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .patch("/api/v1/pairs/USDC/EURC/enabled")
-      .send({ enabled: false });
+      .send({ enabled: false, version: 1 });
     expect(res.status).toBe(200);
     expect(res.body.enabled).toBe(false);
   });
@@ -24,7 +24,7 @@ describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
       .send({ source: "USDC", destination: "EURC" });
     const res = await request(app)
       .patch("/api/v1/pairs/USDC/EURC/enabled")
-      .send({ enabled: "yes" });
+      .send({ enabled: "yes", version: 1 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
@@ -32,7 +32,7 @@ describe("PATCH /api/v1/pairs/:source/:destination/enabled", () => {
   it("returns 404 for unregistered pairs", async () => {
     const res = await request(app)
       .patch("/api/v1/pairs/AAA/BBB/enabled")
-      .send({ enabled: true });
+      .send({ enabled: true, version: 1 });
     expect(res.status).toBe(404);
   });
 });

@@ -42,6 +42,9 @@ type PairMeta = {
   minAmount: string;   // minimum swap amount (string to avoid float precision loss)
   maxAmount: string;   // maximum swap amount
   liquidity: string;   // available liquidity
+  enabled: boolean;    // whether quoting is enabled (default true)
+  rate: string;        // base exchange rate (default "1.0")
+  version: number;     // monotonic version for optimistic concurrency control (default 1)
 };
 ```
 

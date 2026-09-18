@@ -777,6 +777,103 @@ export const openApiSpec = {
     },
 
     // -------------------------------------------------------------------
+    // Swaps
+    // -------------------------------------------------------------------
+    "/api/v1/swaps": {
+      post: {
+        summary: "Execute a swap with idempotency protection",
+        description:
+          "Executes a token swap along a registered liquidity corridor. When an `Idempotency-Key` header is provided, repeated requests replay the cached response verbatim, concurrent requests with the same key return 409 `request_in_progress`, and payload conflicts return 409 `idempotency_conflict`.",
+        parameters: [
+          {
+            name: "Idempotency-Key",
+            in: "header",
+            required: false,
+            schema: { type: "string", minLength: 1, maxLength: 200 },
+            description: "Client-supplied idempotency key for safe replay.",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["source_asset", "dest_asset", "amount"],
+                properties: {
+                  source_asset: { type: "string" },
+                  dest_asset: { type: "string" },
+                  amount: { type: "string" },
+                  slippage_bps: { type: "integer", minimum: 0, maximum: 1000 },
+                  recipient: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Swap executed successfully" },
+          "400": { description: "Invalid swap request format or parameters" },
+          "404": { description: "Pair not registered" },
+          "409": { description: "Idempotency conflict or request in progress" },
+          "422": { description: "Insufficient liquidity or bounds violation" },
+          "503": { description: "Service is paused or in read-only mode" },
+        },
+      },
+      get: {
+        summary: "List historical swaps",
+        description:
+          "Returns executed swaps with optional asset filters and pagination limits.",
+        parameters: [
+          {
+            name: "source_asset",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Filter swaps by source asset.",
+          },
+          {
+            name: "dest_asset",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Filter swaps by destination asset.",
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", default: 100 },
+            description: "Maximum number of swaps to return.",
+          },
+        ],
+        responses: {
+          "200": { description: "List of swaps" },
+        },
+      },
+    },
+
+    "/api/v1/swaps/{id}": {
+      get: {
+        summary: "Get swap by ID",
+        description: "Retrieves an executed swap by its unique identifier.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "The unique swap ID.",
+          },
+        ],
+        responses: {
+          "200": { description: "Swap record" },
+          "404": { description: "Swap not found" },
+        },
+      },
+    },
+
+    // -------------------------------------------------------------------
     // API Keys
     // -------------------------------------------------------------------
     "/api/v1/api-keys": {

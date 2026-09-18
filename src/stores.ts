@@ -18,6 +18,8 @@ import {
 import { loadPausedState, savePausedState } from "./pauseState";
 import { getStoreAdapter, CURRENT_SCHEMA_VERSION } from "./persistence";
 import { logger } from "./logger";
+import { resetIdempotencyStore } from "./idempotency/store";
+import { resetSwapStore } from "./swaps/store";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -371,6 +373,8 @@ export const resetStores = (): void => {
     webhookStore.clear();
     eventLog.length = 0;
     rateBuckets.clear();
+    void resetIdempotencyStore();
+    resetSwapStore();
     // Restore config to factory defaults
     const defs = defaultConfig();
     for (const k of Object.keys(config)) delete config[k];

@@ -1,64 +1,57 @@
 # Rate limiting
 
-Every request to the StableRoute API is subject to a per-IP sliding-window
-rate limiter. This document describes the algorithm, configuration, response
-headers, and recommended client behaviour.
+Every request to the StableRoute API is subject to a fair, burst-resistant sliding-window
+rate limiter scoped per tenant / API key (with graceful fallback to client IP). This document
+describes the sub-window counter estimation algorithm, tenant keying, standard headers,
+configuration, and error responses.
 
 ---
 
-## Algorithm
+## Algorithm: Sliding Window Counter with Sub-Windows
 
-The rate limiter uses a **sliding-window** design with per-IP timestamp
-buckets.
+The rate limiter employs a memory-efficient **sliding window counter** using prior and current sub-windows. Rather than storing every timestamp individually, the engine tracks request counts across the prior and active sub-windows:
 
-For each request:
+$$\text{estimatedCount} = \left\lfloor \text{previousCount} \times \left(1 - \frac{\Delta t}{W}\right) + \text{currentCount} \right\rfloor$$
 
-1. The client IP is resolved from the request (see [Bucket keying](#bucket-keying)).
-2. Timestamps older than `rateLimitWindowMs` are evicted from the bucket.
-3. If the number of remaining (in-window) timestamps equals or exceeds
-   `rateLimitPerWindow`, the request is **rejected** with `429 Too Many
-   Requests`.
-4. Otherwise the current timestamp is appended to the bucket and the request
-   proceeds.
+where:
+- $W$ is `rateLimitWindowMs` (default 60,000 ms).
+- $\Delta t$ is the elapsed duration within the current sub-window.
+- $\text{previousCount}$ is the request volume in the immediately preceding window.
+- $\text{currentCount}$ is the request volume in the current window.
 
-Because the window slides continuously (rather than resetting on a fixed
-clock boundary), a burst of requests at the end of one clock-second cannot
-cross over into the next window — the oldest entry simply falls out of the
-window once its age exceeds `rateLimitWindowMs`.
-
-A garbage-collection pass (`pruneExpiredRateBuckets`) runs at most once per
-60 seconds to remove map entries whose **every** timestamp has aged out.
-This bounds memory for clients that connect once and never return.
+### Anti-Burst Guarantee
+Fixed-window limiters permit up to 2x the configured limit across window boundaries (e.g. sending 100% of the quota at $t = 0.95W$ and another 100% at $t = 1.05W$). The sliding-window weighted counter smoothly discounts the prior window's traffic as time elapses, ensuring total requests in any sliding interval $W$ never exceed the configured limit.
 
 ---
 
-## Bucket keying
+## Tenant & Key Scoping
 
-Buckets are stored in an in-memory `Map<string, number[]>` keyed by the
-client IP address.
+Rate limits are strictly isolated per tenant / credential so that one tenant's burst cannot starve others. The limiter resolves request identity according to the following precedence:
 
-The IP is resolved by `resolveClientIp()` (`src/utils/clientIp.ts`), which
-checks in order:
+1. **API Key Credential**:
+   - `Authorization: Bearer <key>` or `X-API-Key: <key>`
+   - Keyed as `key:<prefix>` where prefix is the non-secret 8-character lookup handle.
+2. **Explicit Tenant Header**:
+   - `X-Tenant-ID: <id>`
+   - Keyed as `tenant:<id>`.
+3. **Client IP Fallback**:
+   - Resolved via `resolveClientIp()` from `X-Forwarded-For` or remote socket address.
+   - Keyed as `ip:<clientIp>`.
 
-1. The first value in the `X-Forwarded-For` request header (when present).
-2. `req.ip` — this reflects Express's `trust proxy` setting.
-3. `req.socket.remoteAddress`.
-4. Falls back to the literal string `"unknown"`.
+Each distinct tenant, key prefix, or IP maintains its own independent budget.
 
-**Production note:** If the service runs behind a reverse proxy (Nginx,
-Cloudflare, AWS ALB, etc.), you **must** configure the `TRUST_PROXY`
-environment variable so Express reads the correct client IP from the
-last trusted proxy hop. Acceptable values:
+---
 
-| Value | Behaviour |
-|-------|-----------|
-| unset / empty / `"false"` | No trust; `req.ip` equals `req.socket.remoteAddress` |
-| `"true"` | Trust the first proxy in the chain |
-| `"1"` / `"2"` / … | Trust the nearest *N* proxies |
-| `"loopback, linklocal, uniquelocal"` | Comma-separated address-list for fine-grained trust |
+## Response Headers
 
-Without correct proxy trust, every request appears to come from the proxy's
-internal IP and a single rate bucket is shared by all downstream clients.
+All HTTP responses emitted by StableRoute include standard rate-limiting metadata:
+
+| Header | Description |
+|--------|-------------|
+| `X-RateLimit-Limit` | Total request allowance within the active window |
+| `X-RateLimit-Remaining` | Remaining request quota in the current sliding window |
+| `X-RateLimit-Reset` | Epoch timestamp (in seconds) when the active window resets |
+| `Retry-After` *(on 429)* | Number of seconds the client must wait before retrying |
 
 ---
 

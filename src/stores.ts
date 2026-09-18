@@ -371,6 +371,9 @@ export const resetStores = (): void => {
     webhookStore.clear();
     eventLog.length = 0;
     rateBuckets.clear();
+    if (onResetRateLimiter) {
+      onResetRateLimiter();
+    }
     // Restore config to factory defaults
     const defs = defaultConfig();
     for (const k of Object.keys(config)) delete config[k];
@@ -382,6 +385,11 @@ export const resetStores = (): void => {
   } finally {
     isHydrating = previous;
   }
+};
+
+let onResetRateLimiter: (() => void) | null = null;
+export const registerRateLimiterResetHook = (fn: () => void): void => {
+  onResetRateLimiter = fn;
 };
 
 // ─── Persistence Helpers & Wrapper Logic ────────────────────────────────────

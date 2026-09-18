@@ -6,7 +6,6 @@ import helmet from "helmet";
 import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
-import { resolveClientIp } from "./utils/clientIp";
 import { getStoreAdapter } from "./persistence";
 import {
   isPaused,
@@ -41,6 +40,7 @@ import {
   type EventType,
 } from "./stores";
 import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import { defaultRateLimiter, resolveRateLimitKey } from "./rateLimit";
 
 interface CacheEntry {
   value: {
@@ -926,30 +926,41 @@ export const evictRateBuckets = (
   return live;
 };
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV === "test") return next();
-  const ip = resolveClientIp(
-    req.headers["x-forwarded-for"],
-    req.ip ?? req.socket.remoteAddress,
-  );
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  const enforceInTest = req.header("x-test-enforce-ratelimit") === "true";
+  if (process.env.NODE_ENV === "test" && !enforceInTest) return next();
+  const key = resolveRateLimitKey(req);
   const now = Date.now();
   const windowMs = config.rateLimitWindowMs ?? RATE_LIMIT_WINDOW_MS;
-  pruneExpiredRateBuckets(now, windowMs);
-  const limitPerWindow = config.rateLimitPerWindow ?? 60;
-  const bucket = evictRateBuckets(ip, now, windowMs);
-  if (bucket.length >= limitPerWindow) {
-    res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
+  const limit = config.rateLimitPerWindow ?? 60;
+  defaultRateLimiter.updateOptions({ windowMs, limit });
+
+  const result = await defaultRateLimiter.consume(key, now);
+
+  res.setHeader("X-RateLimit-Limit", String(result.limit));
+  res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+  res.setHeader("X-RateLimit-Reset", String(result.resetTime));
+
+  if (!result.allowed) {
+    res.setHeader("Retry-After", String(result.retryAfter));
     sendError(
       res,
       req,
       429,
       "rate_limited",
-      `more than ${limitPerWindow} requests per ${windowMs / 1000}s`,
+      `more than ${limit} requests per ${windowMs / 1000}s`,
     );
     return;
   }
-  bucket.push(now);
-  rateBuckets.set(ip, bucket);
+
+  // Also maintain legacy rateBuckets if the key was IP-based for backwards compatibility
+  if (key.startsWith("ip:")) {
+    const ip = key.slice(3);
+    const bucket = evictRateBuckets(ip, now, windowMs);
+    bucket.push(now);
+    rateBuckets.set(ip, bucket);
+  }
+
   next();
 });
 
@@ -2533,6 +2544,12 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
       // Trim the event log immediately when the cap is lowered so that the
       // buffer stays within the new bound without waiting for the next write.
       if (k === "eventLogCap") trimEventLog(v);
+      if (k === "rateLimitPerWindow" || k === "rateLimitWindowMs") {
+        defaultRateLimiter.updateOptions({
+          limit: config.rateLimitPerWindow,
+          windowMs: config.rateLimitWindowMs,
+        });
+      }
     }
   }
   res.json({ config });

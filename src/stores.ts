@@ -18,6 +18,7 @@ import {
 import { loadPausedState, savePausedState } from "./pauseState";
 import { getStoreAdapter, CURRENT_SCHEMA_VERSION } from "./persistence";
 import { logger } from "./logger";
+import { deadLetterQueue } from "./webhooks/deadLetterQueue";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -159,6 +160,7 @@ export type WebhookRecord = {
   url: string;
   events: string[];
   createdAt: number;
+  secret?: string | undefined;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -369,6 +371,7 @@ export const resetStores = (): void => {
     pairMeta.clear();
     apiKeyStore.clear();
     webhookStore.clear();
+    deadLetterQueue.clear();
     eventLog.length = 0;
     rateBuckets.clear();
     // Restore config to factory defaults

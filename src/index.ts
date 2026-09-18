@@ -41,6 +41,11 @@ import {
   type EventType,
 } from "./stores";
 import { applySlippage, checkQuoteBounds, priceQuote, priceReverseQuote } from "./pricing";
+import {
+  circuitBreakerRegistry,
+  CircuitBreakerOpenError,
+  defaultPriceOracleService,
+} from "./oracle";
 
 interface CacheEntry {
   value: {
@@ -220,7 +225,8 @@ export type ApiErrorCode =
   | "idempotency_conflict"
   | "unsupported_media_type"
   | "insufficient_liquidity"
-  | "request_timeout";
+  | "request_timeout"
+  | "upstream_unavailable";
 
 export type ApiErrorDefinition = {
   readonly status: number;
@@ -324,6 +330,11 @@ export const API_ERROR_DEFINITIONS: Record<ApiErrorCode, ApiErrorDefinition> = {
     safeMessage: "Request timed out",
     expose: true,
   },
+  upstream_unavailable: {
+    status: 503,
+    safeMessage: "upstream service unavailable",
+    expose: true,
+  },
 };
 
 export class ApiError extends Error {
@@ -425,6 +436,11 @@ const hasParserType = (err: unknown, type: string): boolean =>
 const toApiError = (err: unknown): ApiError | undefined => {
   if (err instanceof ApiError) {
     return err;
+  }
+  if (err instanceof CircuitBreakerOpenError) {
+    return new ApiError("upstream_unavailable", err.message, {
+      dependency: err.dependency,
+    });
   }
   if (hasParserType(err, "entity.too.large")) {
     return new ApiError("payload_too_large");
@@ -2494,6 +2510,10 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
     "eventLogCap",
     "quote_ttl_ms",
     "requestTimeoutMs",
+    "oracleRetryAttempts",
+    "oracleBackoffBaseMs",
+    "oracleBreakerThreshold",
+    "oracleBreakerCooldownMs",
   ] as const;
   if (rejectUnknownKeys(req, res, [...allowed])) return;
   for (const k of allowed) {
@@ -2533,6 +2553,18 @@ app.patch("/api/v1/config", (req: Request, res: Response) => {
       // Trim the event log immediately when the cap is lowered so that the
       // buffer stays within the new bound without waiting for the next write.
       if (k === "eventLogCap") trimEventLog(v);
+      if (k === "oracleRetryAttempts" || k === "oracleBackoffBaseMs") {
+        defaultPriceOracleService.updateRetryOptions({
+          maxAttempts: config.oracleRetryAttempts,
+          baseDelayMs: config.oracleBackoffBaseMs,
+        });
+      }
+      if (k === "oracleBreakerThreshold" || k === "oracleBreakerCooldownMs") {
+        defaultPriceOracleService.updateBreakerOptions({
+          failureThreshold: config.oracleBreakerThreshold,
+          cooldownMs: config.oracleBreakerCooldownMs,
+        });
+      }
     }
   }
   res.json({ config });
@@ -2593,6 +2625,64 @@ const buildStoreGaugeLines = (): string[] => [
   `stableroute_rate_limit_per_window ${config.rateLimitPerWindow ?? 0}`,
 ];
 
+/**
+ * Build Prometheus exposition lines for registered circuit breakers.
+ */
+const buildCircuitBreakerMetricLines = (): string[] => {
+  const lines: string[] = [];
+  const breakers = circuitBreakerRegistry.getAllBreakers();
+  if (breakers.size === 0) {
+    circuitBreakerRegistry.getBreaker("price-oracle");
+  }
+
+  lines.push(
+    "# HELP stableroute_circuit_breaker_state Current state of circuit breaker (0=CLOSED, 1=HALF_OPEN, 2=OPEN).",
+    "# TYPE stableroute_circuit_breaker_state gauge",
+  );
+  for (const [name, breaker] of circuitBreakerRegistry.getAllBreakers()) {
+    const m = breaker.getMetrics();
+    const stateVal = m.state === "CLOSED" ? 0 : m.state === "HALF_OPEN" ? 1 : 2;
+    lines.push(
+      `stableroute_circuit_breaker_state{dependency="${escapeLabelValue(name)}"} ${stateVal}`,
+    );
+  }
+
+  lines.push(
+    "# HELP stableroute_circuit_breaker_failures_total Total failure count recorded by circuit breaker.",
+    "# TYPE stableroute_circuit_breaker_failures_total counter",
+  );
+  for (const [name, breaker] of circuitBreakerRegistry.getAllBreakers()) {
+    const m = breaker.getMetrics();
+    lines.push(
+      `stableroute_circuit_breaker_failures_total{dependency="${escapeLabelValue(name)}"} ${m.totalFailures}`,
+    );
+  }
+
+  lines.push(
+    "# HELP stableroute_circuit_breaker_successes_total Total success count recorded by circuit breaker.",
+    "# TYPE stableroute_circuit_breaker_successes_total counter",
+  );
+  for (const [name, breaker] of circuitBreakerRegistry.getAllBreakers()) {
+    const m = breaker.getMetrics();
+    lines.push(
+      `stableroute_circuit_breaker_successes_total{dependency="${escapeLabelValue(name)}"} ${m.totalSuccesses}`,
+    );
+  }
+
+  lines.push(
+    "# HELP stableroute_circuit_breaker_short_circuits_total Total fast-fail rejections when circuit breaker is OPEN.",
+    "# TYPE stableroute_circuit_breaker_short_circuits_total counter",
+  );
+  for (const [name, breaker] of circuitBreakerRegistry.getAllBreakers()) {
+    const m = breaker.getMetrics();
+    lines.push(
+      `stableroute_circuit_breaker_short_circuits_total{dependency="${escapeLabelValue(name)}"} ${m.totalShortCircuits}`,
+    );
+  }
+
+  return lines;
+};
+
 app.get("/api/v1/metrics", (_req: Request, res: Response) => {
   const eventCounts = aggregateEventCounts(eventLog);
 
@@ -2619,6 +2709,7 @@ app.get("/api/v1/metrics", (_req: Request, res: Response) => {
     "# TYPE stableroute_quote_cache_misses_total counter",
     `stableroute_quote_cache_misses_total ${cacheMisses}`,
     ...buildStoreGaugeLines(),
+    ...buildCircuitBreakerMetricLines(),
   ];
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(lines.join("\n") + "\n");
@@ -3248,6 +3339,72 @@ app.get("/api/v1/quote/reverse", (req: Request, res: Response) => {
     route: [source_asset, dest_asset],
   });
 });
+
+/**
+ * GET /api/v1/oracle/status
+ *
+ * Query the health, state, and metrics of circuit breakers across upstream dependencies.
+ * If query param `dependency` is specified, returns that breaker's metrics;
+ * otherwise returns all active breakers.
+ */
+app.get("/api/v1/oracle/status", (req: Request, res: Response) => {
+  const dep = req.query.dependency as string | undefined;
+  if (dep) {
+    const breaker = circuitBreakerRegistry.getBreaker(dep);
+    res.json({ breaker: breaker.getMetrics() });
+    return;
+  }
+  // Ensure default price-oracle is initialized
+  circuitBreakerRegistry.getBreaker("price-oracle");
+  const breakers = Array.from(circuitBreakerRegistry.getAllBreakers().values()).map(
+    (b) => b.getMetrics(),
+  );
+  res.json({ breakers });
+});
+
+/**
+ * GET /api/v1/oracle/rate/:source/:destination
+ *
+ * Query exchange rates through the resilient price oracle service.
+ * Protected by bounded retries (with exponential backoff and jitter)
+ * and an upstream circuit breaker.
+ *
+ * Fails fast with 503 upstream_unavailable when the circuit breaker is OPEN.
+ */
+app.get(
+  "/api/v1/oracle/rate/:source/:destination",
+  async (req: Request, res: Response, next: NextFunction) => {
+    const source = normalizeAsset(req.params.source);
+    const destination = normalizeAsset(req.params.destination);
+    if (!source || !destination) {
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "source and destination must be 1-12 alphanumeric characters",
+      );
+      return;
+    }
+    if (source === destination) {
+      sendError(
+        res,
+        req,
+        400,
+        "invalid_request",
+        "source and destination must differ",
+      );
+      return;
+    }
+
+    try {
+      const result = await defaultPriceOracleService.getRate(source, destination);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 if (process.env.NODE_ENV === "test") {
   app.get("/test/slow", (req: Request, res: Response) => {

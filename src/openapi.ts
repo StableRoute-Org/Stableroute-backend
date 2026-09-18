@@ -1096,6 +1096,58 @@ export const openApiSpec = {
     },
 
     // -------------------------------------------------------------------
+    // Price Oracle & Resilience
+    // -------------------------------------------------------------------
+    "/api/v1/oracle/status": {
+      get: {
+        summary: "Circuit breaker status across upstream dependencies",
+        description:
+          "Returns the circuit breaker state (CLOSED, OPEN, HALF_OPEN) and resilience metrics (failure counts, successes, short circuits) for price oracles and upstream dependencies.",
+        parameters: [
+          {
+            name: "dependency",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Optional dependency name to filter (e.g. `price-oracle`)",
+          },
+        ],
+        responses: {
+          "200": { description: "Circuit breaker metrics object or array" },
+        },
+      },
+    },
+
+    "/api/v1/oracle/rate/{source}/{destination}": {
+      get: {
+        summary: "Query exchange rate via resilient price oracle",
+        description:
+          "Queries asset exchange rate through the resilient price oracle with bounded exponential backoff, jitter, and circuit breaker protection. Fails fast with 503 upstream_unavailable when the circuit breaker is OPEN.",
+        parameters: [
+          {
+            name: "source",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Source asset code (1-12 alphanumeric characters)",
+          },
+          {
+            name: "destination",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Destination asset code (1-12 alphanumeric characters)",
+          },
+        ],
+        responses: {
+          "200": { description: "Resolved exchange rate and timestamp" },
+          "400": { description: "Invalid asset code or source equals destination" },
+          "503": { description: "Upstream service unavailable (circuit breaker OPEN)" },
+        },
+      },
+    },
+
+    // -------------------------------------------------------------------
     // Version
     // -------------------------------------------------------------------
     "/api/v1/version": {

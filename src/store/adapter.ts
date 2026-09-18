@@ -23,11 +23,12 @@ import {
   closeSync,
   unlinkSync,
 } from "node:fs";
-import type {
-  PairMeta,
-  AppEvent,
-  ApiKeyRecord,
-  WebhookRecord,
+import {
+  defaultMeta,
+  type PairMeta,
+  type AppEvent,
+  type ApiKeyRecord,
+  type WebhookRecord,
 } from "../stores";
 
 // ─── Interface ────────────────────────────────────────────────────────────────
@@ -58,6 +59,14 @@ export interface StorageAdapter {
   metaSet(key: string, meta: PairMeta): void;
   /** Remove metadata for a pair key. Returns `true` when it existed. */
   metaDelete(key: string): boolean;
+  /** Compare-and-set metadata update. */
+  metaCas(
+    key: string,
+    expectedVersion: number,
+    update: Partial<Omit<PairMeta, "version">>,
+  ):
+    | { ok: true; meta: PairMeta }
+    | { ok: false; error: "version_conflict"; currentVersion: number };
 
   // ── API keys ───────────────────────────────────────────────────────────────
   /** Return all stored [key, record] entries. */
@@ -136,6 +145,25 @@ export class InMemoryAdapter implements StorageAdapter {
   }
   metaDelete(key: string): boolean {
     return this.meta.delete(key);
+  }
+  metaCas(
+    key: string,
+    expectedVersion: number,
+    update: Partial<Omit<PairMeta, "version">>,
+  ):
+    | { ok: true; meta: PairMeta }
+    | { ok: false; error: "version_conflict"; currentVersion: number } {
+    const current = this.meta.get(key) ?? defaultMeta();
+    if (current.version !== expectedVersion) {
+      return { ok: false, error: "version_conflict", currentVersion: current.version };
+    }
+    const next: PairMeta = {
+      ...current,
+      ...update,
+      version: current.version + 1,
+    };
+    this.meta.set(key, next);
+    return { ok: true, meta: next };
   }
 
   keysAll(): Map<string, ApiKeyRecord> {
@@ -308,6 +336,26 @@ export class JsonFileAdapter implements StorageAdapter {
     const r = this.meta.delete(key);
     if (r) this._save();
     return r;
+  }
+  metaCas(
+    key: string,
+    expectedVersion: number,
+    update: Partial<Omit<PairMeta, "version">>,
+  ):
+    | { ok: true; meta: PairMeta }
+    | { ok: false; error: "version_conflict"; currentVersion: number } {
+    const current = this.meta.get(key) ?? defaultMeta();
+    if (current.version !== expectedVersion) {
+      return { ok: false, error: "version_conflict", currentVersion: current.version };
+    }
+    const next: PairMeta = {
+      ...current,
+      ...update,
+      version: current.version + 1,
+    };
+    this.meta.set(key, next);
+    this._save();
+    return { ok: true, meta: next };
   }
 
   keysAll(): Map<string, ApiKeyRecord> {

@@ -985,7 +985,7 @@ describe("StableRoute Backend", () => {
         .send({ source: "USD", destination: "EUR" });
       const set = await request(app)
         .patch("/api/v1/pairs/USD/EUR/fee_bps")
-        .send({ feeBps: 50 });
+        .send({ feeBps: 50, version: 1 });
       expect(set.status).toBe(200);
       expect(set.body.feeBps).toBe(50);
 
@@ -1021,7 +1021,7 @@ describe("StableRoute Backend", () => {
       const source = feeBps === 0 ? "FEEZ" : "FEEM";
       const res = await request(app)
         .patch(`/api/v1/pairs/${source}/BND/fee_bps`)
-        .send({ feeBps });
+        .send({ feeBps, version: 1 });
 
       expect(res.status).toBe(200);
       expect(res.body.feeBps).toBe(feeBps);
@@ -1128,7 +1128,7 @@ describe("StableRoute Backend", () => {
         .send({ source: "MIN", destination: "DST" });
       await request(app)
         .patch("/api/v1/pairs/MIN/DST/min")
-        .send({ minAmount: "100" });
+        .send({ minAmount: "100", version: 1 });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1146,7 +1146,7 @@ describe("StableRoute Backend", () => {
         .send({ source: "MAX", destination: "DST" });
       await request(app)
         .patch("/api/v1/pairs/MAX/DST/max")
-        .send({ maxAmount: "1000" });
+        .send({ maxAmount: "1000", version: 1 });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1164,7 +1164,7 @@ describe("StableRoute Backend", () => {
         .send({ source: "LIQ", destination: "DST" });
       await request(app)
         .patch("/api/v1/pairs/LIQ/DST/liquidity")
-        .send({ liquidity: "500" });
+        .send({ liquidity: "500", version: 1 });
 
       const res = await request(app)
         .get("/api/v1/quote")
@@ -1182,13 +1182,13 @@ describe("StableRoute Backend", () => {
         .send({ source: "EDGE", destination: "DST" });
       await request(app)
         .patch("/api/v1/pairs/EDGE/DST/min")
-        .send({ minAmount: "100" });
+        .send({ minAmount: "100", version: 1 });
       await request(app)
         .patch("/api/v1/pairs/EDGE/DST/max")
-        .send({ maxAmount: "1000" });
+        .send({ maxAmount: "1000", version: 2 });
       await request(app)
         .patch("/api/v1/pairs/EDGE/DST/liquidity")
-        .send({ liquidity: "1000" });
+        .send({ liquidity: "1000", version: 3 });
 
       const min = await request(app)
         .get("/api/v1/quote")
@@ -1209,13 +1209,13 @@ describe("StableRoute Backend", () => {
         .send({ source: "BULK", destination: "DST" });
       await request(app)
         .patch("/api/v1/pairs/BULK/DST/min")
-        .send({ minAmount: "100" });
+        .send({ minAmount: "100", version: 1 });
       await request(app)
         .patch("/api/v1/pairs/BULK/DST/max")
-        .send({ maxAmount: "1000" });
+        .send({ maxAmount: "1000", version: 2 });
       await request(app)
         .patch("/api/v1/pairs/BULK/DST/liquidity")
-        .send({ liquidity: "1000" });
+        .send({ liquidity: "1000", version: 3 });
 
       const res = await request(app)
         .post("/api/v1/quote/bulk")
@@ -1390,7 +1390,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/BADFEE/META/fee_bps")
         .set("X-Request-Id", "bad-fee-bps")
-        .send({ feeBps: "invalid" as unknown });
+        .send({ feeBps: "invalid" as unknown, version: 1 });
 
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-fee-bps", "invalid_request");
@@ -1469,7 +1469,7 @@ describe("StableRoute Backend", () => {
     it("patches liquidity", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
-        .send({ liquidity: "50000" });
+        .send({ liquidity: "50000", version: 1 });
       expect(res.status).toBe(200);
       expect(res.body.liquidity).toBe("50000");
     });
@@ -1478,7 +1478,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
         .set("X-Request-Id", "bad-liquidity-alpha")
-        .send({ liquidity: "abc" });
+        .send({ liquidity: "abc", version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-liquidity-alpha", "invalid_request");
     });
@@ -1491,7 +1491,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/liquidity")
         .set("X-Request-Id", "bad-liquidity-shape")
-        .send({ liquidity });
+        .send({ liquidity, version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-liquidity-shape", "invalid_request");
     });
@@ -1499,7 +1499,7 @@ describe("StableRoute Backend", () => {
     it("patches maxAmount", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
-        .send({ maxAmount: "99999" });
+        .send({ maxAmount: "99999", version: 1 });
       expect(res.status).toBe(200);
       expect(res.body.maxAmount).toBe("99999");
     });
@@ -1508,7 +1508,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
         .set("X-Request-Id", "bad-max-zero")
-        .send({ maxAmount: "0" });
+        .send({ maxAmount: "0", version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-max-zero", "invalid_request");
     });
@@ -1521,7 +1521,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/max")
         .set("X-Request-Id", "bad-max-shape")
-        .send({ maxAmount });
+        .send({ maxAmount, version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-max-shape", "invalid_request");
     });
@@ -1529,7 +1529,7 @@ describe("StableRoute Backend", () => {
     it("patches minAmount", async () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
-        .send({ minAmount: "100" });
+        .send({ minAmount: "100", version: 1 });
       expect(res.status).toBe(200);
       expect(res.body.minAmount).toBe("100");
     });
@@ -1538,7 +1538,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
         .set("X-Request-Id", "bad-min-negative")
-        .send({ minAmount: "-5" });
+        .send({ minAmount: "-5", version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-min-negative", "invalid_request");
     });
@@ -1551,7 +1551,7 @@ describe("StableRoute Backend", () => {
       const res = await request(app)
         .patch("/api/v1/pairs/META/TEST/min")
         .set("X-Request-Id", "bad-min-shape")
-        .send({ minAmount });
+        .send({ minAmount, version: 1 });
       expect(res.status).toBe(400);
       expectCanonicalError(res.body, "bad-min-shape", "invalid_request");
     });
@@ -1933,12 +1933,12 @@ describe("StableRoute Backend", () => {
       // Set minAmount to 1000 first
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "1000" });
+        .send({ minAmount: "1000", version: 1 });
 
       // Attempt to set liquidity to 500 — must be rejected
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "500" });
+        .send({ liquidity: "500", version: 2 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
@@ -1949,11 +1949,11 @@ describe("StableRoute Backend", () => {
     it("PATCH /liquidity accepts when new liquidity equals current minAmount", async () => {
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "1000" });
+        .send({ minAmount: "1000", version: 1 });
 
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "1000" });
+        .send({ liquidity: "1000", version: 2 });
 
       expect(res.status).toBe(200);
       expect(res.body.liquidity).toBe("1000");
@@ -1962,11 +1962,11 @@ describe("StableRoute Backend", () => {
     it("PATCH /liquidity accepts when new liquidity > current minAmount", async () => {
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "100" });
+        .send({ minAmount: "100", version: 1 });
 
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "5000" });
+        .send({ liquidity: "5000", version: 2 });
 
       expect(res.status).toBe(200);
       expect(res.body.liquidity).toBe("5000");
@@ -1975,11 +1975,11 @@ describe("StableRoute Backend", () => {
     it("PATCH /liquidity with '0' is accepted even if minAmount > 0 (unset carve-out)", async () => {
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "999" });
+        .send({ minAmount: "999", version: 1 });
 
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "0" });
+        .send({ liquidity: "0", version: 2 });
 
       expect(res.status).toBe(200);
       expect(res.body.liquidity).toBe("0");
@@ -1989,17 +1989,17 @@ describe("StableRoute Backend", () => {
       // Reset minAmount to "0" so the next liquidity patch is accepted
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "0" });
+        .send({ minAmount: "0", version: 1 });
 
       // Set liquidity to 500
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "500" });
+        .send({ liquidity: "500", version: 2 });
 
       // Attempt to set minAmount to 1000 — must be rejected since 1000 > 500
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "1000" });
+        .send({ minAmount: "1000", version: 3 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
@@ -2010,11 +2010,11 @@ describe("StableRoute Backend", () => {
     it("PATCH /min accepts when new minAmount equals current liquidity", async () => {
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "500" });
+        .send({ liquidity: "500", version: 1 });
 
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "500" });
+        .send({ minAmount: "500", version: 2 });
 
       expect(res.status).toBe(200);
       expect(res.body.minAmount).toBe("500");
@@ -2025,15 +2025,15 @@ describe("StableRoute Backend", () => {
       // First reset minAmount so the liquidity patch is accepted.
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "0" });
+        .send({ minAmount: "0", version: 1 });
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: "0" });
+        .send({ liquidity: "0", version: 2 });
 
       // With liquidity "0" (unset), minAmount can freely exceed it
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: "999999" });
+        .send({ minAmount: "999999", version: 3 });
 
       expect(res.status).toBe(200);
       expect(res.body.minAmount).toBe("999999");
@@ -2046,12 +2046,12 @@ describe("StableRoute Backend", () => {
 
       await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/liquidity`)
-        .send({ liquidity: bigLiquidity });
+        .send({ liquidity: bigLiquidity, version: 1 });
 
       // minAmount one unit above liquidity — must be rejected
       const res = await request(app)
         .patch(`/api/v1/pairs/${SRC}/${DST}/min`)
-        .send({ minAmount: bigMin });
+        .send({ minAmount: bigMin, version: 2 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_request");
@@ -3497,7 +3497,11 @@ describe("StableRoute Backend", () => {
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-enabled")
           .send(
-            JSON.stringify({ enabled: true, __proto__: { polluted: true } }),
+            JSON.stringify({
+              enabled: true,
+              version: 1,
+              __proto__: { polluted: true },
+            }),
           );
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
@@ -3526,7 +3530,11 @@ describe("StableRoute Backend", () => {
           .set("Content-Type", "application/json")
           .set("X-Request-Id", "proto-liq")
           .send(
-            JSON.stringify({ liquidity: "500", __proto__: { polluted: true } }),
+            JSON.stringify({
+              liquidity: "500",
+              version: 1,
+              __proto__: { polluted: true },
+            }),
           );
         expect(res.status).toBe(200);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();

@@ -160,6 +160,9 @@ function migrateV0ToV1(data: Record<string, unknown>): Record<string, unknown> {
         if (typeof meta.rate !== "string") {
           meta.rate = "1.0";
         }
+        if (typeof meta.version !== "number") {
+          meta.version = 1;
+        }
       }
     }
   }

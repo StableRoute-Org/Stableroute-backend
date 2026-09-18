@@ -298,7 +298,7 @@ describe("POST /api/v1/quote/bulk", () => {
 
     await request(app)
       .patch("/api/v1/pairs/USDC/EURC/enabled")
-      .send({ enabled: false })
+      .send({ enabled: false, version: 1 })
       .expect(200);
 
     const res = await request(app)

@@ -71,7 +71,7 @@ describe("GET /api/v1/health/deep", () => {
       .send({ source: "PROBEA", destination: "PROBEB" });
     await request(app)
       .patch("/api/v1/pairs/PROBEA/PROBEB/fee_bps")
-      .send({ feeBps: 42 });
+      .send({ feeBps: 42, version: 1 });
 
     // Run the deep probe.
     const probeRes = await request(app).get("/api/v1/health/deep");

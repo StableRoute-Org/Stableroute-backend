@@ -135,7 +135,7 @@ describe("Quote Cache Lifecycle", () => {
     // Patch pair fee_bps
     await request(app)
       .patch("/api/v1/pairs/USD/EUR/fee_bps")
-      .send({ feeBps: 200 })
+      .send({ feeBps: 200, version: 1 })
       .expect(200);
 
     // Get quote (Miss, due to invalidation)
@@ -161,7 +161,7 @@ describe("Quote Cache Lifecycle", () => {
     // Patch first to set non-default fee
     await request(app)
       .patch("/api/v1/pairs/USD/EUR/fee_bps")
-      .send({ feeBps: 200 })
+      .send({ feeBps: 200, version: 1 })
       .expect(200);
 
     // Miss
@@ -203,7 +203,7 @@ describe("Quote Cache Lifecycle", () => {
     // Disable pair
     await request(app)
       .patch("/api/v1/pairs/USD/EUR/enabled")
-      .send({ enabled: false })
+      .send({ enabled: false, version: 1 })
       .expect(200);
 
     // Should return 200 (miss)

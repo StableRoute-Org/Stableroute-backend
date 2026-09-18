@@ -64,6 +64,8 @@ export type PairMeta = {
   enabled: boolean;
   /** Base exchange rate for the pair. Defaults to "1.0". */
   rate: string;
+  /** Monotonically increasing version counter for optimistic concurrency control. */
+  version: number;
 };
 
 /** Structured event appended to the in-memory event log. */
@@ -195,6 +197,7 @@ export const defaultMeta = (): PairMeta => ({
   liquidity: "0",
   enabled: true,
   rate: "1.0",
+  version: 1,
 });
 
 /** Canonical config shape used by GET/PATCH /api/v1/config. */
@@ -219,6 +222,79 @@ export const pairRegistry = new Set<string>();
 
 /** Per-pair fee / amount / liquidity metadata keyed by {@link pairKey}. */
 export const pairMeta = new Map<string, PairMeta>();
+
+/** Outcome of an atomic compare-and-set update via {@link updatePairMetaCas}. */
+export type PairMetaCasResult =
+  | { ok: true; meta: PairMeta }
+  | {
+      ok: false;
+      error: "not_found" | "version_conflict" | "invalid_request";
+      message?: string;
+      currentVersion?: number;
+      expectedVersion?: number;
+    };
+
+/**
+ * Atomically performs an optimistic-concurrency-controlled (compare-and-set) update
+ * on a registered pair's metadata at the store layer.
+ *
+ * If the pair's current version does not match `expectedVersion`, rejects without mutating
+ * and returns `{ ok: false, error: "version_conflict", currentVersion, expectedVersion }`.
+ *
+ * If an updater callback returns an error or null, rejects with `{ ok: false, error: "invalid_request", message }`.
+ *
+ * Otherwise, applies the updates, increments `version` monotonically, commits to the store,
+ * and returns `{ ok: true, meta }`.
+ */
+export function updatePairMetaCas(
+  key: string,
+  expectedVersion: number,
+  updater:
+    | Partial<Omit<PairMeta, "version">>
+    | ((
+        current: PairMeta,
+      ) => { updates?: Partial<Omit<PairMeta, "version">>; error?: string } | null),
+): PairMetaCasResult {
+  const current = pairMeta.get(key) ?? defaultMeta();
+  if (current.version !== expectedVersion) {
+    return {
+      ok: false,
+      error: "version_conflict",
+      currentVersion: current.version,
+      expectedVersion,
+    };
+  }
+
+  let updates: Partial<Omit<PairMeta, "version">> = {};
+  if (typeof updater === "function") {
+    const outcome = updater(current);
+    if (!outcome) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        message: "update rejected by validation",
+      };
+    }
+    if (outcome.error) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        message: outcome.error,
+      };
+    }
+    updates = outcome.updates ?? {};
+  } else {
+    updates = updater;
+  }
+
+  const next: PairMeta = {
+    ...current,
+    ...updates,
+    version: current.version + 1,
+  };
+  pairMeta.set(key, next);
+  return { ok: true, meta: next };
+}
 
 /** Generated API key records keyed by full key string. */
 export const apiKeyStore = new Map<string, ApiKeyRecord>();
@@ -433,7 +509,11 @@ export const hydrateFromSnapshot = (snapshot: unknown): void => {
             item.length === 2 &&
             typeof item[0] === "string"
           ) {
-            pairMeta.set(item[0], item[1] as PairMeta);
+            const metaRecord = item[1] as PairMeta;
+            if (typeof metaRecord.version !== "number") {
+              metaRecord.version = 1;
+            }
+            pairMeta.set(item[0], metaRecord);
           }
         }
       }

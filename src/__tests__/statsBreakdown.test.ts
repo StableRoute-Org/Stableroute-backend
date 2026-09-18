@@ -30,7 +30,7 @@ describe("GET /api/v1/stats breakdown", () => {
     // Set a fee on one pair only.
     await request(app)
       .patch("/api/v1/pairs/USDC/EURC/fee_bps")
-      .send({ feeBps: 25 });
+      .send({ feeBps: 25, version: 1 });
 
     await request(app).post("/api/v1/api-keys").send({ label: "ci" });
     await request(app)

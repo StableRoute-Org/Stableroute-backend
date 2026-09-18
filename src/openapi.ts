@@ -354,16 +354,27 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["feeBps"],
-                properties: { feeBps: { type: "integer" } },
+                required: ["feeBps", "version"],
+                properties: {
+                  feeBps: { type: "integer" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `feeBps` value" },
+          "400": { description: "Invalid `feeBps` or `version` value" },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -395,8 +406,15 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["minAmount"],
-                properties: { minAmount: { type: "string" } },
+                required: ["minAmount", "version"],
+                properties: {
+                  minAmount: { type: "string" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
@@ -405,9 +423,13 @@ export const openApiSpec = {
           "200": { description: "Updated pair metadata" },
           "400": {
             description:
-              "Invalid `minAmount` value or cross-field constraint violation",
+              "Invalid `minAmount` or `version` value, or cross-field constraint violation",
           },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -439,8 +461,15 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["maxAmount"],
-                properties: { maxAmount: { type: "string" } },
+                required: ["maxAmount", "version"],
+                properties: {
+                  maxAmount: { type: "string" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
@@ -449,9 +478,13 @@ export const openApiSpec = {
           "200": { description: "Updated pair metadata" },
           "400": {
             description:
-              "Invalid `maxAmount` value or cross-field constraint violation",
+              "Invalid `maxAmount` or `version` value, or cross-field constraint violation",
           },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -483,8 +516,15 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["liquidity"],
-                properties: { liquidity: { type: "string" } },
+                required: ["liquidity", "version"],
+                properties: {
+                  liquidity: { type: "string" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
@@ -493,9 +533,13 @@ export const openApiSpec = {
           "200": { description: "Updated pair metadata" },
           "400": {
             description:
-              "Invalid `liquidity` value or cross-field constraint violation",
+              "Invalid `liquidity` or `version` value, or cross-field constraint violation",
           },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -527,16 +571,27 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["rate"],
-                properties: { rate: { type: "string" } },
+                required: ["rate", "version"],
+                properties: {
+                  rate: { type: "string" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `rate` value" },
+          "400": { description: "Invalid `rate` or `version` value" },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },
@@ -568,16 +623,29 @@ export const openApiSpec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["enabled"],
-                properties: { enabled: { type: "boolean" } },
+                required: ["enabled", "version"],
+                properties: {
+                  enabled: { type: "boolean" },
+                  version: {
+                    type: "integer",
+                    description:
+                      "Expected version of the route for optimistic concurrency control",
+                  },
+                },
               },
             },
           },
         },
         responses: {
           "200": { description: "Updated pair metadata" },
-          "400": { description: "Invalid `enabled` value (must be boolean)" },
+          "400": {
+            description: "Invalid `enabled` or `version` value",
+          },
           "404": { description: "Pair is not registered" },
+          "409": {
+            description:
+              "Optimistic concurrency version conflict (version_conflict)",
+          },
           "415": { description: "Content-Type is not `application/json`" },
           "503": { description: "Service is paused or in read-only mode" },
         },

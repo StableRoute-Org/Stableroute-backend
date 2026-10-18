@@ -5,6 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { logger } from "./logger";
 import { openApiSpec } from "./openapi";
+import { registerDocsRoutes } from "./docs";
 import { isSafeWebhookUrl } from "./utils/webhookUrl";
 import { resolveClientIp } from "./utils/clientIp";
 import { getStoreAdapter } from "./persistence";
@@ -131,6 +132,7 @@ const EVENT_PAYLOAD_MAX_ARRAY_ITEMS = 32;
 const EVENT_PAYLOAD_MAX_DEPTH = 3;
 
 const app = express();
+registerDocsRoutes(app);
 
 // --- Persistence Hydration on startup ---
 export const hydrationPromise = (async () => {

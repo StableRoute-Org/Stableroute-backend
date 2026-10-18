@@ -1,0 +1,8 @@
+{
+  "buildCommand": "npm run build",
+  "installCommand": "npm ci",
+  "functions": {
+    "api/index.js": { "includeFiles": "{openapi.yaml,dist/**}" }
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/index.js" }]
+}

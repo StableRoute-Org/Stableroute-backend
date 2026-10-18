@@ -1,5 +1,22 @@
 # stableroute-backend
 
+## Live
+
+- **API:** https://stableroute-backend.vercel.app ([health](https://stableroute-backend.vercel.app/health))
+- **API docs (Swagger UI):** https://stableroute-backend.vercel.app/docs
+- **Website:** https://stableroute-frontend.vercel.app ([docs](https://stableroute-frontend.vercel.app/docs))
+- **Contract (Stellar testnet):** [`CCKXEUALSDINT6FWCPZRK4BS5NJ5J5JBGM6GAKHSB6JAN7MOTWFI6IHD`](https://stellar.expert/explorer/testnet/contract/CCKXEUALSDINT6FWCPZRK4BS5NJ5J5JBGM6GAKHSB6JAN7MOTWFI6IHD)
+
+## Deploying to Vercel
+
+The Express app is exported (without `app.listen`) from `api/index.js`, and
+`vercel.json` rewrites every path to that function. State is in-memory by
+default (set `PERSIST_PATH` only on hosts with a writable disk).
+
+```bash
+vercel deploy --prod
+```
+
 API gateway, routing engine, and pricing service for [StableRoute](https://github.com/your-org/stableroute) — Stellar liquidity routing.
 
 ## What this repo contains

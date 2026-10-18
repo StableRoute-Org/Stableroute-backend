@@ -9,10 +9,11 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "test": "jest",
     "test:coverage": "jest --coverage",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test:ci": "jest --ci src/__tests__/docs.test.ts src/__tests__/openapi.test.ts src/__tests__/version.test.ts src/__tests__/pricing.test.ts src/__tests__/utils.test.ts src/__tests__/fallback404.test.ts src/__tests__/errorHandler.test.ts src/__tests__/securityHeaders.test.ts src/__tests__/cors.test.ts src/__tests__/parseAmountAssetCode.test.ts"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "stellar",
